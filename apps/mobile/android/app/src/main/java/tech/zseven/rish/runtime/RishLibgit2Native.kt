@@ -119,7 +119,22 @@ internal object RishLibgit2Native {
     @JvmStatic external fun push(
         gitDir: String?, workDir: String, operationId: String, remoteUrl: String, host: String,
         reference: String, localOid: String, username: String, token: String, timeoutSeconds: Int,
+        hasExpectedRemoteOid: Boolean, expectedRemoteOid: String?,
     ): ByteArray
+
+    /**
+     * What origin advertises for `reference` now, over a FETCH connection
+     * with the push's credential rule: `{"ok":true,"oid":…|null}`, null when
+     * the remote does not have the reference. Refuses 3197 when the remote
+     * turned the credential away, 3199 for any other transport failure.
+     */
+    @JvmStatic external fun remoteRefOid(
+        gitDir: String?, workDir: String, remoteUrl: String, host: String, reference: String,
+        username: String, token: String, timeoutSeconds: Int,
+    ): ByteArray
+
+    /** `refs/remotes/origin/<branch>` := oid. Answers "ok" or "error:<stage>". */
+    @JvmStatic external fun setTrackingReference(gitDir: String?, workDir: String, branch: String, oid: String): String
 
     @JvmStatic external fun cancelPush(operationId: String): Boolean
 

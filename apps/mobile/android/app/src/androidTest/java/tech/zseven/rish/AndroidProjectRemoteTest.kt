@@ -130,7 +130,7 @@ class AndroidProjectRemoteTest {
         assertEquals("ok", RishLibgit2Native.setRemote(f.gitDir.absolutePath, f.workDir.absolutePath, url))
         val operation = UUID.randomUUID().toString()
         // An empty URL pushes to origin as configured; a file remote has no host to bind a credential to.
-        val pushed = JSONObject(String(RishLibgit2Native.push(f.gitDir.absolutePath, f.workDir.absolutePath, operation, "", "", "refs/heads/main", oid, "", "", 30), Charsets.UTF_8))
+        val pushed = JSONObject(String(RishLibgit2Native.push(f.gitDir.absolutePath, f.workDir.absolutePath, operation, "", "", "refs/heads/main", oid, "", "", 30, false, null), Charsets.UTF_8))
         assertTrue(pushed.toString(), pushed.getBoolean("ok"))
         assertEquals(pushed.toString(), "success", pushed.getString("outcome"))
         assertTrue(pushed.isNull("advertised_oid"))
@@ -141,12 +141,12 @@ class AndroidProjectRemoteTest {
         assertFalse(RishLibgit2Native.cancelPush(operation))
         // A second commit pushes on top: the remote now advertises the first.
         val second = f.commit("README.md", "# demo\n\nmore\n", "second")
-        val again = JSONObject(String(RishLibgit2Native.push(f.gitDir.absolutePath, f.workDir.absolutePath, UUID.randomUUID().toString(), "", "", "refs/heads/main", second, "", "", 30), Charsets.UTF_8))
+        val again = JSONObject(String(RishLibgit2Native.push(f.gitDir.absolutePath, f.workDir.absolutePath, UUID.randomUUID().toString(), "", "", "refs/heads/main", second, "", "", 30, false, null), Charsets.UTF_8))
         assertEquals(again.toString(), "success", again.getString("outcome"))
         assertEquals(oid, again.getString("advertised_oid"))
         assertEquals(second, again.getString("remote_oid"))
         // Malformed arguments never reach the transport.
-        val bad = JSONObject(String(RishLibgit2Native.push(f.gitDir.absolutePath, f.workDir.absolutePath, "op", "", "", "main", second, "", "", 30), Charsets.UTF_8))
+        val bad = JSONObject(String(RishLibgit2Native.push(f.gitDir.absolutePath, f.workDir.absolutePath, "op", "", "", "main", second, "", "", 30, false, null), Charsets.UTF_8))
         assertFalse(bad.getBoolean("ok")); assertEquals(3101, bad.getInt("code"))
         f.scratch.deleteRecursively()
     }
@@ -180,7 +180,7 @@ class AndroidProjectRemoteTest {
         val oid = f.commit("README.md", "# demo\n", "first")
         val url = "https://github.com/octocat/Hello-World.git"
         assertEquals("ok", RishLibgit2Native.setRemote(f.gitDir.absolutePath, f.workDir.absolutePath, url))
-        val reply = JSONObject(String(RishLibgit2Native.push(f.gitDir.absolutePath, f.workDir.absolutePath, UUID.randomUUID().toString(), url, "github.com", "refs/heads/main", oid, "", "", 30), Charsets.UTF_8))
+        val reply = JSONObject(String(RishLibgit2Native.push(f.gitDir.absolutePath, f.workDir.absolutePath, UUID.randomUUID().toString(), url, "github.com", "refs/heads/main", oid, "", "", 30, false, null), Charsets.UTF_8))
         assertTrue(reply.toString(), reply.getBoolean("ok"))
         assertEquals(reply.toString(), "auth_failure", reply.getString("outcome"))
         assertFalse(reply.getBoolean("effect_may_have_occurred"))

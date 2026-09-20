@@ -244,7 +244,8 @@ int InterruptedOutcome(const PushState &state, int code, int otherwise) {
 /// upload the one refspec, read the remote's verdict on it, reconnect to
 /// verify what it holds now.
 PushResult Execute(git_repository *repository, const std::string &remote_url, const std::string &reference,
-                   const std::string &local_oid, PushState *state) {
+                   const std::string &local_oid, PushState *state, bool has_expected,
+                   const std::string &expected_remote_oid) {
   PushResult result;
   const bool with_credentials = !state->token.empty() && !state->username.empty();
   git_remote *remote = nullptr;
@@ -273,6 +274,14 @@ PushResult Execute(git_repository *repository, const std::string &remote_url, co
   if (code != 0) {
     if (remote != nullptr) git_remote_free(remote);
     result.outcome = InterruptedOutcome(*state, code, 7);
+    return result;
+  }
+  // The caller may have prepared against what the remote advertised then;
+  // a remote that moved since is a conflict before anything is uploaded.
+  if (has_expected && advertised != expected_remote_oid) {
+    git_remote_disconnect(remote);
+    git_remote_free(remote);
+    result.outcome = 1;
     return result;
   }
   const std::string refspec = reference + ":" + reference;
@@ -410,10 +419,12 @@ Java_tech_zseven_rish_runtime_RishLibgit2Native_push(JNIEnv *env, jclass, jstrin
                                                      jstring remoteUrlValue, jstring hostValue,
                                                      jstring referenceValue, jstring localOidValue,
                                                      jstring usernameValue, jstring tokenValue,
-                                                     jint timeoutSeconds) {
+                                                     jint timeoutSeconds, jboolean hasExpected,
+                                                     jstring expectedRemoteOidValue) {
   const char *gitdir = Chars(env, gitDirValue);
   const char *workdir = Chars(env, workDirValue);
   const std::string operation = String(env, operationValue);
+  const std::string expected_remote_oid = String(env, expectedRemoteOidValue);
   const std::string remote_url = String(env, remoteUrlValue);
   const std::string host = String(env, hostValue);
   const std::string reference = String(env, referenceValue);
@@ -439,7 +450,8 @@ Java_tech_zseven_rish_runtime_RishLibgit2Native_push(JNIEnv *env, jclass, jstrin
     state.target_ref = reference;
     state.cancel = cancel;
     state.deadline = std::chrono::steady_clock::now() + std::chrono::seconds(timeoutSeconds);
-    const PushResult result = Execute(repository, remote_url, reference, local_oid, &state);
+    const PushResult result =
+        Execute(repository, remote_url, reference, local_oid, &state, hasExpected == JNI_TRUE, expected_remote_oid);
     UnregisterCancel(operation, cancel);
     answer = Encode(result);
   } while (false);
@@ -447,6 +459,98 @@ Java_tech_zseven_rish_runtime_RishLibgit2Native_push(JNIEnv *env, jclass, jstrin
   Release(env, gitDirValue, gitdir);
   Release(env, workDirValue, workdir);
   return rish::Bytes(env, answer);
+}
+
+/// What origin advertises for `reference` right now, over a FETCH
+/// connection with the same credential rule as a push. Answers
+/// `{"ok":true,"oid":…|null}`; null is a reference the remote does not have.
+JNIEXPORT jbyteArray JNICALL
+Java_tech_zseven_rish_runtime_RishLibgit2Native_remoteRefOid(JNIEnv *env, jclass, jstring gitDirValue,
+                                                             jstring workDirValue, jstring remoteUrlValue,
+                                                             jstring hostValue, jstring referenceValue,
+                                                             jstring usernameValue, jstring tokenValue,
+                                                             jint timeoutSeconds) {
+  const char *gitdir = Chars(env, gitDirValue);
+  const char *workdir = Chars(env, workDirValue);
+  const std::string remote_url = String(env, remoteUrlValue);
+  const std::string host = String(env, hostValue);
+  const std::string reference = String(env, referenceValue);
+  const std::string username = String(env, usernameValue);
+  const std::string token = String(env, tokenValue);
+  std::string answer;
+  git_repository *repository = nullptr;
+  git_remote *remote = nullptr;
+  do {
+    if (workdir == nullptr || reference.rfind("refs/heads/", 0) != 0 || (!remote_url.empty() && host.empty()) ||
+        timeoutSeconds < 1) {
+      answer = Failure(3101, "arguments");
+      break;
+    }
+    const char *stage = OpenRepository(&repository, gitdir, workdir);
+    if (stage != nullptr) { answer = Failure(3102, stage); break; }
+    PushState state;
+    state.host = host;
+    state.username = username;
+    state.token = token;
+    state.target_ref = reference;
+    state.deadline = std::chrono::steady_clock::now() + std::chrono::seconds(timeoutSeconds);
+    int code = git_remote_lookup(&remote, repository, "origin");
+    if (code == 0 && !remote_url.empty()) code = git_remote_set_instance_url(remote, remote_url.c_str());
+    git_remote_connect_options connect_options = {};
+    if (code == 0) code = git_remote_connect_options_init(&connect_options, GIT_REMOTE_CONNECT_OPTIONS_VERSION);
+    if (code == 0) {
+      connect_options.follow_redirects = GIT_REMOTE_REDIRECT_NONE;
+      connect_options.proxy_opts.type = GIT_PROXY_NONE;
+      FillCallbacks(&connect_options.callbacks, &state, !token.empty() && !username.empty());
+      code = git_remote_connect_ext(remote, GIT_DIRECTION_FETCH, &connect_options);
+    }
+    int ls_code = 0;
+    const std::string advertised = code == 0 ? AdvertisedOid(remote, reference, &ls_code) : std::string();
+    if (code == 0) code = ls_code;
+    if (git_remote_connected(remote)) git_remote_disconnect(remote);
+    if (code != 0) {
+      answer = Failure(InterruptedOutcome(state, code, 7) == 4 ? 3197 : 3199, "remote_ls");
+      break;
+    }
+    answer = std::string("{\"ok\":true,\"oid\":") + (advertised.empty() ? "null" : Quoted(advertised)) + "}";
+  } while (false);
+  if (remote != nullptr) git_remote_free(remote);
+  if (repository != nullptr) git_repository_free(repository);
+  Release(env, gitDirValue, gitdir);
+  Release(env, workDirValue, workdir);
+  return rish::Bytes(env, answer);
+}
+
+/// `refs/remotes/origin/<branch>` := `oid`, what a push just proved the
+/// remote holds. Answers "ok" or "error:<stage>".
+JNIEXPORT jstring JNICALL
+Java_tech_zseven_rish_runtime_RishLibgit2Native_setTrackingReference(JNIEnv *env, jclass, jstring gitDirValue,
+                                                                     jstring workDirValue, jstring branchValue,
+                                                                     jstring oidValue) {
+  const char *gitdir = Chars(env, gitDirValue);
+  const char *workdir = Chars(env, workDirValue);
+  const std::string branch = String(env, branchValue);
+  const std::string oid_hex = String(env, oidValue);
+  std::string answer = "ok";
+  git_repository *repository = nullptr;
+  git_reference *tracking = nullptr;
+  git_oid oid;
+  do {
+    if (workdir == nullptr || branch.empty() || oid_hex.size() != GIT_OID_SHA1_HEXSIZE) { answer = "error:arguments"; break; }
+    const char *stage = OpenRepository(&repository, gitdir, workdir);
+    if (stage != nullptr) { answer = std::string("error:") + stage; break; }
+    if (git_oid_fromstr(&oid, oid_hex.c_str()) != 0) { answer = "error:oid"; break; }
+    const std::string name = "refs/remotes/origin/" + branch;
+    if (git_reference_create(&tracking, repository, name.c_str(), &oid, 1, "rish agent push") != 0) {
+      answer = "error:reference";
+      break;
+    }
+  } while (false);
+  if (tracking != nullptr) git_reference_free(tracking);
+  if (repository != nullptr) git_repository_free(repository);
+  Release(env, gitDirValue, gitdir);
+  Release(env, workDirValue, workdir);
+  return env->NewStringUTF(answer.c_str());
 }
 
 /// Asks a running push to stop at its next callback. Answers whether a push
