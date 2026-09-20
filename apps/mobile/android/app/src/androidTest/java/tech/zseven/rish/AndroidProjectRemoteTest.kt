@@ -175,7 +175,11 @@ class AndroidProjectRemoteTest {
     @Test
     fun theExportedRootsLetTlsReachGitHub() {
         val f = fixture()
-        assumeTrue("no network on this device", try { java.net.InetAddress.getByName("github.com"); true } catch (_: Exception) { false })
+        // Resolvable and reachable on 443, or the probe says nothing about trust:
+        // a transport failure with no route looks the same as a rejected chain.
+        assumeTrue("github.com is not reachable from this device", try {
+            java.net.Socket().use { it.connect(java.net.InetSocketAddress("github.com", 443), 5_000) }; true
+        } catch (_: Exception) { false })
         assertTrue("the system roots could not be exported", tech.zseven.rish.runtime.AndroidGitCertificates.ensure(context) != null)
         val oid = f.commit("README.md", "# demo\n", "first")
         val url = "https://github.com/octocat/Hello-World.git"
