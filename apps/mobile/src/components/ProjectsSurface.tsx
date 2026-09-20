@@ -1216,6 +1216,89 @@ export function ProjectsSurface({
     tasks,
   ]);
 
+  /** `git fetch origin` for a workspace project: what the remote holds now, and how far behind the branch is. */
+  const fetchRemote = useCallback(async () => {
+    if (
+      selected === null ||
+      selected.root === null ||
+      selectedRef.current?.id !== selected.id ||
+      selected.origin_url === null ||
+      !tasks.visible ||
+      tasks.busy
+    )
+      return;
+    const task = beginTask('push');
+    const operationId = LocalRuntime.createCompletionRequestId();
+    pushOperationId.current = operationId;
+    setError(null);
+    setNotice(null);
+    try {
+      const fetched = await LocalProjects.fetchV2({
+        schema_version: 1,
+        root: selected.root,
+        operation_id: operationId,
+        remote: 'origin',
+      });
+      if (!tasks.owns(task)) return;
+      setNotice(
+        fetched.remote_oid === null
+          ? t('projects.fetchedNothing')
+          : t('projects.fetched', { ahead: fetched.ahead, behind: fetched.behind }),
+      );
+      await loadDetail(selected);
+    } catch (caught) {
+      if (!tasks.owns(task)) return;
+      const code = errorCode(caught);
+      if (code === 'E_PROJECT_CREDENTIAL') setError(t('projects.pushRejected'));
+      else if (code === 'E_PROJECT_TIMEOUT') setError(t('projects.pushTimeout'));
+      else if (code === 'E_PROJECT_CANCELLED') setError(t('projects.pushCancelled'));
+      else setError(t('projects.operationFailed', { error: errorText(caught) }));
+    } finally {
+      if (pushOperationId.current === operationId) pushOperationId.current = null;
+      finishTask(task);
+    }
+  }, [beginTask, finishTask, loadDetail, selected, t, tasks]);
+
+  /** Moves the branch to origin's tip only as a fast-forward over an unchanged tree. */
+  const pullFastForward = useCallback(async () => {
+    if (
+      selected === null ||
+      selected.root === null ||
+      selectedRef.current?.id !== selected.id ||
+      status === null ||
+      status.head_oid === null ||
+      !tasks.visible ||
+      tasks.busy
+    )
+      return;
+    const task = beginTask('mutation');
+    setError(null);
+    setNotice(null);
+    try {
+      const pulled = await LocalProjects.pullFastForwardV2({
+        schema_version: 1,
+        root: selected.root,
+        expected_head_oid: status.head_oid,
+      });
+      if (!tasks.owns(task)) return;
+      setNotice(
+        pulled.updated
+          ? t('projects.pulled', { oid: pulled.oid.slice(0, 12) })
+          : t('projects.pullUpToDate'),
+      );
+      await loadDetail(selected);
+    } catch (caught) {
+      if (!tasks.owns(task)) return;
+      const code = errorCode(caught);
+      if (code === 'E_PROJECT_NON_FAST_FORWARD') setError(t('projects.pullDiverged'));
+      else if (code === 'E_PROJECT_CONFLICT') setError(t('projects.pullDirty'));
+      else if (code === 'E_WORKSPACE_CONFIRMATION') setError(t('projects.pullNothingFetched'));
+      else setError(t('projects.operationFailed', { error: errorText(caught) }));
+    } finally {
+      finishTask(task);
+    }
+  }, [beginTask, finishTask, loadDetail, selected, status, t, tasks]);
+
   const cancelPush = useCallback(() => {
     if (selected === null || !pushing) return;
     const operationId = pushOperationId.current;
@@ -1716,6 +1799,47 @@ export function ProjectsSurface({
                       value={pushBranch}
                       onChangeText={setPushBranch}
                     />
+                  )}
+                  {selected.root !== null && (
+                    <View style={styles.actionRow}>
+                      <Pressable
+                        accessibilityLabel={t('projects.fetch')}
+                        accessibilityRole="button"
+                        accessibilityState={{ disabled: busy }}
+                        disabled={busy}
+                        onPress={() => fetchRemote().catch(() => undefined)}
+                        style={({ pressed }) => [
+                          styles.secondaryButton,
+                          styles.flex,
+                          busy && styles.disabled,
+                          pressed && styles.pressed,
+                        ]}
+                      >
+                        <Text style={styles.secondaryButtonText}>
+                          {t('projects.fetch')}
+                        </Text>
+                      </Pressable>
+                      <Pressable
+                        accessibilityLabel={t('projects.pull')}
+                        accessibilityRole="button"
+                        accessibilityState={{
+                          disabled: busy || status === null || status.head_oid === null || status.behind === 0,
+                        }}
+                        disabled={busy || status === null || status.head_oid === null || status.behind === 0}
+                        onPress={() => pullFastForward().catch(() => undefined)}
+                        style={({ pressed }) => [
+                          styles.secondaryButton,
+                          styles.flex,
+                          (busy || status === null || status.head_oid === null || status.behind === 0) &&
+                            styles.disabled,
+                          pressed && styles.pressed,
+                        ]}
+                      >
+                        <Text style={styles.secondaryButtonText}>
+                          {t('projects.pull')}
+                        </Text>
+                      </Pressable>
+                    </View>
                   )}
                   <Pressable
                     accessibilityLabel={t('projects.push')}
@@ -2520,6 +2644,7 @@ const createStyles = (colors: ThemePalette) =>
       paddingHorizontal: 18,
     },
     flex: { flex: 1, minWidth: 0 },
+    actionRow: { flexDirection: 'row', gap: 8, marginTop: 8 },
     header: {
       height: 58,
       flexDirection: 'row',

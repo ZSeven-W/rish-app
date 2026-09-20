@@ -16,6 +16,8 @@ const native = {
   presentCredentialPromptV2: jest.fn(),
   clearCredentialV2: jest.fn(),
   cancelPushV2: jest.fn(),
+  fetchV2: jest.fn(),
+  pullFastForwardV2: jest.fn(),
 };
 
 (NativeModules as Record<string, unknown>).LocalProjects = native;
@@ -420,4 +422,60 @@ test('remote, credential and cancel travel by root and never carry a token', asy
   delete partial.cancelPushV2;
   expect(LocalProjects.isV2Available()).toBe(false);
   partial.cancelPushV2 = cancel;
+});
+
+test('fetch and fast-forward pull travel by root and are held to their shapes', async () => {
+  const fetched = {
+    schema_version: 2, root: root(), project_id: PROJECT_ID, remote: 'origin', branch: 'main',
+    remote_oid: OID, ahead: 0, behind: 2, fetched_at: '2026-09-21T00:00:00.000Z',
+  };
+  native.fetchV2.mockResolvedValue(fetched);
+  await expect(
+    LocalProjects.fetchV2({ schema_version: 1, root: root(), operation_id: OPERATION_ID, remote: 'origin' }),
+  ).resolves.toEqual(fetched);
+  expect(native.fetchV2).toHaveBeenCalledWith({
+    schema_version: 1, root: root(), operation_id: OPERATION_ID, remote: 'origin',
+  });
+  // Nothing fetched for the branch is an answer, not a refusal.
+  native.fetchV2.mockResolvedValueOnce({ ...fetched, remote_oid: null, behind: 0 });
+  await expect(
+    LocalProjects.fetchV2({ schema_version: 1, root: root(), operation_id: OPERATION_ID, remote: 'origin' }),
+  ).resolves.toMatchObject({ remote_oid: null, behind: 0 });
+  await expect(
+    LocalProjects.fetchV2({ schema_version: 1, root: root(), operation_id: OPERATION_ID, remote: 'upstream' }),
+  ).rejects.toMatchObject({ code: 'E_PROJECT_REQUEST_INVALID' });
+  native.fetchV2.mockResolvedValueOnce({ ...fetched, behind: -1 });
+  await expect(
+    LocalProjects.fetchV2({ schema_version: 1, root: root(), operation_id: OPERATION_ID, remote: 'origin' }),
+  ).rejects.toMatchObject({ code: 'E_PROJECT_RESULT_INVALID' });
+
+  const previous = 'c'.repeat(40);
+  const pulled = {
+    schema_version: 2, root: root(), project_id: PROJECT_ID, branch: 'main', oid: OID, previous_oid: previous, updated: true,
+  };
+  native.pullFastForwardV2.mockResolvedValue(pulled);
+  await expect(
+    LocalProjects.pullFastForwardV2({ schema_version: 1, root: root(), expected_head_oid: previous }),
+  ).resolves.toEqual(pulled);
+  expect(native.pullFastForwardV2).toHaveBeenCalledWith({
+    schema_version: 1, root: root(), expected_head_oid: previous,
+  });
+  native.pullFastForwardV2.mockResolvedValueOnce({ ...pulled, oid: previous, updated: false });
+  await expect(
+    LocalProjects.pullFastForwardV2({ schema_version: 1, root: root(), expected_head_oid: previous }),
+  ).resolves.toMatchObject({ updated: false });
+  // `updated` must agree with the oids.
+  native.pullFastForwardV2.mockResolvedValueOnce({ ...pulled, updated: false });
+  await expect(
+    LocalProjects.pullFastForwardV2({ schema_version: 1, root: root(), expected_head_oid: previous }),
+  ).rejects.toMatchObject({ code: 'E_PROJECT_RESULT_INVALID' });
+  await expect(
+    LocalProjects.pullFastForwardV2({ schema_version: 1, root: root(), expected_head_oid: null }),
+  ).rejects.toMatchObject({ code: 'E_PROJECT_REQUEST_INVALID' });
+  native.pullFastForwardV2.mockRejectedValueOnce(
+    Object.assign(new Error('E_PROJECT_NON_FAST_FORWARD'), { code: 'E_PROJECT_NON_FAST_FORWARD' }),
+  );
+  await expect(
+    LocalProjects.pullFastForwardV2({ schema_version: 1, root: root(), expected_head_oid: previous }),
+  ).rejects.toMatchObject({ code: 'E_PROJECT_NON_FAST_FORWARD' });
 });

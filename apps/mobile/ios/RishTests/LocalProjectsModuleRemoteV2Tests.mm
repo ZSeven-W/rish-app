@@ -20,6 +20,8 @@ typedef void (^RV2Reject)(NSString *code, NSString *message, NSError *error);
 - (void)pushV2Request:(id)request resolver:(RV2Resolve)resolve rejecter:(RV2Reject)reject;
 - (void)cancelPushV2Request:(id)request resolver:(RV2Resolve)resolve rejecter:(RV2Reject)reject;
 - (void)statusV2Request:(id)request resolver:(RV2Resolve)resolve rejecter:(RV2Reject)reject;
+- (void)fetchV2Request:(id)request resolver:(RV2Resolve)resolve rejecter:(RV2Reject)reject;
+- (void)pullFastForwardV2Request:(id)request resolver:(RV2Resolve)resolve rejecter:(RV2Reject)reject;
 @end
 
 @interface LocalProjectsModuleRemoteV2Tests : XCTestCase
@@ -277,6 +279,178 @@ typedef void (^RV2Reject)(NSString *code, NSString *message, NSError *error);
   } code:&code];
   XCTAssertNil(badCancel);
   XCTAssertEqualObjects(code, @"E_PROJECT_REQUEST_INVALID");
+}
+
+
+// MARK: - fetch and fast-forward
+
+/// One commit of `path` = `content` on HEAD of `repository`; the new oid.
+static NSString *RV2Commit(git_repository *repository, NSString *path, NSString *content, NSString *message) {
+  NSString *workdir = [NSString stringWithUTF8String:git_repository_workdir(repository)];
+  NSString *file = [workdir stringByAppendingPathComponent:path];
+  [[content dataUsingEncoding:NSUTF8StringEncoding] writeToFile:file atomically:YES];
+  git_index *index = nullptr;
+  git_oid treeId = {}, commitId = {};
+  git_tree *tree = nullptr;
+  git_signature *who = nullptr;
+  git_reference *head = nullptr;
+  git_commit *parent = nullptr;
+  int code = git_repository_index(&index, repository);
+  if (code == 0) code = git_index_add_bypath(index, path.UTF8String);
+  if (code == 0) code = git_index_write(index);
+  if (code == 0) code = git_index_write_tree(&treeId, index);
+  if (code == 0) code = git_tree_lookup(&tree, repository, &treeId);
+  if (code == 0) code = git_signature_new(&who, "Rish", "rish@example.invalid", 1700000000, 0);
+  if (code == 0 && git_repository_head(&head, repository) == 0 && head != nullptr) {
+    code = git_commit_lookup(&parent, repository, git_reference_target(head));
+  }
+  const git_commit *parents[1] = { parent };
+  if (code == 0) {
+    code = git_commit_create(&commitId, repository, "HEAD", who, who, "UTF-8", message.UTF8String, tree,
+                             parent == nullptr ? 0 : 1, parent == nullptr ? nullptr : parents);
+  }
+  NSString *oid = code == 0 ? [NSString stringWithUTF8String:({ char b[41] = {}; git_oid_tostr(b, sizeof b, &commitId); b; })] : nil;
+  if (parent != nullptr) git_commit_free(parent);
+  if (head != nullptr) git_reference_free(head);
+  if (who != nullptr) git_signature_free(who);
+  if (tree != nullptr) git_tree_free(tree);
+  if (index != nullptr) git_index_free(index);
+  return oid;
+}
+
+/// `git push origin main` over the local transport, no credential.
+static BOOL RV2PushMain(git_repository *repository) {
+  git_remote *remote = nullptr;
+  if (git_remote_lookup(&remote, repository, "origin") != 0) return NO;
+  char *spec = const_cast<char *>("refs/heads/main:refs/heads/main");
+  git_strarray refspecs = { &spec, 1 };
+  git_push_options options = GIT_PUSH_OPTIONS_INIT;
+  const int code = git_remote_push(remote, &refspecs, &options);
+  git_remote_free(remote);
+  return code == 0;
+}
+
+- (void)testFetchAndFastForwardMoveTheBranchOnlyWhenThatIsSafe {
+  NSError *error = nil;
+  NSString *code = nil;
+  NSString *scratch = [NSTemporaryDirectory() stringByAppendingPathComponent:
+      [NSString stringWithFormat:@"rish-ff-%@", NSUUID.UUID.UUIDString.lowercaseString]];
+  NSString *barePath = [scratch stringByAppendingPathComponent:@"origin.git"];
+  NSString *peerPath = [scratch stringByAppendingPathComponent:@"peer"];
+  // A bare origin whose HEAD names `main`, so a clone of it lands on the
+  // branch the project pushes.
+  git_repository *bare = nullptr;
+  git_repository_init_options bareOptions = GIT_REPOSITORY_INIT_OPTIONS_INIT;
+  bareOptions.flags = GIT_REPOSITORY_INIT_BARE | GIT_REPOSITORY_INIT_MKPATH;
+  bareOptions.initial_head = "main";
+  XCTAssertEqual(git_repository_init_ext(&bare, barePath.UTF8String, &bareOptions), 0);
+  git_repository_free(bare);
+
+  // The project: origin is the bare path, one commit pushed there.
+  NSString *first = nil;
+  @autoreleasepool {
+    __attribute__((objc_precise_lifetime)) DSHLocalProjectLease *lease = [self.projectAccess
+        leaseWorkspaceRootRef:self.projectRoot mode:DSHLocalProjectAccessModeWrite includeMetadata:NO timeout:1 error:&error];
+    XCTAssertNotNil(lease, @"%@", error);
+    git_remote *remote = nullptr;
+    XCTAssertEqual(git_remote_create(&remote, lease.repository, "origin", barePath.UTF8String), 0);
+    git_remote_free(remote);
+    first = RV2Commit(lease.repository, @"shared.txt", @"one\n", @"first");
+    XCTAssertNotNil(first);
+    XCTAssertTrue(RV2PushMain(lease.repository));
+  }
+  // libgit2's push over the local transport updates the tracking reference
+  // itself, so the branch is already at the tip it just pushed: nothing to do.
+  NSDictionary *early = [self bridge:^(RV2Resolve resolve, RV2Reject reject) {
+    [self.module pullFastForwardV2Request:[self requestWith:@{ @"expected_head_oid" : first }] resolver:resolve rejecter:reject];
+  } code:&code];
+  XCTAssertNotNil(early, @"%@", code);
+  XCTAssertEqualObjects(early[@"updated"], @NO);
+  XCTAssertEqualObjects(early[@"oid"], first);
+
+  // A peer clones the origin and moves the branch on.
+  git_repository *peer = nullptr;
+  XCTAssertEqual(git_clone(&peer, barePath.UTF8String, peerPath.UTF8String, nullptr), 0);
+  NSString *second = RV2Commit(peer, @"shared.txt", @"two\n", @"second");
+  XCTAssertNotNil(second);
+  XCTAssertTrue(RV2PushMain(peer));
+  git_repository_free(peer);
+
+  NSDictionary *fetched = [self bridge:^(RV2Resolve resolve, RV2Reject reject) {
+    [self.module fetchV2Request:[self requestWith:@{
+      @"operation_id" : @"44444444-4444-4444-8444-444444444444", @"remote" : @"origin" }] resolver:resolve rejecter:reject];
+  } code:&code];
+  XCTAssertNotNil(fetched, @"%@", code);
+  XCTAssertEqualObjects(fetched[@"branch"], @"main");
+  XCTAssertEqualObjects(fetched[@"remote_oid"], second);
+  XCTAssertEqualObjects(fetched[@"ahead"], @0);
+  XCTAssertEqualObjects(fetched[@"behind"], @1);
+  XCTAssertEqualObjects(fetched[@"root"], self.projectRoot);
+
+  // A changed tracked file is the person's: refused before anything moves.
+  NSString *workspaceFile = nil;
+  @autoreleasepool {
+    __attribute__((objc_precise_lifetime)) DSHLocalProjectLease *lease = [self.projectAccess
+        leaseWorkspaceRootRef:self.projectRoot mode:DSHLocalProjectAccessModeWrite includeMetadata:NO timeout:1 error:&error];
+    workspaceFile = [[NSString stringWithUTF8String:git_repository_workdir(lease.repository)] stringByAppendingPathComponent:@"shared.txt"];
+  }
+  [[@"mine\n" dataUsingEncoding:NSUTF8StringEncoding] writeToFile:workspaceFile atomically:YES];
+  id dirty = [self bridge:^(RV2Resolve resolve, RV2Reject reject) {
+    [self.module pullFastForwardV2Request:[self requestWith:@{ @"expected_head_oid" : first }] resolver:resolve rejecter:reject];
+  } code:&code];
+  XCTAssertNil(dirty);
+  XCTAssertEqualObjects(code, @"E_PROJECT_CONFLICT");
+  [[@"one\n" dataUsingEncoding:NSUTF8StringEncoding] writeToFile:workspaceFile atomically:YES];
+  id stale = [self bridge:^(RV2Resolve resolve, RV2Reject reject) {
+    [self.module pullFastForwardV2Request:[self requestWith:@{ @"expected_head_oid" : second }] resolver:resolve rejecter:reject];
+  } code:&code];
+  XCTAssertNil(stale);
+  XCTAssertEqualObjects(code, @"E_PROJECT_CONFLICT");  // HEAD is `first`, not `second`
+
+  NSDictionary *pulled = [self bridge:^(RV2Resolve resolve, RV2Reject reject) {
+    [self.module pullFastForwardV2Request:[self requestWith:@{ @"expected_head_oid" : first }] resolver:resolve rejecter:reject];
+  } code:&code];
+  XCTAssertNotNil(pulled, @"%@", code);
+  XCTAssertEqualObjects(pulled[@"updated"], @YES);
+  XCTAssertEqualObjects(pulled[@"oid"], second);
+  XCTAssertEqualObjects(pulled[@"previous_oid"], first);
+  XCTAssertEqualObjects([NSString stringWithContentsOfFile:workspaceFile encoding:NSUTF8StringEncoding error:nil], @"two\n");
+  NSDictionary *again = [self bridge:^(RV2Resolve resolve, RV2Reject reject) {
+    [self.module pullFastForwardV2Request:[self requestWith:@{ @"expected_head_oid" : second }] resolver:resolve rejecter:reject];
+  } code:&code];
+  XCTAssertEqualObjects(again[@"updated"], @NO);
+
+  // Both sides move: diverged, refused as non-fast-forward.
+  @autoreleasepool {
+    __attribute__((objc_precise_lifetime)) DSHLocalProjectLease *lease = [self.projectAccess
+        leaseWorkspaceRootRef:self.projectRoot mode:DSHLocalProjectAccessModeWrite includeMetadata:NO timeout:1 error:&error];
+    XCTAssertNotNil(RV2Commit(lease.repository, @"local.txt", @"local\n", @"local third"));
+  }
+  XCTAssertEqual(git_repository_open(&peer, peerPath.UTF8String), 0);
+  XCTAssertNotNil(RV2Commit(peer, @"shared.txt", @"three\n", @"peer third"));
+  XCTAssertTrue(RV2PushMain(peer));
+  git_repository_free(peer);
+  NSDictionary *diverged = [self bridge:^(RV2Resolve resolve, RV2Reject reject) {
+    [self.module fetchV2Request:[self requestWith:@{
+      @"operation_id" : @"55555555-5555-4555-8555-555555555555", @"remote" : @"origin" }] resolver:resolve rejecter:reject];
+  } code:&code];
+  XCTAssertEqualObjects(diverged[@"ahead"], @1);
+  XCTAssertEqualObjects(diverged[@"behind"], @1);
+  NSString *localHead = nil;
+  @autoreleasepool {
+    __attribute__((objc_precise_lifetime)) DSHLocalProjectLease *lease = [self.projectAccess
+        leaseWorkspaceRootRef:self.projectRoot mode:DSHLocalProjectAccessModeRead includeMetadata:NO timeout:1 error:&error];
+    git_reference *head = nullptr;
+    XCTAssertEqual(git_repository_head(&head, lease.repository), 0);
+    char b[41] = {}; git_oid_tostr(b, sizeof b, git_reference_target(head)); localHead = [NSString stringWithUTF8String:b];
+    git_reference_free(head);
+  }
+  id refused = [self bridge:^(RV2Resolve resolve, RV2Reject reject) {
+    [self.module pullFastForwardV2Request:[self requestWith:@{ @"expected_head_oid" : localHead }] resolver:resolve rejecter:reject];
+  } code:&code];
+  XCTAssertNil(refused);
+  XCTAssertEqualObjects(code, @"E_PROJECT_NON_FAST_FORWARD");
+  [NSFileManager.defaultManager removeItemAtPath:scratch error:nil];
 }
 
 @end

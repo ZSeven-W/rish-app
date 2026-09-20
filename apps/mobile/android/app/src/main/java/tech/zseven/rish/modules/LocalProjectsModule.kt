@@ -29,7 +29,8 @@ import tech.zseven.rish.runtime.RuntimeJson
  * something the project context can list. The git panel's local operations
  * -- [statusV2], [diffV2], [stageAllV2], [commitV2] -- and its remote half
  * -- [setRemoteV2], [remoteV2], [credentialStatusV2],
- * [presentCredentialPromptV2], [clearCredentialV2], [pushV2], [cancelPushV2]
+ * [presentCredentialPromptV2], [clearCredentialV2], [pushV2], [cancelPushV2],
+ * [fetchV2], [pullFastForwardV2]
  * -- answer through [tech.zseven.rish.runtime.AndroidProjectGit].
  *
  * Everything else still rejects with the JS-recognized "E_PROJECT_NATIVE"; no
@@ -217,6 +218,14 @@ class LocalProjectsModule(private val react: ReactApplicationContext) :
     @ReactMethod
     fun pushV2(request: ReadableMap?, promise: Promise) =
         answer("pushV2", request, promise) { runtime.projectGit.push(it) }
+
+    @ReactMethod
+    fun fetchV2(request: ReadableMap?, promise: Promise) =
+        answer("fetchV2", request, promise) { runtime.projectGit.fetch(it) }
+
+    @ReactMethod
+    fun pullFastForwardV2(request: ReadableMap?, promise: Promise) =
+        answer("pullFastForwardV2", request, promise) { runtime.projectGit.pullFastForward(it) }
 
     @ReactMethod
     fun cancelPushV2(request: ReadableMap?, promise: Promise) =

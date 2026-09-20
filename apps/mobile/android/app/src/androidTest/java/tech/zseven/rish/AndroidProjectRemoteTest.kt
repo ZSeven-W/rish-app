@@ -293,4 +293,136 @@ class AndroidProjectRemoteTest {
         assertEquals("not_running", f.git.cancelPush(f.request().put("operation_id", operationId)).getString("status"))
         f.scratch.deleteRecursively()
     }
+
+    // --- fetch and fast-forward -------------------------------------------
+
+    /** A second working repository beside the fixture, sharing nothing but the origin. */
+    private class Peer(scratch: File, name: String, copyOf: Peer? = null) {
+        val gitDir: File = File(scratch, "$name.git")
+        val workDir: File = File(scratch, "$name-work").apply { mkdirs() }
+        init {
+            if (copyOf == null) {
+                assertEquals("ok", RishLibgit2Native.initSplitRepository(gitDir.absolutePath, workDir.absolutePath))
+            } else {
+                // The gitdir pairs with whatever working tree it is opened with, so a copy of both is a second peer.
+                copyOf.gitDir.copyRecursively(gitDir); copyOf.workDir.copyRecursively(workDir)
+            }
+        }
+        companion object { fun copyOf(peer: Peer, scratch: File, name: String) = Peer(scratch, name, peer) }
+        fun commit(path: String, text: String, message: String): String {
+            File(workDir, path).apply { parentFile?.mkdirs() }.writeText(text)
+            assertEquals("ok", RishLibgit2Native.stagePath(gitDir.absolutePath, workDir.absolutePath, path))
+            val head = JSONObject(String(RishLibgit2Native.status(gitDir.absolutePath, workDir.absolutePath), Charsets.UTF_8))
+                .opt("head_oid").takeIf { it != JSONObject.NULL } as? String
+            val reply = JSONObject(String(RishLibgit2Native.commit(gitDir.absolutePath, workDir.absolutePath, message, "Peer", "peer@example.invalid", head), Charsets.UTF_8))
+            assertTrue(reply.toString(), reply.getBoolean("ok"))
+            return reply.getString("oid")
+        }
+        fun head(): String? = JSONObject(String(RishLibgit2Native.status(gitDir.absolutePath, workDir.absolutePath), Charsets.UTF_8))
+            .opt("head_oid").takeIf { it != JSONObject.NULL } as? String
+        fun push(oid: String): JSONObject = JSONObject(String(RishLibgit2Native.push(gitDir.absolutePath, workDir.absolutePath, UUID.randomUUID().toString(), "", "", "refs/heads/main", oid, "", "", 30, false, null), Charsets.UTF_8))
+        fun fetch(): JSONObject = JSONObject(String(RishLibgit2Native.fetch(gitDir.absolutePath, workDir.absolutePath, UUID.randomUUID().toString(), "", "", "main", "", "", 30), Charsets.UTF_8))
+        fun fastForward(expected: String): JSONObject = JSONObject(String(RishLibgit2Native.fastForward(gitDir.absolutePath, workDir.absolutePath, expected), Charsets.UTF_8))
+    }
+
+    @Test
+    fun theFetchAndFastForwardMoveTheBranchOnlyWhenThatIsSafe() {
+        val f = fixture()
+        val bare = File(f.scratch, "shared.git")
+        assertEquals("ok", RishLibgit2Native.initSplitRepository(bare.absolutePath, File(f.scratch, "unused").apply { mkdirs() }.absolutePath))
+        val a = Peer(f.scratch, "a"); val b = Peer(f.scratch, "b")
+        for (peer in listOf(a, b)) assertEquals("ok", RishLibgit2Native.setRemote(peer.gitDir.absolutePath, peer.workDir.absolutePath, "file://" + bare.absolutePath))
+        // Before any fetch there is nothing to fast-forward to.
+        val first = a.commit("shared.txt", "one\n", "first")
+        assertEquals("no_upstream", a.fastForward(first).getString("outcome"))
+        assertEquals("success", a.push(first).getString("outcome"))
+        // B starts empty: its fetch sees the branch but has no HEAD to move yet.
+        val emptyFetch = b.fetch()
+        assertEquals(emptyFetch.toString(), "success", emptyFetch.getString("outcome"))
+        assertEquals(first, emptyFetch.getString("remote_oid"))
+        // B commits its own first commit on top of nothing? No: B takes A's history by committing after a fetch is not possible
+        // without a checkout, so B's first commit is made *from* the fetched tip: it starts as a fast-forward of an unborn branch.
+        // That path is not served (unborn HEAD is 3110); B instead gets its history the way a peer does -- a first commit,
+        // then a fetch that shows divergence.
+        val bFirst = b.commit("other.txt", "b\n", "b first")
+        val diverged = b.fetch()
+        assertEquals(1, diverged.getInt("ahead")); assertEquals(1, diverged.getInt("behind"))
+        assertEquals("diverged", b.fastForward(bFirst).getString("outcome"))
+        // A moves the shared branch on; a second commit in A, pushed.
+        val second = a.commit("shared.txt", "two\n", "second")
+        assertEquals("success", a.push(second).getString("outcome"))
+        // A third peer that took the branch by fetching before its first commit can fast-forward.
+        val c = Peer(f.scratch, "c")
+        assertEquals("ok", RishLibgit2Native.setRemote(c.gitDir.absolutePath, c.workDir.absolutePath, "file://" + bare.absolutePath))
+        // C's HEAD is unborn: the fetch lands refs/remotes/origin/main, but a fast-forward needs a born branch (3110).
+        assertEquals("success", c.fetch().getString("outcome"))
+        assertEquals(3110, c.fastForward(first).optInt("code"))
+        // A itself: up to date after its own push once fetched.
+        val aFetch = a.fetch()
+        assertEquals(second, aFetch.getString("remote_oid")); assertEquals(0, aFetch.getInt("ahead")); assertEquals(0, aFetch.getInt("behind"))
+        assertEquals("up_to_date", a.fastForward(second).getString("outcome"))
+        // D: a copy of A taken while both stood at `second` (the gitdir and the
+        // working tree together, so its index agrees with its HEAD). Then A
+        // moves the origin on, and D is one behind.
+        val d = Peer.copyOf(a, f.scratch, "d")
+        val third = a.commit("shared.txt", "three\n", "third")
+        assertEquals("success", a.push(third).getString("outcome"))
+        assertEquals(second, d.head())
+        val behind = d.fetch()
+        assertEquals(behind.toString(), 0, behind.getInt("ahead")); assertEquals(1, behind.getInt("behind"))
+        // Changes to a tracked file are the person's: no fast-forward over them.
+        File(d.workDir, "shared.txt").writeText("mine\n")
+        assertEquals("dirty", d.fastForward(second).getString("outcome"))
+        File(d.workDir, "shared.txt").writeText("two\n")
+        // An untracked file that the update would not touch is fine.
+        File(d.workDir, "notes.txt").writeText("untracked\n")
+        assertEquals(3110, d.fastForward(first).optInt("code"))
+        val moved = d.fastForward(second)
+        assertEquals(moved.toString(), "updated", moved.getString("outcome"))
+        assertEquals(third, moved.getString("oid")); assertEquals(second, moved.getString("previous_oid"))
+        assertEquals(third, d.head())
+        assertEquals("three\n", File(d.workDir, "shared.txt").readText())
+        assertTrue(File(d.workDir, "notes.txt").exists())
+        assertEquals("up_to_date", d.fastForward(third).getString("outcome"))
+        f.scratch.deleteRecursively()
+    }
+
+    @Test
+    fun theV2FetchAndPullTalkToTheTestRemote() {
+        val remote = testRemote()
+        val f = fixture()
+        // Unrelated `main` histories: the seeded remote and this fresh repository diverge from the start.
+        val local = f.commit("android.txt", "local\n", "local first")
+        f.git.setRemote(f.request().put("url", "${remote.base}/target.git"))
+        assertEquals(3197, refusal { f.git.fetch(f.request().put("operation_id", UUID.randomUUID().toString()).put("remote", "origin")) })
+        f.git.storeCredential(f.credential(remote, remote.token))
+        val fetched = f.git.fetch(f.request().put("operation_id", UUID.randomUUID().toString()).put("remote", "origin"))
+        assertEquals("main", fetched.getString("branch"))
+        assertEquals(remote.tip("target.git", "main"), fetched.getString("remote_oid"))
+        assertEquals(1, fetched.getInt("ahead")); assertEquals(1, fetched.getInt("behind"))
+        assertEquals(3196, refusal { f.git.pullFastForward(f.request().put("expected_head_oid", local)) })
+        assertEquals(3110, refusal { f.git.pullFastForward(f.request().put("expected_head_oid", "a".repeat(40))) })
+        // A branch of its own: nothing on the remote yet, then pushed, then moved on by the Mac, then pulled.
+        f.scratch.deleteRecursively()
+        val g = fixture()
+        val branch = g.checkoutFresh()
+        val first = g.commit("android.txt", "first\n", "first")
+        g.git.setRemote(g.request().put("url", "${remote.base}/target.git"))
+        g.git.storeCredential(g.credential(remote, remote.token))
+        val nothing = g.git.fetch(g.request().put("operation_id", UUID.randomUUID().toString()).put("remote", "origin"))
+        assertTrue(nothing.isNull("remote_oid"))
+        assertEquals(3112, refusal { g.git.pullFastForward(g.request().put("expected_head_oid", first)) })
+        g.git.push(g.pushRequest(first))
+        val competing = remote.control("POST", "/g2/compete", JSONObject().put("repo", "target.git").put("branch", branch).toString())
+        val behind = g.git.fetch(g.request().put("operation_id", UUID.randomUUID().toString()).put("remote", "origin"))
+        assertEquals(competing.getString("oid"), behind.getString("remote_oid"))
+        assertEquals(0, behind.getInt("ahead")); assertEquals(1, behind.getInt("behind"))
+        val pulled = g.git.pullFastForward(g.request().put("expected_head_oid", first))
+        assertTrue(pulled.getBoolean("updated"))
+        assertEquals(competing.getString("oid"), pulled.getString("oid")); assertEquals(first, pulled.getString("previous_oid"))
+        assertTrue(File(g.workDir, "COMPETING.txt").exists())
+        val again = g.git.pullFastForward(g.request().put("expected_head_oid", competing.getString("oid")))
+        assertFalse(again.getBoolean("updated"))
+        g.scratch.deleteRecursively()
+    }
 }

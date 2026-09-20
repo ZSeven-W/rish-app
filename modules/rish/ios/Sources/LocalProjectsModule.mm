@@ -5506,6 +5506,310 @@ RCT_REMAP_METHOD(clearCredentialV2,
   } });
 }
 
+/// The fetch side of the remote half: the credential offered once and only
+/// to its host, the cancel token polled from the transfer callback, no
+/// redirects, no proxy. What `git fetch origin` needs and nothing more.
+struct LPV2FetchState {
+  NSString *__unsafe_unretained host;
+  NSString *__unsafe_unretained username;
+  NSString *__unsafe_unretained token;
+  DSHGitPushCancelToken *__unsafe_unretained cancel;
+  BOOL attempted;
+};
+
+static int LPV2FetchCredentialCallback(git_credential **out, const char *url,
+                                       const char *usernameFromUrl,
+                                       unsigned int allowedTypes, void *payload) {
+  (void)usernameFromUrl;
+  auto *state = static_cast<LPV2FetchState *>(payload);
+  if (state == nullptr || state->attempted || state->token.length == 0 ||
+      state->username.length == 0 || (allowedTypes & GIT_CREDENTIAL_USERPASS_PLAINTEXT) == 0) {
+    return GIT_EAUTH;
+  }
+  // Stored for one host; a redirect that asks elsewhere gets nothing.
+  NSString *asked = url == nullptr ? nil
+      : [NSURLComponents componentsWithString:[NSString stringWithUTF8String:url]].host.lowercaseString;
+  if (asked == nil || ![asked isEqualToString:state->host]) return GIT_EAUTH;
+  state->attempted = YES;
+  return git_credential_userpass_plaintext_new(out, state->username.UTF8String, state->token.UTF8String);
+}
+
+static int LPV2FetchProgress(const git_indexer_progress *stats, void *payload) {
+  (void)stats;
+  auto *state = static_cast<LPV2FetchState *>(payload);
+  return state != nullptr && state->cancel != nil && state->cancel.cancelled ? GIT_EUSER : 0;
+}
+
+/// The origin as fetch and fast-forward may use it: a validated network URL
+/// with its host, or an absolute local path with none (the native test
+/// transport, as the agent's push allows). Anything else is nil.
+static NSString *LPV2FetchOrigin(git_repository *repository, NSString **hostOut) {
+  git_config *config = nullptr;
+  git_buf value = GIT_BUF_INIT;
+  int result = git_repository_config(&config, repository);
+  if (result == 0) result = git_config_get_string_buf(&value, config, "remote.origin.url");
+  NSString *raw = result == 0 && value.ptr != nullptr ? [NSString stringWithUTF8String:value.ptr] : nil;
+  git_buf_dispose(&value);
+  if (config != nullptr) git_config_free(config);
+  NSURL *validated = LPValidatedRemoteURL(raw, nil);
+  if (validated != nil) {
+    if (hostOut != nullptr) *hostOut = validated.host.lowercaseString;
+    return validated.absoluteString;
+  }
+  if ([raw hasPrefix:@"/"]) {
+    if (hostOut != nullptr) *hostOut = nil;
+    return raw;
+  }
+  return nil;
+}
+
+RCT_REMAP_METHOD(fetchV2,
+                 fetchV2Request:(id)requestValue
+                 resolver:(RCTPromiseResolveBlock)resolve
+                 rejecter:(RCTPromiseRejectBlock)reject) {
+  NSDictionary *request = nil;
+  NSError *validationError = nil;
+  NSDictionary *root = nil;
+  NSString *operationId = nil;
+  BOOL inputValid = NO;
+  @try {
+    request = LPDictionary(requestValue);
+    root = LPV2Root(request[@"root"], YES, &validationError);
+    operationId = LPString(request[@"operation_id"]);
+    inputValid = LPV2ExactKeys(request, @[@"schema_version", @"root", @"operation_id", @"remote"]) &&
+        [request[@"schema_version"] isEqual:@1] && root != nil &&
+        LPV2CanonicalOperationId(operationId) && [request[@"remote"] isEqual:@"origin"];
+  } @catch (__unused NSException *exception) {
+    validationError = LPError(3199, @"Git fetch request is invalid");
+  }
+  if (!inputValid) {
+    LPV2Reject(reject, validationError ?: LPError(3101, @"Git fetch request is invalid"));
+    return;
+  }
+  dispatch_async(self.projectQueue, ^{ @autoreleasepool {
+    NSError *error = nil;
+    __attribute__((objc_precise_lifetime)) DSHLocalProjectLease *lease = [self v2LeaseForRoot:root
+                                                   mode:DSHLocalProjectAccessModeWrite
+                                                  error:&error];
+    if (lease == nil) {
+      LPV2Reject(reject, error ?: LPError(3199, @"Git fetch failed"));
+      return;
+    }
+    git_repository *repository = lease.repository;
+    git_reference *head = nullptr;
+    NSString *branch = nil;
+    if (git_repository_head(&head, repository) == 0 && head != nullptr && git_reference_is_branch(head)) {
+      const char *shorthand = git_reference_shorthand(head);
+      if (shorthand != nullptr) branch = [NSString stringWithUTF8String:shorthand];
+    }
+    if (head != nullptr) git_reference_free(head);
+    if (branch.length == 0) {
+      lease = nil;
+      LPV2Reject(reject, LPError(3110, @"No branch to fetch for"));
+      return;
+    }
+    NSString *host = nil;
+    NSString *origin = LPV2FetchOrigin(repository, &host);
+    if (origin == nil) {
+      lease = nil;
+      LPV2Reject(reject, LPError(3112, @"Git remote is not configured"));
+      return;
+    }
+    NSString *projectId = root[@"project_id"];
+    NSDictionary *credential = host == nil ? nil : DSHGitCredentialForScope(projectId, host, nil);
+    DSHGitPushCancelToken *cancelToken = [[DSHGitPushCancelToken alloc] init];
+    @synchronized (self) {
+      self.pushCancelTokens[projectId] = cancelToken;
+    }
+    LPV2FetchState state = {};
+    state.host = host;
+    state.username = credential[@"username"];
+    state.token = credential[@"token"];
+    state.cancel = cancelToken;
+    state.attempted = NO;
+    git_remote *remote = nullptr;
+    int result = git_remote_lookup(&remote, repository, LPRemoteName.UTF8String);
+    if (result == 0 && host != nil) result = git_remote_set_instance_url(remote, origin.UTF8String);
+    git_fetch_options options = GIT_FETCH_OPTIONS_INIT;
+    options.follow_redirects = GIT_REMOTE_REDIRECT_NONE;
+    options.proxy_opts.type = GIT_PROXY_NONE;
+    if (credential != nil) options.callbacks.credentials = LPV2FetchCredentialCallback;
+    options.callbacks.transfer_progress = LPV2FetchProgress;
+    options.callbacks.payload = &state;
+    git_libgit2_opts(GIT_OPT_SET_SERVER_CONNECT_TIMEOUT, LPCloneConnectTimeoutMilliseconds);
+    git_libgit2_opts(GIT_OPT_SET_SERVER_TIMEOUT, LPCloneIdleTimeoutMilliseconds);
+    if (result == 0) result = git_remote_fetch(remote, nullptr, &options, "rish fetch");
+    if (remote != nullptr) git_remote_free(remote);
+    @synchronized (self) {
+      if (self.pushCancelTokens[projectId] == cancelToken) {
+        [self.pushCancelTokens removeObjectForKey:projectId];
+      }
+    }
+    if (result != 0) {
+      lease = nil;
+      if (cancelToken.cancelled) LPV2Reject(reject, LPError(3195, @"Fetch was cancelled"));
+      else if (result == GIT_EAUTH) LPV2Reject(reject, LPError(3197, @"Git credential was rejected by the remote"));
+      else LPV2Reject(reject, LPError(3199, @"Git fetch failed"));
+      return;
+    }
+    // What the remote holds for this branch, and where the local branch
+    // stands against it. The upstream is set the first time the remote has
+    // the branch, so the panel's ahead/behind count from then on.
+    NSString *remoteOid = nil;
+    size_t ahead = 0;
+    size_t behind = 0;
+    NSString *trackingName = [@"refs/remotes/origin/" stringByAppendingString:branch];
+    git_reference *tracking = nullptr;
+    git_reference *local = nullptr;
+    if (git_reference_lookup(&tracking, repository, trackingName.UTF8String) == 0 && tracking != nullptr) {
+      const git_oid *remoteTarget = git_reference_target(tracking);
+      if (remoteTarget != nullptr) remoteOid = LPOidString(remoteTarget);
+      if (git_branch_lookup(&local, repository, branch.UTF8String, GIT_BRANCH_LOCAL) == 0 && local != nullptr) {
+        git_reference *upstream = nullptr;
+        if (git_branch_upstream(&upstream, local) != 0) {
+          (void)git_branch_set_upstream(local, [@"origin/" stringByAppendingString:branch].UTF8String);
+        } else if (upstream != nullptr) {
+          git_reference_free(upstream);
+        }
+        const git_oid *localTarget = git_reference_target(local);
+        if (localTarget != nullptr && remoteTarget != nullptr) {
+          git_graph_ahead_behind(&ahead, &behind, repository, localTarget, remoteTarget);
+        }
+      }
+    }
+    if (local != nullptr) git_reference_free(local);
+    if (tracking != nullptr) git_reference_free(tracking);
+    BOOL valid = [self.projectAccessV2 validateWorkspaceLeaseIdentity:lease rootRef:root error:&error];
+    lease = nil;
+    if (!valid) {
+      LPV2Reject(reject, error ?: LPError(3199, @"Git fetch failed"));
+      return;
+    }
+    resolve(@{
+      @"schema_version" : @2,
+      @"root" : root,
+      @"project_id" : projectId,
+      @"remote" : LPRemoteName,
+      @"branch" : branch,
+      @"remote_oid" : remoteOid ?: NSNull.null,
+      @"ahead" : @((unsigned long long)ahead),
+      @"behind" : @((unsigned long long)behind),
+      @"fetched_at" : LPNow(),
+    });
+  } });
+}
+
+RCT_REMAP_METHOD(pullFastForwardV2,
+                 pullFastForwardV2Request:(id)requestValue
+                 resolver:(RCTPromiseResolveBlock)resolve
+                 rejecter:(RCTPromiseRejectBlock)reject) {
+  NSDictionary *request = nil;
+  NSError *validationError = nil;
+  NSDictionary *root = nil;
+  NSString *expected = nil;
+  BOOL inputValid = NO;
+  @try {
+    request = LPDictionary(requestValue);
+    root = LPV2Root(request[@"root"], YES, &validationError);
+    expected = LPString(request[@"expected_head_oid"]);
+    inputValid = LPV2ExactKeys(request, @[@"schema_version", @"root", @"expected_head_oid"]) &&
+        [request[@"schema_version"] isEqual:@1] && root != nil && LPV2CanonicalOID(expected, NO);
+  } @catch (__unused NSException *exception) {
+    validationError = LPError(3199, @"Git pull request is invalid");
+  }
+  if (!inputValid) {
+    LPV2Reject(reject, validationError ?: LPError(3101, @"Git pull request is invalid"));
+    return;
+  }
+  dispatch_async(self.projectQueue, ^{ @autoreleasepool {
+    NSError *error = nil;
+    __attribute__((objc_precise_lifetime)) DSHLocalProjectLease *lease = [self v2LeaseForRoot:root
+                                                   mode:DSHLocalProjectAccessModeWrite
+                                                  error:&error];
+    if (lease == nil) {
+      LPV2Reject(reject, error ?: LPError(3199, @"Git pull failed"));
+      return;
+    }
+    git_repository *repository = lease.repository;
+    // A fast-forward of the current branch to origin/<branch>, and nothing
+    // else: never a merge, never over changes to tracked files, never past a
+    // HEAD other than the one the caller reviewed.
+    git_reference *head = nullptr;
+    git_reference *tracking = nullptr;
+    git_commit *commit = nullptr;
+    git_status_list *list = nullptr;
+    git_reference *updated = nullptr;
+    NSError *failure = nil;
+    NSDictionary *answer = nil;
+    do {
+      if (git_repository_head(&head, repository) != 0 || head == nullptr || !git_reference_is_branch(head) ||
+          git_reference_target(head) == nullptr) {
+        failure = LPError(3110, @"Git HEAD changed");
+        break;
+      }
+      NSString *previous = LPOidString(git_reference_target(head));
+      if (![previous isEqualToString:expected]) { failure = LPError(3110, @"Git HEAD changed"); break; }
+      const char *shorthand = git_reference_shorthand(head);
+      NSString *branch = shorthand == nullptr ? @"" : [NSString stringWithUTF8String:shorthand];
+      NSString *trackingName = [@"refs/remotes/origin/" stringByAppendingString:branch];
+      if (git_reference_lookup(&tracking, repository, trackingName.UTF8String) != 0 || tracking == nullptr ||
+          git_reference_target(tracking) == nullptr) {
+        failure = LPError(3112, @"Nothing fetched for this branch");
+        break;
+      }
+      const git_oid *remoteTarget = git_reference_target(tracking);
+      size_t ahead = 0;
+      size_t behind = 0;
+      if (git_graph_ahead_behind(&ahead, &behind, repository, git_reference_target(head), remoteTarget) != 0) {
+        failure = LPError(3199, @"Git pull failed");
+        break;
+      }
+      NSDictionary *(^result)(NSString *, BOOL) = ^NSDictionary *(NSString *oid, BOOL moved) {
+        return @{
+          @"schema_version" : @2, @"root" : root, @"project_id" : root[@"project_id"],
+          @"branch" : branch, @"oid" : oid, @"previous_oid" : previous, @"updated" : @(moved),
+        };
+      };
+      if (behind == 0) { answer = result(previous, NO); break; }
+      if (ahead > 0) { failure = LPError(3196, @"Local and remote histories diverged"); break; }
+      git_status_options statusOptions = GIT_STATUS_OPTIONS_INIT;
+      statusOptions.show = GIT_STATUS_SHOW_INDEX_AND_WORKDIR;
+      statusOptions.flags = GIT_STATUS_OPT_INCLUDE_UNTRACKED | GIT_STATUS_OPT_RECURSE_UNTRACKED_DIRS;
+      if (git_status_list_new(&list, repository, &statusOptions) != 0) { failure = LPError(3199, @"Git pull failed"); break; }
+      BOOL dirty = NO;
+      const size_t count = git_status_list_entrycount(list);
+      for (size_t index = 0; index < count && !dirty; index += 1) {
+        const git_status_entry *entry = git_status_byindex(list, index);
+        if (entry != nullptr && (entry->status & ~GIT_STATUS_WT_NEW) != 0) dirty = YES;
+      }
+      if (dirty) { failure = LPError(3110, @"Working tree has changes"); break; }
+      if (git_commit_lookup(&commit, repository, remoteTarget) != 0) { failure = LPError(3199, @"Git pull failed"); break; }
+      git_checkout_options checkout = GIT_CHECKOUT_OPTIONS_INIT;
+      checkout.checkout_strategy = GIT_CHECKOUT_SAFE;
+      const int checkedOut = git_checkout_tree(repository, reinterpret_cast<const git_object *>(commit), &checkout);
+      if (checkedOut == GIT_ECONFLICT) { failure = LPError(3110, @"Working tree has changes"); break; }
+      if (checkedOut != 0) { failure = LPError(3199, @"Git pull failed"); break; }
+      if (git_reference_set_target(&updated, head, remoteTarget, "rish fast-forward") != 0) {
+        failure = LPError(3199, @"Git pull failed");
+        break;
+      }
+      answer = result(LPOidString(remoteTarget), YES);
+    } while (false);
+    if (updated != nullptr) git_reference_free(updated);
+    if (list != nullptr) git_status_list_free(list);
+    if (commit != nullptr) git_commit_free(commit);
+    if (tracking != nullptr) git_reference_free(tracking);
+    if (head != nullptr) git_reference_free(head);
+    BOOL valid = answer != nil && [self.projectAccessV2 validateWorkspaceLeaseIdentity:lease rootRef:root error:&error];
+    lease = nil;
+    if (!valid) {
+      LPV2Reject(reject, failure ?: error ?: LPError(3199, @"Git pull failed"));
+      return;
+    }
+    resolve(answer);
+  } });
+}
+
 RCT_REMAP_METHOD(cancelPushV2,
                  cancelPushV2Request:(id)requestValue
                  resolver:(RCTPromiseResolveBlock)resolve

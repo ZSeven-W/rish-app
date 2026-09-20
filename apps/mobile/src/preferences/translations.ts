@@ -813,6 +813,17 @@ const enUS = {
   'projects.credentialBody':
     'The native prompt stores the token for this host. Rish never returns it to React Native.',
   'projects.push': 'Push',
+  'projects.fetch': 'Fetch',
+  'projects.pull': 'Pull (fast-forward)',
+  'projects.fetched': 'Fetched. Ahead {ahead} · behind {behind}.',
+  'projects.fetchedNothing': 'Fetched. The remote has no branch of this name yet.',
+  'projects.pulled': 'Fast-forwarded to {oid}.',
+  'projects.pullUpToDate': 'Already at the remote tip.',
+  'projects.pullDiverged':
+    'Local and remote histories have diverged. Rish only fast-forwards; reconcile the branches elsewhere or push to a different branch.',
+  'projects.pullDirty':
+    'The working tree has changes to tracked files, or the branch moved. Commit or revert them, refresh, then pull again.',
+  'projects.pullNothingFetched': 'Nothing fetched for this branch yet. Fetch first.',
   'projects.pushTitle': 'Push this branch?',
   'projects.pushBody':
     'Push {branch} to {host} ({remote}). This contacts the remote Git server.',
@@ -1798,6 +1809,15 @@ const zhCN: Readonly<Record<TranslationKey, string>> = {
   'projects.credentialBody':
     '原生弹窗会为此 Host 保存 Token，Rish 不会把它返回 React Native。',
   'projects.push': '推送',
+  'projects.fetch': '拉取远端（fetch）',
+  'projects.pull': '快进更新（pull）',
+  'projects.fetched': '已拉取。领先 {ahead} · 落后 {behind}。',
+  'projects.fetchedNothing': '已拉取。远端还没有同名分支。',
+  'projects.pulled': '已快进到 {oid}。',
+  'projects.pullUpToDate': '已经在远端最新提交上。',
+  'projects.pullDiverged': '本地与远端历史已分叉。Rish 只做快进；请在别处合并，或推到另一个分支。',
+  'projects.pullDirty': '工作树里有已跟踪文件的改动，或分支已变动。请先提交或撤销，刷新后再拉取。',
+  'projects.pullNothingFetched': '这个分支还没拉取过远端。请先 fetch。',
   'projects.pushTitle': '推送此分支？',
   'projects.pushBody': '将 {branch} 推送到 {host}（{remote}），这会连接远程 Git 服务器。',
   'projects.pushBodyNewBranch':

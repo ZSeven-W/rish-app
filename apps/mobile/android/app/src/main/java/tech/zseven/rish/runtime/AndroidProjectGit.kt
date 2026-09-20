@@ -205,7 +205,84 @@ internal class AndroidProjectGit(
             .put("pushed_at", RuntimeJson.now())
     }
 
-    /** `cancelPushV2`: asks a running push for this root to stop. */
+    /**
+     * `fetchV2`: `git fetch origin` with the credential stored for origin's
+     * host, or anonymously when none is stored (a public remote answers
+     * that; a private one turns it away as 3197). Answers what the remote
+     * holds for the current branch and how far the local branch stands
+     * from it. Cancelled by [cancelPush] with the same operation id.
+     */
+    fun fetch(rawRequest: JSONObject?): JSONObject {
+        val request = exact(rawRequest, FETCH_KEYS)
+        val operationId = request.opt("operation_id") as? String
+        if (operationId == null || !projects.canonicalOperationId(operationId) || request.opt("remote") != "origin") {
+            throw refused(REQUEST_INVALID, "git fetch request is invalid")
+        }
+        val opened = open(request, write = true)
+        val branch = answer(RishLibgit2Native.status(opened.gitDir, opened.workDir)).opt("branch") as? String
+        if (branch.isNullOrEmpty()) throw refused(HEAD_CHANGED, "no branch to fetch for")
+        val url = originUrl(opened) ?: throw refused(REMOTE_MISSING, "git remote is not configured")
+        val host = hostOf(url)
+        val credential = credentialStore().read(opened.projectId, host)
+        val reply = answer(
+            RishLibgit2Native.fetch(
+                opened.gitDir, opened.workDir, operationId, url, host, branch,
+                credential?.username ?: "", credential?.token ?: "", PUSH_TIMEOUT_SECONDS,
+            ),
+        )
+        val outcome = reply.optString("outcome")
+        if (outcome != "success") {
+            throw refused(
+                when (outcome) {
+                    "auth_failure" -> AUTH_REJECTED
+                    "timed_out" -> TIMED_OUT
+                    "cancelled" -> CANCELLED
+                    else -> NATIVE
+                },
+                "git fetch $outcome",
+            )
+        }
+        return stamped(
+            JSONObject().put("remote", "origin").put("branch", branch)
+                .put("remote_oid", reply.opt("remote_oid") ?: JSONObject.NULL)
+                .put("ahead", reply.optInt("ahead")).put("behind", reply.optInt("behind"))
+                .put("fetched_at", RuntimeJson.now()),
+            opened,
+        )
+    }
+
+    /**
+     * `pullFastForwardV2`: the current branch moves to `origin/<branch>`
+     * only when that is a fast-forward over a working tree with no changes
+     * to tracked files; anything else is refused before a file moves.
+     * Diverged history is 3196, a dirty tree or a moved HEAD 3110, no
+     * fetched upstream 3112. Fetch first; this touches no network.
+     */
+    fun pullFastForward(rawRequest: JSONObject?): JSONObject {
+        val request = exact(rawRequest, PULL_KEYS)
+        val expected = request.opt("expected_head_oid") as? String
+        if (expected == null || !oid(expected)) throw refused(REQUEST_INVALID, "git pull request is invalid")
+        val opened = open(request, write = true)
+        val status = answer(RishLibgit2Native.status(opened.gitDir, opened.workDir))
+        val branch = status.opt("branch") as? String
+        if (branch.isNullOrEmpty() || status.opt("head_oid") != expected) throw refused(HEAD_CHANGED, "git HEAD changed")
+        val reply = answer(RishLibgit2Native.fastForward(opened.gitDir, opened.workDir, expected))
+        when (reply.optString("outcome")) {
+            "updated", "up_to_date" -> Unit
+            "diverged" -> throw refused(NON_FAST_FORWARD, "local and remote histories diverged")
+            "dirty" -> throw refused(HEAD_CHANGED, "working tree has changes")
+            "no_upstream" -> throw refused(REMOTE_MISSING, "nothing fetched for this branch")
+            else -> throw refused(NATIVE, "git fast-forward failed")
+        }
+        return stamped(
+            JSONObject().put("branch", branch).put("oid", reply.getString("oid"))
+                .put("previous_oid", reply.getString("previous_oid"))
+                .put("updated", reply.optString("outcome") == "updated"),
+            opened,
+        )
+    }
+
+    /** `cancelPushV2`: asks a running push -- or fetch -- for this root to stop. */
     fun cancelPush(rawRequest: JSONObject?): JSONObject {
         val request = exact(rawRequest, CANCEL_PUSH_KEYS)
         val operationId = request.opt("operation_id") as? String
@@ -308,6 +385,8 @@ internal class AndroidProjectGit(
             "schema_version", "root", "operation_id", "remote", "expected_local_oid", "credential_reference", "https_proxy_url",
         )
         private val CANCEL_PUSH_KEYS = setOf("schema_version", "root", "operation_id")
+        private val FETCH_KEYS = setOf("schema_version", "root", "operation_id", "remote")
+        private val PULL_KEYS = setOf("schema_version", "root", "expected_head_oid")
         private const val PUSH_TIMEOUT_SECONDS = 60
         // iOS's numbers for the same refusals.
         private const val HEAD_CHANGED = 3110

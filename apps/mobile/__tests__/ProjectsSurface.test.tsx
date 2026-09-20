@@ -37,6 +37,8 @@ jest.mock('../src/native/LocalProjects', () => ({
     presentCredentialPromptV2: jest.fn(),
     clearCredentialV2: jest.fn(),
     cancelPushV2: jest.fn(),
+    fetchV2: jest.fn(),
+    pullFastForwardV2: jest.fn(),
     create: jest.fn(),
     clone: jest.fn(),
     startClone: jest.fn(),
@@ -1633,4 +1635,58 @@ test('a workspace project sets its origin, provisions a credential natively and 
   await act(async () => { actionByLabel(renderer.root, 'Clear remote credential').props.onPress(); await settle(); });
   expect(mockLocalProjects.clearCredentialV2).toHaveBeenCalledWith({ schema_version: 1, root: workspaceRoot });
   alert.mockRestore();
+});
+
+test('a workspace project fetches and fast-forwards by root, and a diverged branch is explained', async () => {
+  mockLocalProjects.isV2Available.mockReturnValue(true);
+  mockLocalProjects.list.mockRejectedValue(Object.assign(new Error('E_PROJECT_NATIVE'), { code: 'E_PROJECT_NATIVE' }));
+  mockWorkspaceProjects.mockResolvedValue([workspaceProject]);
+  const v2Status = { ...dirtyStatus, schema_version: 2, root: workspaceRoot, project_id: workspaceRoot.project_id, behind: 1 };
+  mockLocalProjects.statusV2.mockResolvedValue(v2Status);
+  mockLocalProjects.diffV2.mockImplementation(async (request: { staged: boolean }) => ({
+    ...diff, schema_version: 2, root: workspaceRoot, project_id: workspaceRoot.project_id, staged: request.staged,
+  }));
+  const url = 'https://github.com/example/demo.git';
+  mockLocalProjects.remoteV2.mockResolvedValue({
+    schema_version: 2, root: workspaceRoot, project_id: workspaceRoot.project_id, remote: 'origin', url, host: 'github.com',
+  });
+  mockLocalProjects.credentialStatusV2.mockResolvedValue({
+    schema_version: 2, root: workspaceRoot, project_id: workspaceRoot.project_id, host: 'github.com', configured: true,
+    expires_at: 1_800_000_000, expiry_seconds: 3600,
+  });
+  mockLocalProjects.fetchV2.mockResolvedValue({
+    schema_version: 2, root: workspaceRoot, project_id: workspaceRoot.project_id, remote: 'origin', branch: 'main',
+    remote_oid: 'f'.repeat(40), ahead: 0, behind: 1, fetched_at: '2026-09-21T00:00:00.000Z',
+  });
+  mockLocalProjects.pullFastForwardV2.mockResolvedValue({
+    schema_version: 2, root: workspaceRoot, project_id: workspaceRoot.project_id, branch: 'main',
+    oid: 'f'.repeat(40), previous_oid: dirtyStatus.head_oid, updated: true,
+  });
+  const renderer = await renderSurface();
+  const row = renderer.root.findByProps({ testID: 'projects-row-Smoke' });
+  await act(async () => { row.props.onPress(); await settle(); });
+  await act(async () => { await settle(); await settle(); });
+
+  await act(async () => { actionByLabel(renderer.root, 'Fetch').props.onPress(); await settle(); });
+  expect(mockLocalProjects.fetchV2).toHaveBeenCalledWith({
+    schema_version: 1, root: workspaceRoot, operation_id: 'op-1', remote: 'origin',
+  });
+  expect(renderer.root.findAllByProps({ children: 'Fetched. Ahead 0 · behind 1.' }).length).toBeGreaterThan(0);
+
+  await act(async () => { await settle(); await settle(); });
+  await act(async () => { actionByLabel(renderer.root, 'Pull (fast-forward)').props.onPress(); await settle(); });
+  expect(mockLocalProjects.pullFastForwardV2).toHaveBeenCalledWith({
+    schema_version: 1, root: workspaceRoot, expected_head_oid: dirtyStatus.head_oid,
+  });
+  expect(renderer.root.findAllByProps({ children: `Fast-forwarded to ${'f'.repeat(12)}.` }).length).toBeGreaterThan(0);
+
+  await act(async () => { await settle(); await settle(); });
+  mockLocalProjects.pullFastForwardV2.mockRejectedValueOnce(
+    Object.assign(new Error('E_PROJECT_NON_FAST_FORWARD'), { code: 'E_PROJECT_NON_FAST_FORWARD' }),
+  );
+  await act(async () => { actionByLabel(renderer.root, 'Pull (fast-forward)').props.onPress(); await settle(); });
+  expect(
+    renderer.root.findAll(instance => typeof instance.props.children === 'string' &&
+      instance.props.children.startsWith('Local and remote histories have diverged')).length,
+  ).toBeGreaterThan(0);
 });

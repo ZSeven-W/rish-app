@@ -138,6 +138,25 @@ internal object RishLibgit2Native {
 
     @JvmStatic external fun cancelPush(operationId: String): Boolean
 
+    /**
+     * `git fetch origin`, bounded like a push and cancelled by `cancelPush`
+     * with the same operation id: `{"ok":true,"outcome":success|auth_failure|
+     * timed_out|cancelled|failed,"remote_oid":…|null,"ahead":n,"behind":n}`.
+     * The current branch tracks `origin/<branch>` afterwards.
+     */
+    @JvmStatic external fun fetch(
+        gitDir: String?, workDir: String, operationId: String, remoteUrl: String, host: String, branch: String,
+        username: String, token: String, timeoutSeconds: Int,
+    ): ByteArray
+
+    /**
+     * A fast-forward of the current branch to `origin/<branch>` and nothing
+     * else: `{"ok":true,"outcome":updated|up_to_date|diverged|dirty|
+     * no_upstream,"oid":…,"previous_oid":…}`; 3110 when HEAD is not
+     * `expectedHeadOid`.
+     */
+    @JvmStatic external fun fastForward(gitDir: String?, workDir: String, expectedHeadOid: String): ByteArray
+
     // --- capturing a selection --------------------------------------------
     //
     // What `captureLease` reads from git on iOS, with nothing decided: the

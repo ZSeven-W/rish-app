@@ -195,6 +195,11 @@ std::string AdvertisedOid(git_remote *remote, const std::string &reference, int 
   return resolved;
 }
 
+int FetchProgress(const git_indexer_progress *stats, void *payload) {
+  (void)stats;
+  return AbortIfRequested(static_cast<PushState *>(payload));
+}
+
 void FillCallbacks(git_remote_callbacks *callbacks, PushState *state, bool with_credentials) {
   if (with_credentials) callbacks->credentials = CredentialCallback;
   callbacks->sideband_progress = SidebandCallback;
@@ -230,7 +235,9 @@ std::string Encode(const PushResult &result) {
          ",\"advertised_oid\":" + (result.advertised.empty() ? "null" : Quoted(result.advertised)) +
          ",\"remote_oid\":" + (result.remote_oid.empty() ? "null" : Quoted(result.remote_oid)) +
          ",\"verified\":" + (result.verified ? "true" : "false") +
-         ",\"effect_may_have_occurred\":" + (result.effect_may_have_occurred ? "true" : "false") + "}";
+         ",\"effect_may_have_occurred\":" + (result.effect_may_have_occurred ? "true" : "false") +
+         // libgit2's own words for a failure, for the log and the test report; never shown to a person.
+         (result.outcome == 7 ? ",\"error\":" + Quoted(LastError()) : std::string()) + "}";
 }
 
 int InterruptedOutcome(const PushState &state, int code, int otherwise) {
@@ -551,6 +558,194 @@ Java_tech_zseven_rish_runtime_RishLibgit2Native_setTrackingReference(JNIEnv *env
   Release(env, gitDirValue, gitdir);
   Release(env, workDirValue, workdir);
   return env->NewStringUTF(answer.c_str());
+}
+
+/// `git fetch origin`, bounded the way a push is: the credential offered
+/// once and only to its host, the cancel flag checked from every callback,
+/// a deadline, no redirects, no proxy. Afterwards `refs/heads/<branch>`
+/// tracks `origin/<branch>` when the remote has it, so status can count
+/// ahead and behind. Answers `{"ok":true,"outcome":success|auth_failure|
+/// timed_out|cancelled|failed,"remote_oid":…|null,"ahead":n,"behind":n}`.
+JNIEXPORT jbyteArray JNICALL
+Java_tech_zseven_rish_runtime_RishLibgit2Native_fetch(JNIEnv *env, jclass, jstring gitDirValue,
+                                                      jstring workDirValue, jstring operationValue,
+                                                      jstring remoteUrlValue, jstring hostValue,
+                                                      jstring branchValue, jstring usernameValue,
+                                                      jstring tokenValue, jint timeoutSeconds) {
+  const char *gitdir = Chars(env, gitDirValue);
+  const char *workdir = Chars(env, workDirValue);
+  const std::string operation = String(env, operationValue);
+  const std::string remote_url = String(env, remoteUrlValue);
+  const std::string host = String(env, hostValue);
+  const std::string branch = String(env, branchValue);
+  const std::string username = String(env, usernameValue);
+  const std::string token = String(env, tokenValue);
+  std::string answer;
+  git_repository *repository = nullptr;
+  git_remote *remote = nullptr;
+  git_reference *local = nullptr;
+  git_reference *tracking = nullptr;
+  do {
+    if (workdir == nullptr || operation.empty() || branch.empty() || (!remote_url.empty() && host.empty()) ||
+        timeoutSeconds < 1) {
+      answer = Failure(3101, "arguments");
+      break;
+    }
+    const char *stage = OpenRepository(&repository, gitdir, workdir);
+    if (stage != nullptr) { answer = Failure(3102, stage); break; }
+    std::atomic<bool> *cancel = RegisterCancel(operation);
+    PushState state;
+    state.host = host;
+    state.username = username;
+    state.token = token;
+    state.cancel = cancel;
+    state.deadline = std::chrono::steady_clock::now() + std::chrono::seconds(timeoutSeconds);
+    int code = git_remote_lookup(&remote, repository, "origin");
+    if (code == 0 && !remote_url.empty()) code = git_remote_set_instance_url(remote, remote_url.c_str());
+    git_fetch_options options = {};
+    if (code == 0) code = git_fetch_options_init(&options, GIT_FETCH_OPTIONS_VERSION);
+    if (code == 0) {
+      options.follow_redirects = GIT_REMOTE_REDIRECT_NONE;
+      options.proxy_opts.type = GIT_PROXY_NONE;
+      FillCallbacks(&options.callbacks, &state, !token.empty() && !username.empty());
+      options.callbacks.transfer_progress = FetchProgress;
+      code = git_remote_fetch(remote, nullptr, &options, "rish fetch");
+    }
+    UnregisterCancel(operation, cancel);
+    if (code != 0) {
+      const int outcome = InterruptedOutcome(state, code, 7);
+      answer = std::string("{\"ok\":true,\"outcome\":") + Quoted(OutcomeName(outcome)) +
+               ",\"remote_oid\":null,\"ahead\":0,\"behind\":0}";
+      break;
+    }
+    // What the remote holds for this branch, and where the local branch
+    // stands against it. The upstream is set the first time the remote has
+    // the branch, so the panel's ahead/behind count from then on.
+    std::string remote_oid;
+    size_t ahead = 0;
+    size_t behind = 0;
+    const std::string tracking_name = "refs/remotes/origin/" + branch;
+    if (git_reference_lookup(&tracking, repository, tracking_name.c_str()) == 0 && tracking != nullptr) {
+      const git_oid *remote_target = git_reference_target(tracking);
+      if (remote_target != nullptr) {
+        char buffer[GIT_OID_SHA1_HEXSIZE + 1] = {};
+        git_oid_tostr(buffer, sizeof(buffer), remote_target);
+        remote_oid = buffer;
+      }
+      if (git_branch_lookup(&local, repository, branch.c_str(), GIT_BRANCH_LOCAL) == 0 && local != nullptr) {
+        git_reference *upstream = nullptr;
+        if (git_branch_upstream(&upstream, local) != 0) {
+          const std::string upstream_name = "origin/" + branch;
+          (void)git_branch_set_upstream(local, upstream_name.c_str());
+        } else if (upstream != nullptr) {
+          git_reference_free(upstream);
+        }
+        const git_oid *local_target = git_reference_target(local);
+        if (local_target != nullptr && remote_target != nullptr) {
+          git_graph_ahead_behind(&ahead, &behind, repository, local_target, remote_target);
+        }
+      }
+    }
+    answer = std::string("{\"ok\":true,\"outcome\":\"success\",\"remote_oid\":") +
+             (remote_oid.empty() ? "null" : Quoted(remote_oid)) + ",\"ahead\":" + std::to_string(ahead) +
+             ",\"behind\":" + std::to_string(behind) + "}";
+  } while (false);
+  if (tracking != nullptr) git_reference_free(tracking);
+  if (local != nullptr) git_reference_free(local);
+  if (remote != nullptr) git_remote_free(remote);
+  if (repository != nullptr) git_repository_free(repository);
+  Release(env, gitDirValue, gitdir);
+  Release(env, workDirValue, workdir);
+  return rish::Bytes(env, answer);
+}
+
+/// A fast-forward of the current branch to `origin/<branch>`, and nothing
+/// else: never a merge, never over changes to tracked files, never past a
+/// HEAD other than `expectedHead`. Answers `{"ok":true,"outcome":updated|
+/// up_to_date|diverged|dirty|no_upstream,"oid":…,"previous_oid":…}`; a
+/// HEAD that is not `expectedHead` is refused with 3110.
+JNIEXPORT jbyteArray JNICALL
+Java_tech_zseven_rish_runtime_RishLibgit2Native_fastForward(JNIEnv *env, jclass, jstring gitDirValue,
+                                                            jstring workDirValue, jstring expectedHeadValue) {
+  const char *gitdir = Chars(env, gitDirValue);
+  const char *workdir = Chars(env, workDirValue);
+  const std::string expected = String(env, expectedHeadValue);
+  std::string answer;
+  git_repository *repository = nullptr;
+  git_reference *head = nullptr;
+  git_reference *tracking = nullptr;
+  git_commit *commit = nullptr;
+  git_status_list *list = nullptr;
+  git_reference *updated = nullptr;
+  do {
+    if (workdir == nullptr || expected.size() != GIT_OID_SHA1_HEXSIZE) { answer = Failure(3101, "arguments"); break; }
+    const char *stage = OpenRepository(&repository, gitdir, workdir);
+    if (stage != nullptr) { answer = Failure(3102, stage); break; }
+    if (git_repository_head(&head, repository) != 0 || head == nullptr || !git_reference_is_branch(head) ||
+        git_reference_target(head) == nullptr) {
+      answer = Failure(3110, "head");
+      break;
+    }
+    char previous[GIT_OID_SHA1_HEXSIZE + 1] = {};
+    git_oid_tostr(previous, sizeof(previous), git_reference_target(head));
+    if (expected != previous) { answer = Failure(3110, "head_changed"); break; }
+    const char *shorthand = git_reference_shorthand(head);
+    const std::string tracking_name = std::string("refs/remotes/origin/") + (shorthand != nullptr ? shorthand : "");
+    const auto encode = [&](const char *outcome, const std::string &oid) {
+      return std::string("{\"ok\":true,\"outcome\":") + Quoted(outcome) + ",\"oid\":" + Quoted(oid) +
+             ",\"previous_oid\":" + Quoted(previous) + "}";
+    };
+    if (git_reference_lookup(&tracking, repository, tracking_name.c_str()) != 0 || tracking == nullptr ||
+        git_reference_target(tracking) == nullptr) {
+      answer = encode("no_upstream", previous);
+      break;
+    }
+    const git_oid *remote_target = git_reference_target(tracking);
+    char remote_hex[GIT_OID_SHA1_HEXSIZE + 1] = {};
+    git_oid_tostr(remote_hex, sizeof(remote_hex), remote_target);
+    size_t ahead = 0;
+    size_t behind = 0;
+    if (git_graph_ahead_behind(&ahead, &behind, repository, git_reference_target(head), remote_target) != 0) {
+      answer = Failure(3199, "ahead_behind");
+      break;
+    }
+    if (behind == 0) { answer = encode("up_to_date", previous); break; }
+    if (ahead > 0) { answer = encode("diverged", previous); break; }
+    // Changes to tracked files are the person's; a fast-forward never
+    // touches them. Untracked files are left to the safe checkout, which
+    // refuses to overwrite one the update would need.
+    git_status_options status_options = GIT_STATUS_OPTIONS_INIT;
+    status_options.show = GIT_STATUS_SHOW_INDEX_AND_WORKDIR;
+    status_options.flags = GIT_STATUS_OPT_INCLUDE_UNTRACKED | GIT_STATUS_OPT_RECURSE_UNTRACKED_DIRS;
+    if (git_status_list_new(&list, repository, &status_options) != 0) { answer = Failure(3199, "status"); break; }
+    bool dirty = false;
+    const size_t count = git_status_list_entrycount(list);
+    for (size_t index = 0; index < count && !dirty; index += 1) {
+      const git_status_entry *entry = git_status_byindex(list, index);
+      if (entry != nullptr && (entry->status & ~GIT_STATUS_WT_NEW) != 0) dirty = true;
+    }
+    if (dirty) { answer = encode("dirty", previous); break; }
+    if (git_commit_lookup(&commit, repository, remote_target) != 0) { answer = Failure(3199, "commit"); break; }
+    git_checkout_options checkout = GIT_CHECKOUT_OPTIONS_INIT;
+    checkout.checkout_strategy = GIT_CHECKOUT_SAFE;
+    const int checked_out = git_checkout_tree(repository, reinterpret_cast<const git_object *>(commit), &checkout);
+    if (checked_out == GIT_ECONFLICT) { answer = encode("dirty", previous); break; }
+    if (checked_out != 0) { answer = Failure(3199, "checkout"); break; }
+    if (git_reference_set_target(&updated, head, remote_target, "rish fast-forward") != 0) {
+      answer = Failure(3199, "reference");
+      break;
+    }
+    answer = encode("updated", remote_hex);
+  } while (false);
+  if (updated != nullptr) git_reference_free(updated);
+  if (list != nullptr) git_status_list_free(list);
+  if (commit != nullptr) git_commit_free(commit);
+  if (tracking != nullptr) git_reference_free(tracking);
+  if (head != nullptr) git_reference_free(head);
+  if (repository != nullptr) git_repository_free(repository);
+  Release(env, gitDirValue, gitdir);
+  Release(env, workDirValue, workdir);
+  return rish::Bytes(env, answer);
 }
 
 /// Asks a running push to stop at its next callback. Answers whether a push

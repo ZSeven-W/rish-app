@@ -246,6 +246,39 @@ export type GitCancelPushRequestV1 = GitWorkspaceRequestV1 & {
   operation_id: string;
 };
 
+export type GitFetchRequestV1 = GitWorkspaceRequestV1 & {
+  operation_id: string;
+  remote: 'origin';
+};
+
+export type GitPullRequestV1 = GitWorkspaceRequestV1 & {
+  expected_head_oid: string;
+};
+
+/** What origin holds for the current branch after a fetch, and where the local branch stands. */
+export type ProjectFetchResultV2 = {
+  schema_version: 2;
+  root: WorkspaceRootRefV1;
+  project_id: string;
+  remote: 'origin';
+  branch: string;
+  remote_oid: string | null;
+  ahead: number;
+  behind: number;
+  fetched_at: string;
+};
+
+/** A fast-forward: `updated` is false when the branch was already at origin's tip. */
+export type ProjectPullResultV2 = {
+  schema_version: 2;
+  root: WorkspaceRootRefV1;
+  project_id: string;
+  branch: string;
+  oid: string;
+  previous_oid: string;
+  updated: boolean;
+};
+
 /** The origin of a workspace project: `url` and `host` are null together when none is set. */
 export type ProjectRemoteV2 = {
   schema_version: 2;
@@ -386,6 +419,8 @@ type NativeLocalProjects = {
   presentCredentialPromptV2?(request: GitCredentialPromptRequestV1): Promise<unknown>;
   clearCredentialV2?(request: GitWorkspaceRequestV1): Promise<unknown>;
   cancelPushV2?(request: GitCancelPushRequestV1): Promise<unknown>;
+  fetchV2?(request: GitFetchRequestV1): Promise<unknown>;
+  pullFastForwardV2?(request: GitPullRequestV1): Promise<unknown>;
 };
 
 const native = NativeModules.LocalProjects as unknown;
@@ -1137,6 +1172,94 @@ function projectV2CredentialPromptRequest(value: unknown): GitCredentialPromptRe
   return { schema_version: 1, root: projectV2RequestRoot(row.root), locale: row.locale };
 }
 
+function projectV2FetchRequest(value: unknown): GitFetchRequestV1 {
+  const row = projectV2ExactRecord(value, ['schema_version', 'root', 'operation_id', 'remote'], 'E_PROJECT_REQUEST_INVALID');
+  if (row.schema_version !== 1 || row.remote !== 'origin') return projectV2Fail('E_PROJECT_REQUEST_INVALID');
+  return {
+    schema_version: 1,
+    root: projectV2RequestRoot(row.root),
+    operation_id: projectV2OperationId(row.operation_id),
+    remote: 'origin',
+  };
+}
+
+function projectV2PullRequest(value: unknown): GitPullRequestV1 {
+  const row = projectV2ExactRecord(value, ['schema_version', 'root', 'expected_head_oid'], 'E_PROJECT_REQUEST_INVALID');
+  if (row.schema_version !== 1 || !projectV2OID(row.expected_head_oid)) {
+    return projectV2Fail('E_PROJECT_REQUEST_INVALID');
+  }
+  return {
+    schema_version: 1,
+    root: projectV2RequestRoot(row.root),
+    expected_head_oid: row.expected_head_oid as string,
+  };
+}
+
+function projectV2Fetch(
+  value: unknown,
+  expectedRoot: WorkspaceRootRefV1,
+): ProjectFetchResultV2 {
+  const row = projectV2ExactRecord(value, [
+    'schema_version', 'root', 'project_id', 'remote', 'branch', 'remote_oid', 'ahead', 'behind', 'fetched_at',
+  ], 'E_PROJECT_RESULT_INVALID');
+  const root = projectV2RootResult(row.root, expectedRoot);
+  if (
+    row.schema_version !== 2 ||
+    row.project_id !== expectedRoot.project_id ||
+    row.remote !== 'origin' ||
+    typeof row.branch !== 'string' ||
+    !projectV2Branch(row.branch) ||
+    !projectV2OID(row.remote_oid, true) ||
+    !projectV2SafeInteger(row.ahead) ||
+    !projectV2SafeInteger(row.behind) ||
+    !projectV2Timestamp(row.fetched_at)
+  ) {
+    return projectV2Fail('E_PROJECT_RESULT_INVALID');
+  }
+  return {
+    schema_version: 2,
+    root,
+    project_id: expectedRoot.project_id as string,
+    remote: 'origin',
+    branch: row.branch as string,
+    remote_oid: row.remote_oid as string | null,
+    ahead: row.ahead as number,
+    behind: row.behind as number,
+    fetched_at: row.fetched_at,
+  };
+}
+
+function projectV2Pull(
+  value: unknown,
+  expectedRoot: WorkspaceRootRefV1,
+): ProjectPullResultV2 {
+  const row = projectV2ExactRecord(value, [
+    'schema_version', 'root', 'project_id', 'branch', 'oid', 'previous_oid', 'updated',
+  ], 'E_PROJECT_RESULT_INVALID');
+  const root = projectV2RootResult(row.root, expectedRoot);
+  if (
+    row.schema_version !== 2 ||
+    row.project_id !== expectedRoot.project_id ||
+    typeof row.branch !== 'string' ||
+    !projectV2Branch(row.branch) ||
+    !projectV2OID(row.oid) ||
+    !projectV2OID(row.previous_oid) ||
+    typeof row.updated !== 'boolean' ||
+    (row.updated === false) !== (row.oid === row.previous_oid)
+  ) {
+    return projectV2Fail('E_PROJECT_RESULT_INVALID');
+  }
+  return {
+    schema_version: 2,
+    root,
+    project_id: expectedRoot.project_id as string,
+    branch: row.branch as string,
+    oid: row.oid as string,
+    previous_oid: row.previous_oid as string,
+    updated: row.updated,
+  };
+}
+
 function projectV2CancelPushRequest(value: unknown): GitCancelPushRequestV1 {
   const row = projectV2ExactRecord(value, ['schema_version', 'root', 'operation_id'], 'E_PROJECT_REQUEST_INVALID');
   if (row.schema_version !== 1) return projectV2Fail('E_PROJECT_REQUEST_INVALID');
@@ -1528,7 +1651,9 @@ function hasV2Capabilities(value: unknown): value is NativeLocalProjects {
       typeof row.credentialStatusV2 === 'function' &&
       typeof row.presentCredentialPromptV2 === 'function' &&
       typeof row.clearCredentialV2 === 'function' &&
-      typeof row.cancelPushV2 === 'function'
+      typeof row.cancelPushV2 === 'function' &&
+      typeof row.fetchV2 === 'function' &&
+      typeof row.pullFastForwardV2 === 'function'
     );
   } catch {
     return false;
@@ -1894,6 +2019,30 @@ export const LocalProjects = {
       return await projectV2Boundary(
         () => requiredV2().clearCredentialV2!(request),
         raw => projectV2CredentialStatus(raw, request.root),
+      );
+    } catch (error) {
+      throw projectV2Error(error);
+    }
+  },
+  /** `git fetch origin` for a workspace project; cancelled through cancelPushV2 with the same operation id. */
+  fetchV2: async (requestValue: unknown): Promise<ProjectFetchResultV2> => {
+    try {
+      const request = projectV2FetchRequest(requestValue);
+      return await projectV2Boundary(
+        () => requiredV2().fetchV2!(request),
+        raw => projectV2Fetch(raw, request.root),
+      );
+    } catch (error) {
+      throw projectV2Error(error);
+    }
+  },
+  /** Moves the current branch to origin's tip only as a fast-forward over an unchanged tree; fetch first. */
+  pullFastForwardV2: async (requestValue: unknown): Promise<ProjectPullResultV2> => {
+    try {
+      const request = projectV2PullRequest(requestValue);
+      return await projectV2Boundary(
+        () => requiredV2().pullFastForwardV2!(request),
+        raw => projectV2Pull(raw, request.root),
       );
     } catch (error) {
       throw projectV2Error(error);
