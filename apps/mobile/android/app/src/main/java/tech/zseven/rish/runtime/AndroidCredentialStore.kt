@@ -11,14 +11,20 @@ import javax.crypto.SecretKey
 import javax.crypto.spec.GCMParameterSpec
 
 /** Keys never leave native code. SharedPreferences contains authenticated ciphertext only. */
-internal class AndroidCredentialStore(context: Context, namespace: String = "rish.credentials.v1") {
+internal class AndroidCredentialStore(
+    context: Context,
+    namespace: String = "rish.credentials.v1",
+    /** Accounts this store accepts besides the provider slots; a git credential store names its own. */
+    private val extraAccounts: Regex? = null,
+) {
     private val preferences = context.applicationContext.getSharedPreferences(namespace, Context.MODE_PRIVATE)
     private val keyStore = KeyStore.getInstance("AndroidKeyStore").apply { load(null) }
     private val alias = if(namespace == "rish.credentials.v1") "rish.credentials.aes.v1" else "$namespace.aes"
     companion object {
         val slots = setOf("DEEPSEEK_API_KEY", "BIGMODEL_API_KEY", "ANTHROPIC_API_KEY", "OPENAI_API_KEY")
     }
-    private fun validAccount(slot: String) = slot in slots || Regex("CUSTOM_PROVIDER_(codex|claude-code)_[a-f0-9]{64}").matches(slot)
+    private fun validAccount(slot: String) = slot in slots || Regex("CUSTOM_PROVIDER_(codex|claude-code)_[a-f0-9]{64}").matches(slot) ||
+        (extraAccounts?.matches(slot) ?: false)
     @Synchronized private fun encryptionKey(): SecretKey {
         (keyStore.getKey(alias, null) as? SecretKey)?.let { return it }
         val generator = KeyGenerator.getInstance(KeyProperties.KEY_ALGORITHM_AES, "AndroidKeyStore")

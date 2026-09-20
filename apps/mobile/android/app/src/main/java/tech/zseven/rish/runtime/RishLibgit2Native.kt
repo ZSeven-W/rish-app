@@ -95,6 +95,34 @@ internal object RishLibgit2Native {
         expectedHead: String?,
     ): ByteArray
 
+    // --- the remote --------------------------------------------------------
+    //
+    // rish_project_remote.cpp. Kotlin validates the URL and holds the
+    // credential; native only connects, uploads one refspec and reports the
+    // remote's verdict in DSHGitPushSupport's outcome vocabulary.
+
+    /** Points OpenSSL at the exported system roots; "ok" or "error:<why>". */
+    @JvmStatic external fun configureCertificates(file: String): String
+
+    /** `git remote add|set-url origin`; "ok" or "error:<stage>:<why>". */
+    @JvmStatic external fun setRemote(gitDir: String?, workDir: String, url: String): String
+
+    /** `{"ok":true,"url":<origin url or null>}`. */
+    @JvmStatic external fun remoteUrl(gitDir: String?, workDir: String): ByteArray
+
+    /**
+     * `{"ok":true,"outcome":success|conflict|non_fast_forward|rejected|
+     * auth_failure|timed_out|cancelled|failed,"advertised_oid","remote_oid",
+     * "verified","effect_may_have_occurred"}`. Cancelled by `cancelPush` with
+     * the same operation id from any thread.
+     */
+    @JvmStatic external fun push(
+        gitDir: String?, workDir: String, operationId: String, remoteUrl: String, host: String,
+        reference: String, localOid: String, username: String, token: String, timeoutSeconds: Int,
+    ): ByteArray
+
+    @JvmStatic external fun cancelPush(operationId: String): Boolean
+
     // --- capturing a selection --------------------------------------------
     //
     // What `captureLease` reads from git on iOS, with nothing decided: the

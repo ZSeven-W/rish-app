@@ -22,7 +22,11 @@ internal class AndroidRuntimeState private constructor(val app: Application) {
     val workspaceProjects = AndroidWorkspaceProjects(workspaces)
     val roots = AndroidAgentRootResolver(workspaces, workspaceProjects)
     val projectContext = AndroidProjectContextService(workspaceProjects, roots)
-    val projectGit = AndroidProjectGit(workspaceProjects, workspaces)
+    /// Git HTTPS credentials by (project, host), and the roots OpenSSL trusts
+    /// when a push leaves the device.
+    val gitCredentials = AndroidGitCredentials(app)
+    val gitRoots = AndroidGitCertificates.ensure(app)
+    val projectGit = AndroidProjectGit(workspaceProjects, workspaces, gitCredentials)
     /// Prepared context snapshots, outside backup like the agent WAL.
     val projectContextStore = AndroidProjectContextStore(java.io.File(app.noBackupFilesDir, "project-context"))
     val projectSnapshots = AndroidProjectContextSnapshots(
