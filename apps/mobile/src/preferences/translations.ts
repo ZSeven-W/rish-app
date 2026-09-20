@@ -697,8 +697,12 @@ const enUS = {
   'projects.title': 'Projects',
   'projects.onDevice': 'ON THIS DEVICE',
   'projects.workspaceProject': 'Workspace · {workspace}',
-  'projects.workspaceReadOnlyRemote':
-    'This project lives in a workspace. Remotes, credentials and push are not available for it yet.',
+  'projects.pushProxyUnsupported':
+    'An HTTPS proxy is configured, but pushes from a workspace project on Android do not go through a proxy yet. Clear the proxy in Settings to push.',
+  'projects.pushCredentialMissing':
+    'No credential is stored for this remote. Configure the remote credential first.',
+  'projects.pushHeadChanged':
+    'The branch moved while the push was being prepared. Refresh and try again.',
   'projects.description':
     'Each project is an isolated local Git worktree owned by Rish.',
   'projects.newProject': 'New project',
@@ -1687,7 +1691,9 @@ const zhCN: Readonly<Record<TranslationKey, string>> = {
   'projects.title': '项目',
   'projects.onDevice': '此设备',
   'projects.workspaceProject': '工作区 · {workspace}',
-  'projects.workspaceReadOnlyRemote': '这个项目属于工作区，暂不支持远程、凭据与推送。',
+  'projects.pushProxyUnsupported': '已配置 HTTPS 代理，但 Android 上工作区项目的推送暂不经过代理。请先在设置中清除代理再推送。',
+  'projects.pushCredentialMissing': '尚未为该远程保存凭据，请先配置远程凭据。',
+  'projects.pushHeadChanged': '准备推送时分支已变动，请刷新后重试。',
   'projects.description': '每个项目都是由 Rish 管理的独立本地 Git 工作树。',
   'projects.newProject': '新建项目',
   'projects.cloneRepository': '克隆仓库',

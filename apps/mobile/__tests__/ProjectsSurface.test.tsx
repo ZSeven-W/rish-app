@@ -30,6 +30,13 @@ jest.mock('../src/native/LocalProjects', () => ({
     diffV2: jest.fn(),
     stageAllV2: jest.fn(),
     commitV2: jest.fn(),
+    pushV2: jest.fn(),
+    setRemoteV2: jest.fn(),
+    remoteV2: jest.fn(),
+    credentialStatusV2: jest.fn(),
+    presentCredentialPromptV2: jest.fn(),
+    clearCredentialV2: jest.fn(),
+    cancelPushV2: jest.fn(),
     create: jest.fn(),
     clone: jest.fn(),
     startClone: jest.fn(),
@@ -373,6 +380,10 @@ beforeEach(() => {
     schema_version: 1,
     project_id: project.id,
     cancelled: true,
+  });
+  mockLocalProjects.remoteV2.mockResolvedValue({
+    schema_version: 2, root: workspaceRoot, project_id: workspaceRoot.project_id,
+    remote: 'origin', url: null, host: null,
   });
 });
 
@@ -1512,8 +1523,10 @@ test('lists a workspace-attached project when the legacy listing is refused, and
   expect(mockLocalProjects.diffV2).toHaveBeenCalledWith(expect.objectContaining({ root: workspaceRoot, staged: false }));
   expect(mockLocalProjects.diffV2).toHaveBeenCalledWith(expect.objectContaining({ root: workspaceRoot, staged: true }));
   expect(mockLocalProjects.status).not.toHaveBeenCalled();
-  // Remote, credentials and push are not offered for a workspace project.
-  expect(renderer.root.findAllByProps({ accessibilityLabel: 'Save origin' }).length).toBe(0);
+  // The origin is read by root; without one there is nothing to push to.
+  expect(mockLocalProjects.remoteV2).toHaveBeenCalledWith({ schema_version: 1, root: workspaceRoot });
+  expect(mockLocalProjects.credentialStatusV2).not.toHaveBeenCalled();
+  expect(renderer.root.findAllByProps({ accessibilityLabel: 'Save origin' }).length).toBeGreaterThan(0);
   expect(renderer.root.findAllByProps({ accessibilityLabel: 'Push' }).length).toBe(0);
 
   await act(async () => actionByLabel(renderer.root, 'Changes').props.onPress());
@@ -1535,4 +1548,89 @@ test('lists a workspace-attached project when the legacy listing is refused, and
     expected_head_oid: dirtyStatus.head_oid,
   });
   expect(mockLocalProjects.commit).not.toHaveBeenCalled();
+});
+
+test('a workspace project sets its origin, provisions a credential natively and pushes by root', async () => {
+  mockLocalProjects.isV2Available.mockReturnValue(true);
+  mockLocalProjects.list.mockRejectedValue(Object.assign(new Error('E_PROJECT_NATIVE'), { code: 'E_PROJECT_NATIVE' }));
+  mockWorkspaceProjects.mockResolvedValue([workspaceProject]);
+  const v2Status = { ...dirtyStatus, schema_version: 2, root: workspaceRoot, project_id: workspaceRoot.project_id };
+  mockLocalProjects.statusV2.mockResolvedValue(v2Status);
+  mockLocalProjects.diffV2.mockImplementation(async (request: { staged: boolean }) => ({
+    ...diff, schema_version: 2, root: workspaceRoot, project_id: workspaceRoot.project_id, staged: request.staged,
+  }));
+  const url = 'https://github.com/example/demo.git';
+  const remote = {
+    schema_version: 2, root: workspaceRoot, project_id: workspaceRoot.project_id, remote: 'origin', url, host: 'github.com',
+  };
+  const absent = { schema_version: 2, root: workspaceRoot, project_id: workspaceRoot.project_id, host: 'github.com', configured: false };
+  const present = { ...absent, configured: true, expires_at: 1_800_000_000, expiry_seconds: 3600 };
+  mockLocalProjects.setRemoteV2.mockResolvedValue(remote);
+  mockLocalProjects.credentialStatusV2.mockResolvedValue(absent);
+  mockLocalProjects.presentCredentialPromptV2.mockResolvedValue(present);
+  mockLocalProjects.clearCredentialV2.mockResolvedValue(absent);
+  mockLocalProjects.pushV2.mockResolvedValue({
+    schema_version: 2, root: workspaceRoot, project_id: workspaceRoot.project_id,
+    remote: 'origin', branch: 'main', oid: dirtyStatus.head_oid, pushed_at: '2026-09-20T00:00:00.000Z',
+  });
+  const alert = jest.spyOn(Alert, 'alert').mockImplementation(() => undefined);
+  const renderer = await renderSurface();
+  const row = renderer.root.findByProps({ testID: 'projects-row-Smoke' });
+  await act(async () => { row.props.onPress(); await settle(); });
+
+  await act(async () => inputByLabel(renderer.root, 'Origin HTTPS URL').props.onChangeText(url));
+  // Once saved, every reload reads the origin back and the credential with it.
+  mockLocalProjects.remoteV2.mockResolvedValue(remote);
+  await act(async () => { actionByLabel(renderer.root, 'Save origin').props.onPress(); await settle(); });
+  expect(mockLocalProjects.setRemoteV2).toHaveBeenCalledWith({ schema_version: 1, root: workspaceRoot, url });
+  expect(mockLocalProjects.setRemote).not.toHaveBeenCalled();
+  expect(mockLocalProjects.credentialStatusV2).toHaveBeenCalledWith({ schema_version: 1, root: workspaceRoot });
+  // The saved origin re-reads the detail; let that settle before provisioning.
+  await act(async () => { await settle(); await settle(); });
+
+  await act(async () => { actionByLabel(renderer.root, 'Configure remote credential').props.onPress(); await settle(); });
+  expect(mockLocalProjects.presentCredentialPromptV2).toHaveBeenCalledWith({
+    schema_version: 1, root: workspaceRoot, locale: 'en',
+  });
+  expect(mockLocalProjects.presentCredentialPrompt).not.toHaveBeenCalled();
+  expect(renderer.root.findAllByProps({ accessibilityLabel: 'Clear remote credential' }).length).toBeGreaterThan(0);
+  // From here on the store answers what the prompt provisioned.
+  mockLocalProjects.credentialStatusV2.mockResolvedValue(present);
+  // No branch field for a workspace project: V2 pushes the current branch.
+  expect(renderer.root.findAllByProps({ accessibilityLabel: 'Push as new branch (optional)' }).length).toBe(0);
+
+  await act(async () => actionByLabel(renderer.root, 'Push').props.onPress());
+  expect(mockLocalProjects.pushV2).not.toHaveBeenCalled();
+  const buttons = alert.mock.calls[alert.mock.calls.length - 1]?.[2];
+  const confirm = Array.isArray(buttons) ? buttons.find(button => button.text === 'Push now') : undefined;
+  await act(async () => { confirm?.onPress?.(); await settle(); });
+  expect(mockLocalProjects.pushV2).toHaveBeenCalledWith({
+    schema_version: 1,
+    root: workspaceRoot,
+    operation_id: 'op-1',
+    remote: 'origin',
+    expected_local_oid: dirtyStatus.head_oid,
+    credential_reference: 'panel',
+    https_proxy_url: null,
+  });
+  expect(mockLocalProjects.push).not.toHaveBeenCalled();
+  expect(renderer.root.findAllByProps({ children: 'Branch pushed successfully.' }).length).toBeGreaterThan(0);
+
+  // A V2 refusal reads as the same message the legacy path shows.
+  mockLocalProjects.pushV2.mockRejectedValueOnce(
+    Object.assign(new Error('E_PROJECT_NON_FAST_FORWARD'), { code: 'E_PROJECT_NON_FAST_FORWARD' }),
+  );
+  await act(async () => actionByLabel(renderer.root, 'Push').props.onPress());
+  const again = alert.mock.calls[alert.mock.calls.length - 1]?.[2];
+  const confirmAgain = Array.isArray(again) ? again.find(button => button.text === 'Push now') : undefined;
+  await act(async () => { confirmAgain?.onPress?.(); await settle(); });
+  expect(renderer.root.findAllByProps({ accessibilityRole: 'alert' }).length).toBeGreaterThan(0);
+  expect(
+    renderer.root.findAll(instance => typeof instance.props.children === 'string' &&
+      instance.props.children.startsWith('The remote rejected the push: the branch is not fast-forward')).length,
+  ).toBeGreaterThan(0);
+
+  await act(async () => { actionByLabel(renderer.root, 'Clear remote credential').props.onPress(); await settle(); });
+  expect(mockLocalProjects.clearCredentialV2).toHaveBeenCalledWith({ schema_version: 1, root: workspaceRoot });
+  alert.mockRestore();
 });

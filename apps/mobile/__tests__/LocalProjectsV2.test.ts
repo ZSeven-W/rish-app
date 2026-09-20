@@ -10,6 +10,12 @@ const native = {
   stageAllV2: jest.fn(),
   commitV2: jest.fn(),
   pushV2: jest.fn(),
+  setRemoteV2: jest.fn(),
+  remoteV2: jest.fn(),
+  credentialStatusV2: jest.fn(),
+  presentCredentialPromptV2: jest.fn(),
+  clearCredentialV2: jest.fn(),
+  cancelPushV2: jest.fn(),
 };
 
 (NativeModules as Record<string, unknown>).LocalProjects = native;
@@ -340,4 +346,78 @@ test('rejects a V2 push result whose root binding is stale', async () => {
       https_proxy_url: 'https://proxy.example.com:8443/',
     }),
   ).rejects.toMatchObject({ code: 'E_PROJECT_RESULT_INVALID' });
+});
+
+test('remote, credential and cancel travel by root and never carry a token', async () => {
+  const remote = {
+    schema_version: 2, root: root(), project_id: PROJECT_ID, remote: 'origin',
+    url: 'https://github.com/example/demo.git', host: 'github.com',
+  };
+  native.setRemoteV2.mockResolvedValue(remote);
+  native.remoteV2.mockResolvedValue({ ...remote, url: null, host: null });
+  await expect(
+    LocalProjects.setRemoteV2({ schema_version: 1, root: root(), url: 'https://github.com/example/demo.git' }),
+  ).resolves.toEqual(remote);
+  expect(native.setRemoteV2).toHaveBeenCalledWith({
+    schema_version: 1, root: root(), url: 'https://github.com/example/demo.git',
+  });
+  await expect(LocalProjects.remoteV2({ schema_version: 1, root: root() })).resolves.toMatchObject({
+    url: null, host: null,
+  });
+  // Half an origin is no origin.
+  native.remoteV2.mockResolvedValueOnce({ ...remote, host: null });
+  await expect(LocalProjects.remoteV2({ schema_version: 1, root: root() })).rejects.toMatchObject({
+    code: 'E_PROJECT_RESULT_INVALID',
+  });
+  await expect(
+    LocalProjects.setRemoteV2({ schema_version: 1, root: root(), url: '' }),
+  ).rejects.toMatchObject({ code: 'E_PROJECT_REQUEST_INVALID' });
+  expect(native.setRemoteV2).toHaveBeenCalledTimes(1);
+
+  const absent = {
+    schema_version: 2, root: root(), project_id: PROJECT_ID, host: 'github.com', configured: false,
+  };
+  const present = { ...absent, configured: true, expires_at: 1_800_000_000, expiry_seconds: 3600 };
+  native.credentialStatusV2.mockResolvedValue(absent);
+  native.presentCredentialPromptV2.mockResolvedValue(present);
+  native.clearCredentialV2.mockResolvedValue(absent);
+  await expect(LocalProjects.credentialStatusV2({ schema_version: 1, root: root() })).resolves.toEqual(absent);
+  await expect(
+    LocalProjects.presentCredentialPromptV2({ schema_version: 1, root: root(), locale: 'zh-CN' }),
+  ).resolves.toEqual(present);
+  expect(native.presentCredentialPromptV2).toHaveBeenCalledWith({
+    schema_version: 1, root: root(), locale: 'zh-CN',
+  });
+  await expect(
+    LocalProjects.presentCredentialPromptV2({ schema_version: 1, root: root(), locale: 'fr' }),
+  ).rejects.toMatchObject({ code: 'E_PROJECT_REQUEST_INVALID' });
+  // A status that echoes the secret, or claims configured without an expiry, is refused whole.
+  native.credentialStatusV2.mockResolvedValueOnce({ ...present, token: 'ghp_x' });
+  await expect(LocalProjects.credentialStatusV2({ schema_version: 1, root: root() })).rejects.toMatchObject({
+    code: 'E_PROJECT_RESULT_INVALID',
+  });
+  native.credentialStatusV2.mockResolvedValueOnce({ ...absent, configured: true });
+  await expect(LocalProjects.credentialStatusV2({ schema_version: 1, root: root() })).rejects.toMatchObject({
+    code: 'E_PROJECT_RESULT_INVALID',
+  });
+  await expect(LocalProjects.clearCredentialV2({ schema_version: 1, root: root() })).resolves.toEqual(absent);
+
+  native.cancelPushV2.mockResolvedValue({
+    schema_version: 2, root: root(), project_id: PROJECT_ID, operation_id: OPERATION_ID, status: 'not_running',
+  });
+  await expect(
+    LocalProjects.cancelPushV2({ schema_version: 1, root: root(), operation_id: OPERATION_ID }),
+  ).resolves.toMatchObject({ status: 'not_running' });
+  native.cancelPushV2.mockResolvedValueOnce({
+    schema_version: 2, root: root(), project_id: PROJECT_ID, operation_id: CHECKPOINT_ID, status: 'cancel_requested',
+  });
+  await expect(
+    LocalProjects.cancelPushV2({ schema_version: 1, root: root(), operation_id: OPERATION_ID }),
+  ).rejects.toMatchObject({ code: 'E_PROJECT_RESULT_INVALID' });
+
+  const partial = native as { cancelPushV2?: jest.Mock };
+  const cancel = partial.cancelPushV2;
+  delete partial.cancelPushV2;
+  expect(LocalProjects.isV2Available()).toBe(false);
+  partial.cancelPushV2 = cancel;
 });

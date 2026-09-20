@@ -44,6 +44,7 @@
 		A9C400021AD99517003FC87E /* LocalProjectsModuleV2Tests.mm in Sources */ = {isa = PBXBuildFile; fileRef = A9C400011AD99517003FC87E /* LocalProjectsModuleV2Tests.mm */; };
 		A9D400021AD99517003FC87E /* GitPushSupportTests.mm in Sources */ = {isa = PBXBuildFile; fileRef = A9D400011AD99517003FC87E /* GitPushSupportTests.mm */; };
 		A9E400021AD99517003FC87E /* GitPushG2Tests.mm in Sources */ = {isa = PBXBuildFile; fileRef = A9E400011AD99517003FC87E /* GitPushG2Tests.mm */; };
+		A9E400A21AD99517003FC87E /* LocalProjectsModuleRemoteV2Tests.mm in Sources */ = {isa = PBXBuildFile; fileRef = A9E400A11AD99517003FC87E /* LocalProjectsModuleRemoteV2Tests.mm */; };
 		AAC400021AD99517003FC87E /* AgentToolEffectsTests.mm in Sources */ = {isa = PBXBuildFile; fileRef = AAC400011AD99517003FC87E /* AgentToolEffectsTests.mm */; };
 		ABC400021AD99517003FC87E /* DSHCompletionProviderTransportTests.mm in Sources */ = {isa = PBXBuildFile; fileRef = ABC400011AD99517003FC87E /* DSHCompletionProviderTransportTests.mm */; };
 		ABD400021AD99517003FC87E /* AgentPreparedAttemptStoreTests.mm in Sources */ = {isa = PBXBuildFile; fileRef = ABD400011AD99517003FC87E /* AgentPreparedAttemptStoreTests.mm */; };
@@ -208,6 +209,7 @@
 		A9C400011AD99517003FC87E /* LocalProjectsModuleV2Tests.mm */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.objcpp; path = LocalProjectsModuleV2Tests.mm; sourceTree = "<group>"; };
 		A9D400011AD99517003FC87E /* GitPushSupportTests.mm */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.objcpp; path = GitPushSupportTests.mm; sourceTree = "<group>"; };
 		A9E400011AD99517003FC87E /* GitPushG2Tests.mm */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.objcpp; path = GitPushG2Tests.mm; sourceTree = "<group>"; };
+		A9E400A11AD99517003FC87E /* LocalProjectsModuleRemoteV2Tests.mm */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.objcpp; path = LocalProjectsModuleRemoteV2Tests.mm; sourceTree = "<group>"; };
 		AAC400011AD99517003FC87E /* AgentToolEffectsTests.mm */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.objcpp; path = AgentToolEffectsTests.mm; sourceTree = "<group>"; };
 		ABC400011AD99517003FC87E /* DSHCompletionProviderTransportTests.mm */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.objcpp; path = DSHCompletionProviderTransportTests.mm; sourceTree = "<group>"; };
 		ABD400011AD99517003FC87E /* AgentPreparedAttemptStoreTests.mm */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.objcpp; path = AgentPreparedAttemptStoreTests.mm; sourceTree = "<group>"; };
@@ -394,6 +396,7 @@
 				A9C400011AD99517003FC87E /* LocalProjectsModuleV2Tests.mm */,
 				A9D400011AD99517003FC87E /* GitPushSupportTests.mm */,
 				A9E400011AD99517003FC87E /* GitPushG2Tests.mm */,
+				A9E400A11AD99517003FC87E /* LocalProjectsModuleRemoteV2Tests.mm */,
 				AAC400011AD99517003FC87E /* AgentToolEffectsTests.mm */,
 				ACC400011AD99517003FC87E /* AgentCoreGoldenTests.mm */,
 				ABC400011AD99517003FC87E /* DSHCompletionProviderTransportTests.mm */,
@@ -861,6 +864,7 @@
 				A9C400021AD99517003FC87E /* LocalProjectsModuleV2Tests.mm in Sources */,
 				A9D400021AD99517003FC87E /* GitPushSupportTests.mm in Sources */,
 				A9E400021AD99517003FC87E /* GitPushG2Tests.mm in Sources */,
+				A9E400A21AD99517003FC87E /* LocalProjectsModuleRemoteV2Tests.mm in Sources */,
 				AAC400021AD99517003FC87E /* AgentToolEffectsTests.mm in Sources */,
 				ACC400021AD99517003FC87E /* AgentCoreGoldenTests.mm in Sources */,
 				ABC400021AD99517003FC87E /* DSHCompletionProviderTransportTests.mm in Sources */,

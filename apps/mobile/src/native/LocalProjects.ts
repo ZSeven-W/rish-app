@@ -234,6 +234,41 @@ export type ProjectPushResultV2 = Omit<ProjectPushResult, 'schema_version'> & {
   root: WorkspaceRootRefV1;
 };
 
+export type GitRemoteRequestV1 = GitWorkspaceRequestV1 & {
+  url: string;
+};
+
+export type GitCredentialPromptRequestV1 = GitWorkspaceRequestV1 & {
+  locale: 'zh-CN' | 'en';
+};
+
+export type GitCancelPushRequestV1 = GitWorkspaceRequestV1 & {
+  operation_id: string;
+};
+
+/** The origin of a workspace project: `url` and `host` are null together when none is set. */
+export type ProjectRemoteV2 = {
+  schema_version: 2;
+  root: WorkspaceRootRefV1;
+  project_id: string;
+  remote: 'origin';
+  url: string | null;
+  host: string | null;
+};
+
+export type ProjectCredentialStatusV2 = Omit<ProjectCredentialStatus, 'schema_version'> & {
+  schema_version: 2;
+  root: WorkspaceRootRefV1;
+};
+
+export type ProjectPushCancellationV2 = {
+  schema_version: 2;
+  root: WorkspaceRootRefV1;
+  project_id: string;
+  operation_id: string;
+  status: 'cancel_requested' | 'not_running';
+};
+
 export type ProjectGitTransportOptions = {
   httpsProxyUrl?: string | null;
   sshProfileId?: string | null;
@@ -345,6 +380,12 @@ type NativeLocalProjects = {
   stageAllV2?(request: GitWorkspaceRequestV1): Promise<unknown>;
   commitV2?(request: GitCommitRequestV1): Promise<unknown>;
   pushV2?(request: GitPushRequestV1): Promise<unknown>;
+  setRemoteV2?(request: GitRemoteRequestV1): Promise<unknown>;
+  remoteV2?(request: GitWorkspaceRequestV1): Promise<unknown>;
+  credentialStatusV2?(request: GitWorkspaceRequestV1): Promise<unknown>;
+  presentCredentialPromptV2?(request: GitCredentialPromptRequestV1): Promise<unknown>;
+  clearCredentialV2?(request: GitWorkspaceRequestV1): Promise<unknown>;
+  cancelPushV2?(request: GitCancelPushRequestV1): Promise<unknown>;
 };
 
 const native = NativeModules.LocalProjects as unknown;
@@ -1080,6 +1121,129 @@ function projectV2PushRequest(value: unknown): GitPushRequestV1 {
   };
 }
 
+function projectV2RemoteRequest(value: unknown): GitRemoteRequestV1 {
+  const row = projectV2ExactRecord(value, ['schema_version', 'root', 'url'], 'E_PROJECT_REQUEST_INVALID');
+  if (row.schema_version !== 1 || !projectV2String(row.url, 2048)) {
+    return projectV2Fail('E_PROJECT_REQUEST_INVALID');
+  }
+  return { schema_version: 1, root: projectV2RequestRoot(row.root), url: row.url };
+}
+
+function projectV2CredentialPromptRequest(value: unknown): GitCredentialPromptRequestV1 {
+  const row = projectV2ExactRecord(value, ['schema_version', 'root', 'locale'], 'E_PROJECT_REQUEST_INVALID');
+  if (row.schema_version !== 1 || (row.locale !== 'zh-CN' && row.locale !== 'en')) {
+    return projectV2Fail('E_PROJECT_REQUEST_INVALID');
+  }
+  return { schema_version: 1, root: projectV2RequestRoot(row.root), locale: row.locale };
+}
+
+function projectV2CancelPushRequest(value: unknown): GitCancelPushRequestV1 {
+  const row = projectV2ExactRecord(value, ['schema_version', 'root', 'operation_id'], 'E_PROJECT_REQUEST_INVALID');
+  if (row.schema_version !== 1) return projectV2Fail('E_PROJECT_REQUEST_INVALID');
+  return {
+    schema_version: 1,
+    root: projectV2RequestRoot(row.root),
+    operation_id: projectV2OperationId(row.operation_id),
+  };
+}
+
+function projectV2Host(value: unknown): value is string {
+  return typeof value === 'string' && /^[a-z0-9.:\-\[\]]{1,253}$/u.test(value);
+}
+
+function projectV2Remote(
+  value: unknown,
+  expectedRoot: WorkspaceRootRefV1,
+): ProjectRemoteV2 {
+  const row = projectV2ExactRecord(value, [
+    'schema_version', 'root', 'project_id', 'remote', 'url', 'host',
+  ], 'E_PROJECT_RESULT_INVALID');
+  const root = projectV2RootResult(row.root, expectedRoot);
+  const unset = row.url === null && row.host === null;
+  const set = projectV2String(row.url, 2048) && projectV2Host(row.host);
+  if (
+    row.schema_version !== 2 ||
+    row.project_id !== expectedRoot.project_id ||
+    row.remote !== 'origin' ||
+    !(unset || set)
+  ) {
+    return projectV2Fail('E_PROJECT_RESULT_INVALID');
+  }
+  return {
+    schema_version: 2,
+    root,
+    project_id: expectedRoot.project_id as string,
+    remote: 'origin',
+    url: row.url as string | null,
+    host: row.host as string | null,
+  };
+}
+
+function projectV2CredentialStatus(
+  value: unknown,
+  expectedRoot: WorkspaceRootRefV1,
+): ProjectCredentialStatusV2 {
+  // A configured credential carries its expiry; an absent one carries nothing
+  // else. Either way the answer never holds a username or a token.
+  const configured =
+    typeof value === 'object' && value !== null &&
+    Object.prototype.hasOwnProperty.call(value, 'expires_at');
+  const row = projectV2ExactRecord(value, configured
+    ? ['schema_version', 'root', 'project_id', 'host', 'configured', 'expires_at', 'expiry_seconds']
+    : ['schema_version', 'root', 'project_id', 'host', 'configured'],
+  'E_PROJECT_RESULT_INVALID');
+  const root = projectV2RootResult(row.root, expectedRoot);
+  if (
+    row.schema_version !== 2 ||
+    row.project_id !== expectedRoot.project_id ||
+    !projectV2Host(row.host) ||
+    row.configured !== configured ||
+    (configured &&
+      (!projectV2SafeInteger(row.expires_at, 1) ||
+        !projectV2SafeInteger(row.expiry_seconds, 1)))
+  ) {
+    return projectV2Fail('E_PROJECT_RESULT_INVALID');
+  }
+  const status: ProjectCredentialStatusV2 = {
+    schema_version: 2,
+    root,
+    project_id: expectedRoot.project_id as string,
+    host: row.host,
+    configured,
+  };
+  if (configured) {
+    status.expires_at = row.expires_at as number;
+    status.expiry_seconds = row.expiry_seconds as number;
+  }
+  return status;
+}
+
+function projectV2PushCancellation(
+  value: unknown,
+  expectedRoot: WorkspaceRootRefV1,
+  expectedOperationId: string,
+): ProjectPushCancellationV2 {
+  const row = projectV2ExactRecord(value, [
+    'schema_version', 'root', 'project_id', 'operation_id', 'status',
+  ], 'E_PROJECT_RESULT_INVALID');
+  const root = projectV2RootResult(row.root, expectedRoot);
+  if (
+    row.schema_version !== 2 ||
+    row.project_id !== expectedRoot.project_id ||
+    row.operation_id !== expectedOperationId ||
+    (row.status !== 'cancel_requested' && row.status !== 'not_running')
+  ) {
+    return projectV2Fail('E_PROJECT_RESULT_INVALID');
+  }
+  return {
+    schema_version: 2,
+    root,
+    project_id: expectedRoot.project_id as string,
+    operation_id: expectedOperationId,
+    status: row.status,
+  };
+}
+
 function projectV2WorkspaceRequest(value: unknown): GitWorkspaceRequestV1 {
   const row = projectV2ExactRecord(value, ['schema_version', 'root'], 'E_PROJECT_REQUEST_INVALID');
   if (row.schema_version !== 1) return projectV2Fail('E_PROJECT_REQUEST_INVALID');
@@ -1358,7 +1522,13 @@ function hasV2Capabilities(value: unknown): value is NativeLocalProjects {
       typeof row.diffV2 === 'function' &&
       typeof row.stageAllV2 === 'function' &&
       typeof row.commitV2 === 'function' &&
-      typeof row.pushV2 === 'function'
+      typeof row.pushV2 === 'function' &&
+      typeof row.setRemoteV2 === 'function' &&
+      typeof row.remoteV2 === 'function' &&
+      typeof row.credentialStatusV2 === 'function' &&
+      typeof row.presentCredentialPromptV2 === 'function' &&
+      typeof row.clearCredentialV2 === 'function' &&
+      typeof row.cancelPushV2 === 'function'
     );
   } catch {
     return false;
@@ -1662,6 +1832,81 @@ export const LocalProjects = {
       return await projectV2Boundary(
         () => requiredV2().pushV2!(request),
         raw => projectV2Push(raw, request.root),
+      );
+    } catch (error) {
+      throw projectV2Error(error);
+    }
+  },
+  setRemoteV2: async (requestValue: unknown): Promise<ProjectRemoteV2> => {
+    try {
+      const request = projectV2RemoteRequest(requestValue);
+      return await projectV2Boundary(
+        () => requiredV2().setRemoteV2!(request),
+        raw => projectV2Remote(raw, request.root),
+      );
+    } catch (error) {
+      throw projectV2Error(error);
+    }
+  },
+  remoteV2: async (requestValue: unknown): Promise<ProjectRemoteV2> => {
+    try {
+      const request = projectV2WorkspaceRequest(requestValue);
+      return await projectV2Boundary(
+        () => requiredV2().remoteV2!(request),
+        raw => projectV2Remote(raw, request.root),
+      );
+    } catch (error) {
+      throw projectV2Error(error);
+    }
+  },
+  credentialStatusV2: async (
+    requestValue: unknown,
+  ): Promise<ProjectCredentialStatusV2> => {
+    try {
+      const request = projectV2WorkspaceRequest(requestValue);
+      return await projectV2Boundary(
+        () => requiredV2().credentialStatusV2!(request),
+        raw => projectV2CredentialStatus(raw, request.root),
+      );
+    } catch (error) {
+      throw projectV2Error(error);
+    }
+  },
+  /** The native prompt takes the username and token; JS only ever sees the status. */
+  presentCredentialPromptV2: async (
+    requestValue: unknown,
+  ): Promise<ProjectCredentialStatusV2> => {
+    try {
+      const request = projectV2CredentialPromptRequest(requestValue);
+      return await projectV2Boundary(
+        () => requiredV2().presentCredentialPromptV2!(request),
+        raw => projectV2CredentialStatus(raw, request.root),
+      );
+    } catch (error) {
+      throw projectV2Error(error);
+    }
+  },
+  clearCredentialV2: async (
+    requestValue: unknown,
+  ): Promise<ProjectCredentialStatusV2> => {
+    try {
+      const request = projectV2WorkspaceRequest(requestValue);
+      return await projectV2Boundary(
+        () => requiredV2().clearCredentialV2!(request),
+        raw => projectV2CredentialStatus(raw, request.root),
+      );
+    } catch (error) {
+      throw projectV2Error(error);
+    }
+  },
+  cancelPushV2: async (
+    requestValue: unknown,
+  ): Promise<ProjectPushCancellationV2> => {
+    try {
+      const request = projectV2CancelPushRequest(requestValue);
+      return await projectV2Boundary(
+        () => requiredV2().cancelPushV2!(request),
+        raw => projectV2PushCancellation(raw, request.root, request.operation_id),
       );
     } catch (error) {
       throw projectV2Error(error);

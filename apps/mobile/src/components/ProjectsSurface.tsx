@@ -19,6 +19,7 @@ import X from 'lucide-react-native/icons/x';
 import {
   ActivityIndicator,
   Alert,
+  Platform,
   Pressable,
   ScrollView,
   StyleSheet,
@@ -116,6 +117,29 @@ export type ProjectReviewPreviewProps = {
   diffPage?: ProjectDiffPage | null;
   diffMode?: DiffMode;
 };
+
+/** The stable code a bridge rejection carries, or an empty string. */
+function errorCode(error: unknown): string {
+  return typeof error === 'object' && error !== null && 'code' in error
+    ? String((error as { code?: unknown }).code)
+    : '';
+}
+
+/**
+ * A workspace project's origin and credential, in the panel's v1 shape with
+ * the origin URL alongside: null when no origin is set. The origin is read
+ * first because the credential is scoped to its host.
+ */
+async function workspaceCredential(
+  root: WorkspaceRootRefV1,
+): Promise<(ProjectCredentialStatus & { origin_url: string }) | null> {
+  const remote = await LocalProjects.remoteV2({ schema_version: 1, root });
+  if (remote.url === null) return null;
+  const status = legacyShaped(
+    await LocalProjects.credentialStatusV2({ schema_version: 1, root }),
+  );
+  return { ...status, origin_url: remote.url };
+}
 
 function errorText(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
@@ -349,6 +373,7 @@ export function ProjectsSurface({
   const [remoteUrl, setRemoteUrl] = useState('');
   const [busy, setBusy] = useState(false);
   const [pushing, setPushing] = useState(false);
+  const pushOperationId = useRef<string | null>(null);
   const [pushBranch, setPushBranch] = useState('');
   const [receipt, setReceipt] = useState<ProjectPushReceipt | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -522,7 +547,7 @@ export function ProjectsSurface({
                 max_bytes: WORKSPACE_DIFF_MAX_BYTES,
                 staged: true,
               }).then(legacyShaped),
-              Promise.resolve(null),
+              workspaceCredential(project.root),
               Promise.resolve(null),
             ])
           : await Promise.all([
@@ -537,6 +562,27 @@ export function ProjectsSurface({
                 : LocalProjects.pushReceipts(project.id),
             ]);
         if (!tasks.owns(task)) return;
+        // A workspace project's origin lives in its git config, not in a
+        // listing: the credential status names it, or says there is none.
+        if (project.root !== null) {
+          let originUrl: string | null = null;
+          if (
+            nextCredential !== null &&
+            'origin_url' in nextCredential &&
+            typeof nextCredential.origin_url === 'string'
+          ) {
+            originUrl = nextCredential.origin_url;
+          }
+          if (originUrl !== project.origin_url) {
+            const updated = { ...project, origin_url: originUrl };
+            selectedRef.current = updated;
+            setSelected(updated);
+            setProjects(previous =>
+              previous.map(row => (row.id === updated.id ? updated : row)),
+            );
+            project = updated;
+          }
+        }
         setStatus(nextStatus);
         setDiffs({ unstaged: unstagedDiff, staged: stagedDiff });
         const mode =
@@ -933,15 +979,21 @@ export function ProjectsSurface({
     setError(null);
     setNotice(null);
     try {
-      const remote = await LocalProjects.setRemote(
-        selected.id,
-        remoteUrl.trim(),
-      );
+      const remote =
+        selected.root !== null
+          ? await LocalProjects.setRemoteV2({
+              schema_version: 1,
+              root: selected.root,
+              url: remoteUrl.trim(),
+            })
+          : await LocalProjects.setRemote(selected.id, remoteUrl.trim());
       if (!tasks.owns(task)) return;
-      const updated = { ...selected, origin_url: remote.url };
+      // A set origin is never null; the union only says the read-back can be.
+      const originUrl = remote.url ?? remoteUrl.trim();
+      const updated = { ...selected, origin_url: originUrl };
       if (remoteDraftRevision.current === draftRevision) {
         remoteDraftDirty.current = false;
-        setRemoteUrl(remote.url);
+        setRemoteUrl(originUrl);
       }
       selectedRef.current = updated;
       setSelected(updated);
@@ -950,7 +1002,13 @@ export function ProjectsSurface({
           project.id === updated.id ? updated : project,
         ),
       );
-      const nextCredential = await LocalProjects.credentialStatus(selected.id);
+      const nextCredential =
+        selected.root !== null
+          ? await LocalProjects.credentialStatusV2({
+              schema_version: 1,
+              root: selected.root,
+            }).then(legacyShaped)
+          : await LocalProjects.credentialStatus(selected.id);
       if (!tasks.owns(task)) return;
       setCredential(nextCredential);
       setNotice(t('projects.remoteSaved'));
@@ -975,14 +1033,21 @@ export function ProjectsSurface({
     setError(null);
     setNotice(null);
     try {
-      const nextCredential = await LocalProjects.presentCredentialPrompt(
-        selected.id,
-        locale === 'zh-CN' ? 'zh-CN' : 'en',
-      );
+      const promptLocale = locale === 'zh-CN' ? 'zh-CN' : 'en';
+      const nextCredential =
+        selected.root !== null
+          ? await LocalProjects.presentCredentialPromptV2({
+              schema_version: 1,
+              root: selected.root,
+              locale: promptLocale,
+            }).then(legacyShaped)
+          : await LocalProjects.presentCredentialPrompt(selected.id, promptLocale);
       if (!tasks.owns(task)) return;
       setCredential(nextCredential);
     } catch (caught) {
       if (!tasks.owns(task)) return;
+      // Dismissing the native prompt is not a failure.
+      if (errorCode(caught) === 'E_PROJECT_CANCELLED') return;
       setError(t('projects.operationFailed', { error: errorText(caught) }));
     } finally {
       finishTask(task);
@@ -1002,7 +1067,13 @@ export function ProjectsSurface({
     setError(null);
     setNotice(null);
     try {
-      const nextCredential = await LocalProjects.clearCredential(selected.id);
+      const nextCredential =
+        selected.root !== null
+          ? await LocalProjects.clearCredentialV2({
+              schema_version: 1,
+              root: selected.root,
+            }).then(legacyShaped)
+          : await LocalProjects.clearCredential(selected.id);
       if (!tasks.owns(task)) return;
       setCredential(nextCredential);
       setNotice(t('projects.credentialCleared'));
@@ -1027,9 +1098,17 @@ export function ProjectsSurface({
       tasks.busy
     )
       return;
-    const target = pushBranch.trim();
+    const target = selected.root !== null ? '' : pushBranch.trim();
     const host = remoteHost(selected.origin_url);
     const newBranch = target.length > 0 && target !== status.branch;
+    if (
+      selected.root !== null &&
+      Platform.OS === 'android' &&
+      preferences.gitHttpsProxyUrl !== null
+    ) {
+      setError(t('projects.pushProxyUnsupported'));
+      return;
+    }
     // A confirmation belongs to this exact view and target, not a later visit.
     const confirmation = tasks.begin('push');
     tasks.finish(confirmation);
@@ -1061,10 +1140,24 @@ export function ProjectsSurface({
             const task = beginTask('push');
             setError(null);
             setNotice(null);
-            LocalProjects.push(selected.id, {
-              httpsProxyUrl: preferences.gitHttpsProxyUrl,
-              ...(newBranch ? { branch: target } : {}),
-            })
+            const operationId = LocalRuntime.createCompletionRequestId();
+            pushOperationId.current = operationId;
+            const pushed =
+              selected.root !== null
+                ? LocalProjects.pushV2({
+                    schema_version: 1,
+                    root: selected.root,
+                    operation_id: operationId,
+                    remote: 'origin',
+                    expected_local_oid: status.head_oid,
+                    credential_reference: 'panel',
+                    https_proxy_url: preferences.gitHttpsProxyUrl,
+                  }).then(result => ({ ...legacyShaped(result), receipt: undefined }))
+                : LocalProjects.push(selected.id, {
+                    httpsProxyUrl: preferences.gitHttpsProxyUrl,
+                    ...(newBranch ? { branch: target } : {}),
+                  });
+            pushed
               .then(result => {
                 if (!tasks.owns(task)) return;
                 setNotice(t('projects.pushSuccess'));
@@ -1078,22 +1171,21 @@ export function ProjectsSurface({
               })
               .catch(caught => {
                 if (!tasks.owns(task)) return;
-                const code =
-                  typeof caught === 'object' &&
-                  caught !== null &&
-                  'code' in caught
-                    ? String((caught as { code?: unknown }).code)
-                    : '';
-                if (code === 'non-fast-forward') {
+                const code = errorCode(caught);
+                if (code === 'non-fast-forward' || code === 'E_PROJECT_NON_FAST_FORWARD') {
                   setError(t('projects.pushNonFastForward'));
-                } else if (code === 'rejected') {
+                } else if (code === 'rejected' || code === 'E_PROJECT_CREDENTIAL') {
                   setError(t('projects.pushRejected'));
                 } else if (code === 'conflict') {
                   setError(t('projects.pushBranchConflict'));
-                } else if (code === 'timeout') {
+                } else if (code === 'timeout' || code === 'E_PROJECT_TIMEOUT') {
                   setError(t('projects.pushTimeout'));
-                } else if (code === 'cancelled') {
+                } else if (code === 'cancelled' || code === 'E_PROJECT_CANCELLED') {
                   setError(t('projects.pushCancelled'));
+                } else if (code === 'E_PROJECT_UNAVAILABLE' && selected.root !== null) {
+                  setError(t('projects.pushCredentialMissing'));
+                } else if (code === 'E_PROJECT_CONFLICT' && selected.root !== null) {
+                  setError(t('projects.pushHeadChanged'));
                 } else {
                   setError(
                     t('projects.operationFailed', {
@@ -1103,6 +1195,9 @@ export function ProjectsSurface({
                 }
               })
               .finally(() => {
+                if (pushOperationId.current === operationId) {
+                  pushOperationId.current = null;
+                }
                 finishTask(task);
               });
           },
@@ -1123,6 +1218,16 @@ export function ProjectsSurface({
 
   const cancelPush = useCallback(() => {
     if (selected === null || !pushing) return;
+    const operationId = pushOperationId.current;
+    if (selected.root !== null) {
+      if (operationId === null) return;
+      LocalProjects.cancelPushV2({
+        schema_version: 1,
+        root: selected.root,
+        operation_id: operationId,
+      }).catch(() => undefined);
+      return;
+    }
     LocalProjects.cancelPush(selected.id).catch(() => undefined);
   }, [pushing, selected]);
 
@@ -1510,12 +1615,6 @@ export function ProjectsSurface({
               </Pressable>
             </View>
 
-            {selected.root !== null ? (
-              <View style={styles.card}>
-                <Text style={styles.cardBody}>{t('projects.workspaceReadOnlyRemote')}</Text>
-              </View>
-            ) : (
-              <>
             <SectionLabel label={t('projects.remoteSection')} styles={styles} />
             <View style={styles.card}>
               <Field
@@ -1607,15 +1706,17 @@ export function ProjectsSurface({
                       </Text>
                     </Pressable>
                   )}
-                  <Field
-                    autoCapitalize="none"
-                    autoCorrect={false}
-                    label={t('projects.pushBranchLabel')}
-                    placeholder={t('projects.pushBranchPlaceholder')}
-                    styles={styles}
-                    value={pushBranch}
-                    onChangeText={setPushBranch}
-                  />
+                  {selected.root === null && (
+                    <Field
+                      autoCapitalize="none"
+                      autoCorrect={false}
+                      label={t('projects.pushBranchLabel')}
+                      placeholder={t('projects.pushBranchPlaceholder')}
+                      styles={styles}
+                      value={pushBranch}
+                      onChangeText={setPushBranch}
+                    />
+                  )}
                   <Pressable
                     accessibilityLabel={t('projects.push')}
                     accessibilityRole="button"
@@ -1642,7 +1743,7 @@ export function ProjectsSurface({
               )}
             </View>
 
-            {selected.origin_url !== null && (
+            {selected.origin_url !== null && selected.root === null && (
               <View style={styles.card}>
                 <Text style={styles.cardTitle}>
                   {t('projects.pushReceiptTitle')}
@@ -1672,8 +1773,6 @@ export function ProjectsSurface({
                   </Text>
                 )}
               </View>
-            )}
-              </>
             )}
           </ScrollView>
         )}

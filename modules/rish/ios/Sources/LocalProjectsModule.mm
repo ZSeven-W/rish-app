@@ -5179,31 +5179,371 @@ RCT_REMAP_METHOD(pushV2,
   });
 }
 
+/// The V2 remote descriptor: `url` and `host` are null together when the
+/// project has no origin. What JavaScript renders and what Android answers.
+- (NSDictionary *)v2RemoteDescriptorForRoot:(NSDictionary *)root
+                                     origin:(nullable NSString *)origin {
+  NSString *host = origin == nil ? nil
+      : [NSURLComponents componentsWithString:origin].host.lowercaseString;
+  return @{
+    @"schema_version" : @2,
+    @"root" : root,
+    @"project_id" : root[@"project_id"],
+    @"remote" : LPRemoteName,
+    @"url" : origin ?: NSNull.null,
+    @"host" : host ?: NSNull.null,
+  };
+}
+
+/// The V2 credential status: the v1 scope status with the root stamped on.
+- (nullable NSDictionary *)v2CredentialStatusForRoot:(NSDictionary *)root
+                                                host:(NSString *)host
+                                               error:(NSError **)error {
+  NSDictionary *status = [self credentialStatusForScope:root[@"project_id"]
+                                                   host:host error:error];
+  if (status == nil) return nil;
+  NSMutableDictionary *stamped = [status mutableCopy];
+  stamped[@"schema_version"] = @2;
+  stamped[@"root"] = root;
+  return stamped;
+}
+
+/// The origin of a V2 lease, as a validated URL string, or nil with 3112.
+- (nullable NSString *)v2OriginForLease:(DSHLocalProjectLease *)lease
+                                  error:(NSError **)error {
+  NSError *originError = nil;
+  NSString *origin = [self originURLForRepository:lease.repository error:&originError];
+  if (origin == nil && error != nil) {
+    *error = LPError(3112, @"Git remote is not configured");
+  }
+  return origin;
+}
+
+RCT_REMAP_METHOD(setRemoteV2,
+                 setRemoteV2Request:(id)requestValue
+                 resolver:(RCTPromiseResolveBlock)resolve
+                 rejecter:(RCTPromiseRejectBlock)reject) {
+  NSDictionary *request = nil;
+  NSError *validationError = nil;
+  NSDictionary *root = nil;
+  NSURL *remoteURL = nil;
+  BOOL inputValid = NO;
+  @try {
+    request = LPDictionary(requestValue);
+    root = LPV2Root(request[@"root"], YES, &validationError);
+    remoteURL = LPValidatedRemoteURL(request[@"url"], &validationError);
+    inputValid = LPV2ExactKeys(request, @[@"schema_version", @"root", @"url"]) &&
+        [request[@"schema_version"] isEqual:@1] && root != nil && remoteURL != nil;
+  } @catch (__unused NSException *exception) {
+    validationError = LPError(3199, @"Git remote request is invalid");
+  }
+  if (!inputValid) {
+    LPV2Reject(reject, remoteURL == nil && root != nil
+        ? LPError(3101, @"Git remote URL is invalid")
+        : (validationError ?: LPError(3101, @"Git remote request is invalid")));
+    return;
+  }
+  dispatch_async(self.projectQueue, ^{ @autoreleasepool {
+    NSError *error = nil;
+    __attribute__((objc_precise_lifetime)) DSHLocalProjectLease *lease = [self v2LeaseForRoot:root
+                                                   mode:DSHLocalProjectAccessModeWrite
+                                                  error:&error];
+    if (lease == nil) {
+      LPV2Reject(reject, error ?: LPError(3199, @"Git remote failed"));
+      return;
+    }
+    git_repository *repository = lease.repository;
+    git_remote *remote = nullptr;
+    int result = git_remote_lookup(&remote, repository, LPRemoteName.UTF8String);
+    if (result == GIT_ENOTFOUND) {
+      result = git_remote_create(&remote, repository, LPRemoteName.UTF8String,
+        remoteURL.absoluteString.UTF8String);
+    } else if (result == 0) {
+      git_remote_free(remote);
+      remote = nullptr;
+      result = git_remote_set_url(repository, LPRemoteName.UTF8String,
+        remoteURL.absoluteString.UTF8String);
+    }
+    if (result == 0) {
+      int clearPushURL = git_remote_set_pushurl(repository, LPRemoteName.UTF8String, nullptr);
+      if (clearPushURL != 0 && clearPushURL != GIT_ENOTFOUND) result = clearPushURL;
+    }
+    if (remote != nullptr) git_remote_free(remote);
+    NSString *storedURL = result == 0
+      ? [self originURLForRepository:repository error:&error] : nil;
+    BOOL valid = [storedURL isEqualToString:remoteURL.absoluteString] &&
+        [self.projectAccessV2 validateWorkspaceLeaseIdentity:lease rootRef:root error:&error];
+    lease = nil;
+    if (!valid) {
+      LPV2Reject(reject, error ?: LPError(3199, @"Origin remote cannot be updated"));
+      return;
+    }
+    resolve([self v2RemoteDescriptorForRoot:root origin:storedURL]);
+  } });
+}
+
+RCT_REMAP_METHOD(remoteV2,
+                 remoteV2Request:(id)requestValue
+                 resolver:(RCTPromiseResolveBlock)resolve
+                 rejecter:(RCTPromiseRejectBlock)reject) {
+  NSDictionary *request = nil;
+  NSError *validationError = nil;
+  NSDictionary *root = nil;
+  BOOL inputValid = NO;
+  @try {
+    request = LPDictionary(requestValue);
+    root = LPV2Root(request[@"root"], YES, &validationError);
+    inputValid = LPV2ExactKeys(request, @[@"schema_version", @"root"]) &&
+        [request[@"schema_version"] isEqual:@1] && root != nil;
+  } @catch (__unused NSException *exception) {
+    validationError = LPError(3199, @"Git request is invalid");
+  }
+  if (!inputValid) {
+    LPV2Reject(reject, validationError ?: LPError(3101, @"Git request is invalid"));
+    return;
+  }
+  dispatch_async(self.projectQueue, ^{ @autoreleasepool {
+    NSError *error = nil;
+    __attribute__((objc_precise_lifetime)) DSHLocalProjectLease *lease = [self v2LeaseForRoot:root
+                                                   mode:DSHLocalProjectAccessModeRead
+                                                  error:&error];
+    if (lease == nil || ![self.projectAccessV2 validateWorkspaceLeaseIdentity:lease
+                                                                        rootRef:root
+                                                                          error:&error]) {
+      LPV2Reject(reject, error ?: LPError(3199, @"Git remote failed"));
+      return;
+    }
+    // No origin is an answer here, not a refusal: the panel asks before
+    // anything is set.
+    NSString *origin = [self originURLForRepository:lease.repository error:nil];
+    lease = nil;
+    resolve([self v2RemoteDescriptorForRoot:root origin:origin]);
+  } });
+}
+
+RCT_REMAP_METHOD(credentialStatusV2,
+                 credentialStatusV2Request:(id)requestValue
+                 resolver:(RCTPromiseResolveBlock)resolve
+                 rejecter:(RCTPromiseRejectBlock)reject) {
+  NSDictionary *request = nil;
+  NSError *validationError = nil;
+  NSDictionary *root = nil;
+  BOOL inputValid = NO;
+  @try {
+    request = LPDictionary(requestValue);
+    root = LPV2Root(request[@"root"], YES, &validationError);
+    inputValid = LPV2ExactKeys(request, @[@"schema_version", @"root"]) &&
+        [request[@"schema_version"] isEqual:@1] && root != nil;
+  } @catch (__unused NSException *exception) {
+    validationError = LPError(3199, @"Git request is invalid");
+  }
+  if (!inputValid) {
+    LPV2Reject(reject, validationError ?: LPError(3101, @"Git request is invalid"));
+    return;
+  }
+  dispatch_async(self.projectQueue, ^{ @autoreleasepool {
+    NSError *error = nil;
+    __attribute__((objc_precise_lifetime)) DSHLocalProjectLease *lease = [self v2LeaseForRoot:root
+                                                   mode:DSHLocalProjectAccessModeRead
+                                                  error:&error];
+    NSString *origin = lease == nil ? nil : [self v2OriginForLease:lease error:&error];
+    NSString *host = origin == nil ? nil
+        : [NSURLComponents componentsWithString:origin].host.lowercaseString;
+    NSDictionary *status = host == nil ? nil
+        : [self v2CredentialStatusForRoot:root host:host error:&error];
+    BOOL valid = status != nil && [self.projectAccessV2
+        validateWorkspaceLeaseIdentity:lease rootRef:root error:&error];
+    lease = nil;
+    if (!valid) {
+      LPV2Reject(reject, error ?: LPError(3199, @"Git credential status failed"));
+      return;
+    }
+    resolve(status);
+  } });
+}
+
+RCT_REMAP_METHOD(presentCredentialPromptV2,
+                 presentCredentialPromptV2Request:(id)requestValue
+                 resolver:(RCTPromiseResolveBlock)resolve
+                 rejecter:(RCTPromiseRejectBlock)reject) {
+  NSDictionary *request = nil;
+  NSError *validationError = nil;
+  NSDictionary *root = nil;
+  NSString *locale = nil;
+  BOOL inputValid = NO;
+  @try {
+    request = LPDictionary(requestValue);
+    root = LPV2Root(request[@"root"], YES, &validationError);
+    locale = LPString(request[@"locale"]);
+    inputValid = LPV2ExactKeys(request, @[@"schema_version", @"root", @"locale"]) &&
+        [request[@"schema_version"] isEqual:@1] && root != nil &&
+        ([locale isEqualToString:@"zh-CN"] || [locale isEqualToString:@"en"]);
+  } @catch (__unused NSException *exception) {
+    validationError = LPError(3199, @"Git request is invalid");
+  }
+  if (!inputValid) {
+    LPV2Reject(reject, validationError ?: LPError(3101, @"Git request is invalid"));
+    return;
+  }
+  dispatch_async(self.projectQueue, ^{ @autoreleasepool {
+    NSError *error = nil;
+    __attribute__((objc_precise_lifetime)) DSHLocalProjectLease *lease = [self v2LeaseForRoot:root
+                                                   mode:DSHLocalProjectAccessModeRead
+                                                  error:&error];
+    NSString *origin = lease == nil ? nil : [self v2OriginForLease:lease error:&error];
+    BOOL valid = origin != nil && [self.projectAccessV2 validateWorkspaceLeaseIdentity:lease
+                                                                                 rootRef:root
+                                                                                   error:&error];
+    lease = nil;
+    if (!valid) {
+      LPV2Reject(reject, error ?: LPError(3199, @"Git credential prompt failed"));
+      return;
+    }
+    NSString *host = [NSURLComponents componentsWithString:origin].host.lowercaseString;
+    BOOL plaintext = DSHGitRemoteURLIsPlaintext([NSURL URLWithString:origin]);
+    BOOL chinese = [locale isEqualToString:@"zh-CN"];
+    LPCredentialPromptCompletion completion = ^(NSString *username,
+                                                NSString *token,
+                                                NSInteger expirySeconds,
+                                                NSString *failureCode) {
+      if (failureCode != nil || username == nil || token == nil) {
+        LPV2Reject(reject, [failureCode isEqualToString:@"presentation"]
+            ? LPError(3102, @"Git credential prompt cannot be presented right now")
+            : LPError(3195, @"Git credential prompt was cancelled"));
+        return;
+      }
+      dispatch_async(self.projectQueue, ^{ @autoreleasepool {
+        // The origin is read again at save time so a remote changed under
+        // the prompt does not receive a credential meant for another host.
+        NSError *storeError = nil;
+        __attribute__((objc_precise_lifetime)) DSHLocalProjectLease *currentLease = [self v2LeaseForRoot:root
+                                                              mode:DSHLocalProjectAccessModeRead
+                                                             error:&storeError];
+        NSString *currentOrigin = currentLease == nil ? nil
+          : [self originURLForRepository:currentLease.repository error:&storeError];
+        NSString *currentHost = [NSURLComponents
+          componentsWithString:currentOrigin].host.lowercaseString;
+        currentLease = nil;
+        if (currentOrigin == nil || ![currentHost isEqualToString:host]) {
+          LPV2Reject(reject, LPError(3113, @"Origin remote changed before credential save"));
+          return;
+        }
+        if (!DSHGitStoreCredentialForScope(root[@"project_id"], host, username, token,
+                                            expirySeconds, &storeError)) {
+          LPV2Reject(reject, LPError(3101, @"Git credential is invalid"));
+          return;
+        }
+        NSDictionary *status = [self v2CredentialStatusForRoot:root host:host
+                                                          error:&storeError];
+        if (status == nil) {
+          LPV2Reject(reject, storeError ?: LPError(3199, @"Git credential status failed"));
+          return;
+        }
+        resolve(status);
+      } });
+    };
+    LPCredentialPromptHook hook = self.credentialPromptHook;
+    if (hook != nil) {
+      hook(host, chinese, plaintext, completion);
+      return;
+    }
+    dispatch_async(dispatch_get_main_queue(), ^{
+      [self presentCredentialAlertForHost:host
+                                  chinese:chinese
+                                plaintext:plaintext
+                               completion:completion];
+    });
+  } });
+}
+
+RCT_REMAP_METHOD(clearCredentialV2,
+                 clearCredentialV2Request:(id)requestValue
+                 resolver:(RCTPromiseResolveBlock)resolve
+                 rejecter:(RCTPromiseRejectBlock)reject) {
+  NSDictionary *request = nil;
+  NSError *validationError = nil;
+  NSDictionary *root = nil;
+  BOOL inputValid = NO;
+  @try {
+    request = LPDictionary(requestValue);
+    root = LPV2Root(request[@"root"], YES, &validationError);
+    inputValid = LPV2ExactKeys(request, @[@"schema_version", @"root"]) &&
+        [request[@"schema_version"] isEqual:@1] && root != nil;
+  } @catch (__unused NSException *exception) {
+    validationError = LPError(3199, @"Git request is invalid");
+  }
+  if (!inputValid) {
+    LPV2Reject(reject, validationError ?: LPError(3101, @"Git request is invalid"));
+    return;
+  }
+  dispatch_async(self.projectQueue, ^{ @autoreleasepool {
+    NSError *error = nil;
+    __attribute__((objc_precise_lifetime)) DSHLocalProjectLease *lease = [self v2LeaseForRoot:root
+                                                   mode:DSHLocalProjectAccessModeRead
+                                                  error:&error];
+    NSString *origin = lease == nil ? nil : [self v2OriginForLease:lease error:&error];
+    BOOL valid = origin != nil && [self.projectAccessV2 validateWorkspaceLeaseIdentity:lease
+                                                                                 rootRef:root
+                                                                                   error:&error];
+    lease = nil;
+    if (!valid) {
+      LPV2Reject(reject, error ?: LPError(3199, @"Git credential clear failed"));
+      return;
+    }
+    NSString *host = [NSURLComponents componentsWithString:origin].host.lowercaseString;
+    NSString *projectId = root[@"project_id"];
+    if (!DSHGitDeleteCredentialForScope(projectId, host, &error)) {
+      LPV2Reject(reject, error ?: LPError(3199, @"Git credential clear failed"));
+      return;
+    }
+    (void)DSHGitDeleteLegacyHostCredential(host, nil);
+    NSDictionary *status = [self v2CredentialStatusForRoot:root host:host error:&error];
+    if (status == nil) {
+      LPV2Reject(reject, error ?: LPError(3199, @"Git credential status failed"));
+      return;
+    }
+    resolve(status);
+  } });
+}
+
 RCT_REMAP_METHOD(cancelPushV2,
                  cancelPushV2Request:(id)requestValue
                  resolver:(RCTPromiseResolveBlock)resolve
                  rejecter:(RCTPromiseRejectBlock)reject) {
   // Not queued on projectQueue: the in-flight push blocks that queue while
-  // polling the cancel token.
-  NSDictionary *request = LPDictionary(requestValue);
-  NSString *projectId = LPString(request[@"project_id"]);
-  if (projectId.length == 0) {
-    reject(@"E_PROJECT_REQUEST_INVALID", @"E_PROJECT_REQUEST_INVALID", nil);
+  // polling the cancel token. The token is the project's; the operation id
+  // is echoed so the caller can match the answer to the push it meant.
+  NSDictionary *request = nil;
+  NSError *validationError = nil;
+  NSDictionary *root = nil;
+  NSString *operationId = nil;
+  BOOL inputValid = NO;
+  @try {
+    request = LPDictionary(requestValue);
+    root = LPV2Root(request[@"root"], YES, &validationError);
+    operationId = LPString(request[@"operation_id"]);
+    inputValid = LPV2ExactKeys(request, @[@"schema_version", @"root", @"operation_id"]) &&
+        [request[@"schema_version"] isEqual:@1] && root != nil &&
+        LPV2CanonicalOperationId(operationId);
+  } @catch (__unused NSException *exception) {
+    validationError = LPError(3199, @"Cancel request is invalid");
+  }
+  if (!inputValid) {
+    LPV2Reject(reject, validationError ?: LPError(3101, @"Cancel request is invalid"));
     return;
   }
+  NSString *projectId = root[@"project_id"];
   DSHGitPushCancelToken *token = nil;
   @synchronized (self) {
     token = self.pushCancelTokens[projectId];
   }
-  if (token == nil) {
-    reject(@"E_PROJECT_BUSY", @"E_PROJECT_BUSY", nil);
-    return;
-  }
-  [token cancel];
+  if (token != nil) [token cancel];
   resolve(@{
     @"schema_version" : @2,
+    @"root" : root,
     @"project_id" : projectId,
-    @"cancelled" : @YES,
+    @"operation_id" : operationId,
+    @"status" : token != nil ? @"cancel_requested" : @"not_running",
   });
 }
 

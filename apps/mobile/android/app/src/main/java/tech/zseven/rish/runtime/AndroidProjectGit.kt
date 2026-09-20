@@ -133,6 +133,20 @@ internal class AndroidProjectGit(
         return stamped(credentialStore().status(opened.projectId, host), opened)
     }
 
+    /**
+     * `presentCredentialPromptV2`, before the prompt: the origin's host and
+     * whether it is plain HTTP, so the dialog can say so. The credential
+     * itself arrives through [storeCredential] once the person has chosen.
+     */
+    fun promptScope(rawRequest: JSONObject?): JSONObject {
+        val request = exact(rawRequest, PROMPT_KEYS)
+        val locale = request.opt("locale") as? String
+        if (locale != "zh-CN" && locale != "en") throw refused(REQUEST_INVALID, "locale is invalid")
+        val opened = open(request, write = false)
+        val url = originUrl(opened) ?: throw refused(REMOTE_MISSING, "git remote is not configured")
+        return JSONObject().put("host", hostOf(url)).put("plaintext", url.startsWith("http://")).put("chinese", locale == "zh-CN")
+    }
+
     fun clearCredential(rawRequest: JSONObject?): JSONObject {
         val request = exact(rawRequest, WORKSPACE_KEYS)
         val opened = open(request, write = false)
@@ -321,6 +335,7 @@ internal class AndroidProjectGit(
             "schema_version", "root", "operation_id", "message", "author_name", "author_email", "expected_head_oid",
         )
         private val REMOTE_KEYS = setOf("schema_version", "root", "url")
+        private val PROMPT_KEYS = setOf("schema_version", "root", "locale")
         private val STORE_CREDENTIAL_KEYS = setOf("schema_version", "root", "host", "username", "token", "expiry_seconds")
         private val PUSH_KEYS = setOf(
             "schema_version", "root", "operation_id", "remote", "expected_local_oid", "credential_reference", "https_proxy_url",
