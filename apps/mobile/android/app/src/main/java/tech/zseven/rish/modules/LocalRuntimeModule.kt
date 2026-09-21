@@ -34,6 +34,22 @@ class LocalRuntimeModule(private val react: ReactApplicationContext) : ReactCont
     }
     private fun io(promise: Promise, action: () -> JSONObject) { runtime.io.execute { try { resolve(promise, action()) } catch(error: Exception) { reject(promise, error) } } }
     @ReactMethod fun bootstrap(promise: Promise) = io(promise) { runtime.proof() }
+    /**
+     * The runtime proof for one harness. JavaScript asks this for every
+     * harness but DSH since 2026-09-11 and, when the method is missing,
+     * refuses with "harness-aware runtime bootstrap is unavailable" -- which
+     * on Android turned every configured Claude Code / Codex / GLM key into
+     * "Local proof failed" and a blocked composer (2026-09-21). The proof is
+     * the same record `bootstrap` answers, taken for that harness's slot.
+     */
+    @ReactMethod fun bootstrapForHarness(harnessId: String, promise: Promise) = io(promise) {
+        val slot = when (harnessId) {
+            "dsh" -> "DEEPSEEK_API_KEY"; "glm" -> "BIGMODEL_API_KEY"; "codex" -> "OPENAI_API_KEY"; "claude-code" -> "ANTHROPIC_API_KEY"
+            else -> throw IllegalArgumentException("E_RUNTIME_HARNESS")
+        }
+        runtime.selectedSlot = slot
+        runtime.proof()
+    }
     @ReactMethod fun credentialStatus(promise: Promise) = credentialStatusForSlot("DEEPSEEK_API_KEY", promise)
     @ReactMethod fun credentialStatusForSlot(slot: String, promise: Promise) = io(promise) {
         require(slot in AndroidCredentialStore.slots); runtime.selectedSlot = slot

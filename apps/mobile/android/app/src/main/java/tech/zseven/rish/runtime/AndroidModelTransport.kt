@@ -411,6 +411,7 @@ internal class AndroidModelTransport(private val credentials: AndroidCredentialS
             synchronized(lock) { own(request) }
             val reported = response.optString("model", "")
             val glmWire = wireModel.startsWith("glm", ignoreCase = true)
+            val custom = !config.optBoolean("official")
             // DeepSeek's 2026-09-10 announcement routes these two retired
             // request ids to V4.1 Flash (deepseek-flash). Mirrors the closed
             // compatibility map in modules/rish/ios/Sources/DshProviderTransport.mm:
@@ -423,10 +424,28 @@ internal class AndroidModelTransport(private val credentials: AndroidCredentialS
                 config.getString("endpoint_url") == "https://api.deepseek.com/chat/completions" &&
                     wireModel in setOf("deepseek-v4-flash", "deepseek-v4-flash-vision-exp") &&
                     reported == "deepseek-flash"
-            if (!(reported == wireModel || documentedLegacyAlias ||
+            // A configured (third-party) provider answers under the rule iOS's
+            // ConfiguredProviderTransport applies: the mapped wire model
+            // exactly, a dated form of it on the Messages protocol
+            // (`claude-sonnet-4-5` answered as `claude-sonnet-4-5-20250929`),
+            // or no model at all off Chat Completions -- relays do all three,
+            // and refusing them made every custom configuration on Android
+            // fail with E_COMPLETION_RESPONSE_MODEL after the reply had
+            // already arrived (2026-09-21).
+            val configuredMatches = custom && AndroidConfiguredModelIdentity.matches(protocol, wireModel, response.opt("model"))
+            if (!(reported == wireModel || documentedLegacyAlias || configuredMatches ||
                     (glmWire && reported.all { it.code < 128 } && reported.equals(wireModel, ignoreCase = true)))
             ) {
                 fail("E_COMPLETION_RESPONSE_MODEL")
+            }
+            if (configuredMatches && reported != wireModel) {
+                // The core reads the reply for the model that was asked; the
+                // relay's spelling is what was answered, not a second model.
+                response.put("model", wireModel)
+                android.util.Log.i(
+                    "RishRuntime",
+                    "completion_model_alias harness=${request.harness} requested_model=$wireModel reported_model=${reported.ifEmpty { "(absent)" }}",
+                )
             }
             if (documentedLegacyAlias) {
                 // Never claim raw equality: the receipt keeps the canonical
