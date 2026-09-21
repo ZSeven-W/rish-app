@@ -603,11 +603,33 @@ function canonicalNow(now: () => Date | number | string): string {
   return date.toISOString();
 }
 
-function hasAttemptForWorkspace(
+/**
+ * Whether an attempt that ran in the workspace still holds it: live, waiting
+ * for its transcript to be swept, or carrying an agent journal that has not
+ * ended. A finished attempt does not: when the workspace is forgotten its
+ * frozen tuple is cleared with the conversation's binding (the schema keeps
+ * the two equal), and the messages it produced stay as they are.
+ */
+function hasAttemptHoldingWorkspace(
+  state: ChatState,
   conversation: Conversation,
   workspaceId: string,
 ): boolean {
-  return conversation.attempts.some(attempt => attempt.workspaceId === workspaceId);
+  const pendingCleanup = new Set(
+    (state.agentTranscriptCleanupOutbox ?? []).map(entry => entry.attempt_id),
+  );
+  return conversation.attempts.some(attempt => {
+    if (attempt.workspaceId !== workspaceId) return false;
+    if (attempt.status === 'prepared' || attempt.status === 'sending') return true;
+    if (pendingCleanup.has(attempt.attemptId)) return true;
+    const phase = attempt.agent?.phase;
+    return (
+      phase !== undefined &&
+      phase !== 'final_response' &&
+      phase !== 'cancelled' &&
+      phase !== 'failed'
+    );
+  });
 }
 
 function hasLiveAttemptForWorkspace(
@@ -3028,7 +3050,7 @@ export function createChatStore(options: ChatStoreOptions = {}): ChatStore {
         if (
           conversation === undefined ||
           hasLiveAttemptForWorkspace(conversation, workspaceId) ||
-          hasAttemptForWorkspace(conversation, workspaceId) ||
+          hasAttemptHoldingWorkspace(state, conversation, workspaceId) ||
           (conversation.projectContext !== null &&
             (conversation.projectContext.snapshot !== null ||
               conversation.projectContext.activePreparationId !== null))
@@ -3050,12 +3072,26 @@ export function createChatStore(options: ChatStoreOptions = {}): ChatStore {
       targetedConversationIds.forEach(conversationId => {
         const conversation = conversations[conversationId];
         if (conversation === undefined) return;
+        // The project lived under the workspace's binding, so it goes with
+        // it: a project id left behind would read as a legacy project to
+        // bootstrap a new workspace from, which is not what happened. The
+        // finished attempts that ran here let go of the tuple they froze --
+        // the schema keeps an attempt's tuple equal to its conversation's
+        // binding -- and keep everything else: their messages, their
+        // rounds, their outcome.
         conversations[conversationId] = {
           ...conversation,
           workspaceId: null,
           workspaceBinding: null,
-          workspaceBootstrapState:
-            conversation.projectId === null ? 'none' : 'pending_legacy_project',
+          projectId: null,
+          projectContext: null,
+          runtimeContextId: null,
+          workspaceBootstrapState: 'none',
+          attempts: conversation.attempts.map(attempt =>
+            attempt.workspaceId === workspaceId
+              ? { ...attempt, workspaceId: null, workspaceBindingRevision: null }
+              : attempt,
+          ),
         };
       });
       const before = state;

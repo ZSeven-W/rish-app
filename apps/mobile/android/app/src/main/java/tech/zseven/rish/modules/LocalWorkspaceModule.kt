@@ -11,6 +11,7 @@ import org.json.JSONObject
 import tech.zseven.rish.RishUnavailable
 import tech.zseven.rish.runtime.AndroidRuntimeState
 import tech.zseven.rish.runtime.AndroidWorkspaceFiles
+import tech.zseven.rish.runtime.AndroidWorkspaceRegistry
 import tech.zseven.rish.runtime.RuntimeJson
 
 /**
@@ -89,9 +90,15 @@ class LocalWorkspaceModule(reactContext: ReactApplicationContext) :
             promise.reject("E_WORKSPACE_INVALID", "Workspace request is invalid")
             return
         }
+        val workspaceId = captured?.optJSONObject("root")?.optString("workspace_id")?.takeIf { RuntimeJson.uuid(it) }
         runtime.io.execute {
             try {
-                promise.resolve(Arguments.makeNativeMap(RuntimeJson.map(body(captured))))
+                val answered = if (workspaceId == null) body(captured)
+                    else runtime.workspaces.holding(workspaceId) { body(captured) }
+                promise.resolve(Arguments.makeNativeMap(RuntimeJson.map(answered)))
+            } catch (busy: AndroidWorkspaceRegistry.Refused) {
+                Log.w(TAG, "$operation refused: ${busy.code}")
+                promise.reject(busy.code, "Workspace is being removed")
             } catch (refused: AndroidWorkspaceFiles.Refused) {
                 Log.w(TAG, "$operation refused: ${refused.code}")
                 promise.reject(refused.code, refused.reason)

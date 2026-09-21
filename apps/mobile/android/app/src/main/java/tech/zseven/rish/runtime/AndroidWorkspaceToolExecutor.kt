@@ -108,6 +108,17 @@ internal class AndroidWorkspaceToolExecutor(
     fun execute(name: String, arguments: JSONObject, root: JSONObject): JSONObject {
         if (name !in tools) throw Refused(INVALID)
         val workspaceId = root.optString("workspace_id").takeIf { it.isNotEmpty() }
+        // The tool holds the workspace while it runs, so a removal waits for
+        // it rather than renaming the directory from under a write.
+        if (workspaceId == null || !RuntimeJson.uuid(workspaceId)) throw Refused(CONFLICT)
+        return try {
+            workspaces.holding(workspaceId) { executeHeld(name, arguments, root, workspaceId) }
+        } catch (_: AndroidWorkspaceRegistry.Refused) {
+            throw Refused(CONFLICT)
+        }
+    }
+
+    private fun executeHeld(name: String, arguments: JSONObject, root: JSONObject, workspaceId: String): JSONObject {
         // The projection carries the authority -- which grants this root has,
         // and the fingerprint the registry sealed it under. It deliberately
         // carries no path: where the directory is stays with the registry, and

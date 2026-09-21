@@ -276,6 +276,109 @@ describe('schema 9 workspace routing state', () => {
     expect(store.getState()).toBe(before);
   });
 
+  /** A conversation bound the V2 way, so its attempts freeze the workspace tuple. */
+  function boundConversation(store: ReturnType<typeof createChatStore>): string {
+    const conversationId = store.createConversation();
+    const binding = store.applyConversationWorkspaceBinding(
+      workspaceBindingInput(store, conversationId, WS_ID, 1, null),
+    );
+    expect(binding?.commit()).toBe(true);
+    return conversationId;
+  }
+
+  test('clears a workspace whose attempts have finished; the attempts keep their history', () => {
+    const store = createChatStore({ now: () => T0 });
+    const conversationId = boundConversation(store);
+    const prepared = store.prepareTurnAttempt(conversationId, 'ran here', {
+      sendWithoutProjectContext: true,
+    })!;
+    expect(prepared.commit()).toBe(true);
+    expect(
+      store.failAttempt(conversationId, prepared.attemptId, 'E_COMPLETION_NATIVE'),
+    ).toBe(true);
+    expect(
+      store.getState().conversations[conversationId]!.attempts[0]!.workspaceId,
+    ).toBe(WS_ID);
+
+    const transaction = store.applyWorkspaceAuthorityMutation(
+      authorityMutationInput(store, OPERATION_ID, CLEARANCE_RECEIPT_ID),
+    );
+    expect(transaction).not.toBeNull();
+    const cleared = store.getState().conversations[conversationId]!;
+    expect(cleared.workspaceId).toBeNull();
+    expect(cleared.workspaceBinding).toBeNull();
+    expect(cleared.workspaceBootstrapState).toBe('none');
+    // The attempt lets go of the tuple it froze and keeps everything else.
+    expect(cleared.attempts[0]!.workspaceId).toBeNull();
+    expect(cleared.attempts[0]!.workspaceBindingRevision).toBeNull();
+    expect(cleared.attempts[0]!.status).toBe('failed');
+    expect(cleared.attempts[0]!.attemptId).toBe(prepared.attemptId);
+    expect(store.getState().workspaceAuthorityOutbox).toHaveLength(1);
+    // And the serialized candidate is still one the schema accepts.
+    expect(() => store.serialize()).not.toThrow();
+    expect(transaction?.rollback()).toBe(true);
+    expect(store.getState().conversations[conversationId]!.attempts[0]!.workspaceId).toBe(WS_ID);
+  });
+
+  test('drops the project with the binding instead of leaving a legacy project to bootstrap', () => {
+    const store = createChatStore({ now: () => T0 });
+    const conversationId = store.createConversation({
+      workspaceId: WS_ID,
+      projectId: PROJECT_ID,
+    });
+    const transaction = store.applyWorkspaceAuthorityMutation(
+      authorityMutationInput(store, OPERATION_ID, CLEARANCE_RECEIPT_ID),
+    );
+    expect(transaction).not.toBeNull();
+    const cleared = store.getState().conversations[conversationId]!;
+    expect(cleared.workspaceId).toBeNull();
+    expect(cleared.projectId).toBeNull();
+    expect(cleared.projectContext).toBeNull();
+    expect(cleared.workspaceBootstrapState).toBe('none');
+    expect(() => store.serialize()).not.toThrow();
+
+    expect(transaction?.rollback()).toBe(true);
+    const restored = store.getState().conversations[conversationId]!;
+    expect(restored.workspaceId).toBe(WS_ID);
+    expect(restored.projectId).toBe(PROJECT_ID);
+    expect(store.getState().workspaceAuthorityOutbox).toHaveLength(0);
+  });
+
+  test('refuses to clear a workspace while an attempt still holds it', () => {
+    const live = createChatStore({ now: () => T0 });
+    const liveId = boundConversation(live);
+    expect(
+      live.prepareTurnAttempt(liveId, 'still running', { sendWithoutProjectContext: true })!.commit(),
+    ).toBe(true);
+    expect(live.getState().conversations[liveId]!.attempts[0]!.workspaceId).toBe(WS_ID);
+    const beforeLive = live.getState();
+    expect(
+      live.applyWorkspaceAuthorityMutation(
+        authorityMutationInput(live, OPERATION_ID, CLEARANCE_RECEIPT_ID),
+      ),
+    ).toBeNull();
+    expect(live.getState()).toBe(beforeLive);
+
+    // A finished attempt whose transcript is still to be swept holds it too.
+    const sweeping = createChatStore({ now: () => T0 });
+    const sweepingId = boundConversation(sweeping);
+    const prepared = sweeping.prepareTurnAttempt(sweepingId, 'interrupted', {
+      sendWithoutProjectContext: true,
+    })!;
+    expect(prepared.commit()).toBe(true);
+    expect(
+      sweeping.failAttempt(sweepingId, prepared.attemptId, 'E_ATTEMPT_INTERRUPTED'),
+    ).toBe(true);
+    const outbox = sweeping.getState().agentTranscriptCleanupOutbox ?? [];
+    if (outbox.some(entry => entry.attempt_id === prepared.attemptId)) {
+      expect(
+        sweeping.applyWorkspaceAuthorityMutation(
+          authorityMutationInput(sweeping, OPERATION_ID, CLEARANCE_RECEIPT_ID),
+        ),
+      ).toBeNull();
+    }
+  });
+
   test('blocks legacy workspace bind and unbind actions while an attempt is live', () => {
     const boundLater = createChatStore({ now: () => T0 });
     const boundLaterId = boundLater.createConversation();

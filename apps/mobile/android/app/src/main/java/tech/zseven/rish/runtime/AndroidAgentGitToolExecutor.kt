@@ -37,7 +37,16 @@ internal class AndroidAgentGitToolExecutor(
     /** Where a push goes: a validated network URL with its credential, or an absolute local path with none. */
     private class Origin(val url: String, val host: String, val username: String, val token: String)
 
-    fun prepare(name: String, arguments: JSONObject, root: JSONObject): JSONObject {
+    /** Runs [body] holding the workspace the root names, so a removal waits for it. */
+    private inline fun <T> held(root: JSONObject, crossinline body: () -> T): T {
+        val workspaceId = root.optString("workspace_id")
+        return if (RuntimeJson.uuid(workspaceId)) workspaces.holding(workspaceId) { body() } else body()
+    }
+
+    fun prepare(name: String, arguments: JSONObject, root: JSONObject): JSONObject =
+        held(root) { prepareHeld(name, arguments, root) }
+
+    private fun prepareHeld(name: String, arguments: JSONObject, root: JSONObject): JSONObject {
         val opened = open(name, root)
         return when (name) {
             "git_status" -> {
@@ -96,7 +105,10 @@ internal class AndroidAgentGitToolExecutor(
         }
     }
 
-    fun execute(name: String, arguments: JSONObject, root: JSONObject, precondition: JSONObject?): JSONObject {
+    fun execute(name: String, arguments: JSONObject, root: JSONObject, precondition: JSONObject?): JSONObject =
+        held(root) { executeHeld(name, arguments, root, precondition) }
+
+    private fun executeHeld(name: String, arguments: JSONObject, root: JSONObject, precondition: JSONObject?): JSONObject {
         if (precondition == null || precondition.opt("kind") != name) throw refused(INVALID)
         val opened = open(name, root)
         return when (name) {
@@ -221,7 +233,10 @@ internal class AndroidAgentGitToolExecutor(
     }
 
     /** What recovery can tell about a commit that may or may not have landed. */
-    fun recover(name: String, arguments: JSONObject, root: JSONObject, precondition: JSONObject?): JSONObject {
+    fun recover(name: String, arguments: JSONObject, root: JSONObject, precondition: JSONObject?): JSONObject =
+        held(root) { recoverHeld(name, arguments, root, precondition) }
+
+    private fun recoverHeld(name: String, arguments: JSONObject, root: JSONObject, precondition: JSONObject?): JSONObject {
         if (precondition == null || (name != "git_commit" && name != "git_push")) return status("not_dispatched")
         val opened = open(name, root)
         if (name == "git_push") {

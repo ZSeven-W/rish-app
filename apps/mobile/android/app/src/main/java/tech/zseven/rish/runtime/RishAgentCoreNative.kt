@@ -279,6 +279,10 @@ internal object RishAgentCoreNative {
     fun workspaceAuthority(request: JSONObject): JSONObject? =
         workspaceReply(request) { workspaceAuthorityReduceNative(it) }
 
+    /** What a clearance operation and its receipt look like, and whether one authorises the other. */
+    fun workspaceClearance(request: JSONObject): JSONObject? =
+        workspaceReply(request) { workspaceClearanceReduce(it) }
+
     fun workspaceDirectoryName(request: JSONObject): JSONObject? =
         workspaceReply(request) { workspaceDirectoryNameReduceNative(it) }
 

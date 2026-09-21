@@ -41,7 +41,13 @@ class LocalWorkspacesModule(private val react: ReactApplicationContext) :
      * about its runtime, and the same answer.
      */
     override fun getConstants(): MutableMap<String, Any> =
-        mutableMapOf("implemented" to RishAgentCoreNative.available)
+        mutableMapOf(
+            "implemented" to RishAgentCoreNative.available,
+            // Forget and delete are real here; JavaScript gates the actions
+            // on this rather than finding out after it has already cleared
+            // the workspace from the session.
+            "removal" to RishAgentCoreNative.available,
+        )
 
     override fun getName(): String = "LocalWorkspaces"
 
@@ -90,6 +96,9 @@ class LocalWorkspacesModule(private val react: ReactApplicationContext) :
 
     @ReactMethod
     fun list(promise: Promise) = work(promise) {
+        // A removal an earlier launch did not finish is finished before the
+        // listing, so what is shown is what is there.
+        runtime.workspaceRemoval.recover()
         val workspaces = JSONArray()
         // `list` already leaves out every record it cannot still prove, so a
         // descriptor missing here is a record that stopped being provable
@@ -152,8 +161,11 @@ class LocalWorkspacesModule(private val react: ReactApplicationContext) :
     @ReactMethod
     fun queryOperation(request: ReadableMap?, promise: Promise) = work(promise) {
         val fields = request(request, "schema_version", "operation_id")
-        registry.queryOperation(text(fields, "operation_id"))
-            ?: throw AndroidWorkspaceRegistry.Refused(NOT_FOUND)
+        // The shape JavaScript parses: a receipt under `committed`, or
+        // `not_started` when the operation never happened here.
+        val receipt = registry.queryOperation(text(fields, "operation_id"))
+        if (receipt == null) JSONObject().put("schema_version", 1).put("status", "not_started")
+        else JSONObject().put("schema_version", 1).put("status", "committed").put("receipt", receipt)
     }
 
     // --- not yet on Android ------------------------------------------------
@@ -185,19 +197,52 @@ class LocalWorkspacesModule(private val react: ReactApplicationContext) :
     @ReactMethod
     fun bootstrapLegacyProject(request: ReadableMap?, promise: Promise) = refuseUnbuilt(promise)
 
-    // Forgetting a workspace and deleting its content are a clearance the core
-    // already rules on; the host half -- removing a directory and proving it
-    // is gone -- is not written, and a delete that reported success without
-    // doing it would be the worst possible lie here.
+    // --- forgetting and deleting -------------------------------------------
+    //
+    // Both are cleared by the session store first (SessionSnapshots
+    // `persistSessionWithWorkspaceClearance`) and carried out by
+    // AndroidWorkspaceRemoval under that clearance. The shapes are iOS's
+    // exactly; the answer says forgotten or deleted only once it is true.
 
     @ReactMethod
-    fun forget(request: ReadableMap?, promise: Promise) = refuseUnbuilt(promise)
+    fun forget(request: ReadableMap?, promise: Promise) = work(promise) {
+        val fields = request(
+            request, "schema_version", "workspace_id", "expected_binding_revision",
+            "operation_id", "clearance_receipt_id",
+        )
+        removalFields(fields)
+        runtime.workspaceRemoval.forget(fields)
+    }
 
     @ReactMethod
-    fun prepareDeleteOwnedContent(request: ReadableMap?, promise: Promise) = refuseUnbuilt(promise)
+    fun prepareDeleteOwnedContent(request: ReadableMap?, promise: Promise) = work(promise) {
+        val fields = request(
+            request, "schema_version", "workspace_id", "expected_binding_revision", "clearance_receipt_id",
+        )
+        removalFields(fields)
+        runtime.workspaceRemoval.prepareDelete(fields)
+    }
 
     @ReactMethod
-    fun deleteOwnedContent(request: ReadableMap?, promise: Promise) = refuseUnbuilt(promise)
+    fun deleteOwnedContent(request: ReadableMap?, promise: Promise) = work(promise) {
+        val fields = request(
+            request, "schema_version", "workspace_id", "expected_binding_revision",
+            "operation_id", "clearance_receipt_id", "confirmation_id",
+        )
+        removalFields(fields)
+        if (!RuntimeJson.uuid(text(fields, "confirmation_id"))) throw AndroidWorkspaceRegistry.Refused(INVALID)
+        runtime.workspaceRemoval.deleteOwned(fields)
+    }
+
+    /** The ids a removal names are canonical uuids and the revision counts from one. */
+    private fun removalFields(fields: JSONObject) {
+        for (key in listOf("workspace_id", "clearance_receipt_id", "operation_id")) {
+            val value = fields.opt(key) ?: continue
+            if (value !is String || !RuntimeJson.uuid(value)) throw AndroidWorkspaceRegistry.Refused(INVALID)
+        }
+        val revision = fields.opt("expected_binding_revision")
+        if (revision !is Int || revision < 1) throw AndroidWorkspaceRegistry.Refused(INVALID)
+    }
 
     private fun refuseUnbuilt(promise: Promise) =
         RishUnavailable.reject("LocalWorkspaces", UNAVAILABLE, promise)

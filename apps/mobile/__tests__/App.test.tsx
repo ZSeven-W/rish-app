@@ -199,6 +199,7 @@ jest.mock('../src/native/LocalMirrors', () => ({
 jest.mock('../src/native/LocalWorkspaces', () => ({
   LocalWorkspaces: {
     isAvailable: jest.fn(),
+    isRemovalAvailable: jest.fn(() => false),
     list: jest.fn(),
     create: jest.fn(),
     bootstrapLegacyProject: jest.fn(),

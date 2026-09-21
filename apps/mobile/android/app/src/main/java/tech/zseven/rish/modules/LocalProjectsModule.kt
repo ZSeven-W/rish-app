@@ -14,6 +14,7 @@ import tech.zseven.rish.runtime.AndroidRuntimeState
 import tech.zseven.rish.runtime.AndroidWorkspaceProjects
 import tech.zseven.rish.runtime.RishAgentCoreNative
 import tech.zseven.rish.runtime.RishLibgit2Native
+import tech.zseven.rish.runtime.AndroidWorkspaceRegistry
 import tech.zseven.rish.runtime.RuntimeJson
 
 /**
@@ -104,7 +105,15 @@ class LocalProjectsModule(private val react: ReactApplicationContext) :
         body: (JSONObject?) -> JSONObject,
     ) {
         val captured = captured(request, promise) ?: return
-        executor.execute { settle(operation, promise) { body(captured) } }
+        // Work on a root holds its workspace for as long as it runs, so a
+        // removal waits for it rather than renaming the directory under it.
+        val workspaceId = captured.optJSONObject("root")?.optString("workspace_id")?.takeIf { RuntimeJson.uuid(it) }
+        executor.execute {
+            settle(operation, promise) {
+                if (workspaceId == null) body(captured)
+                else runtime.workspaces.holding(workspaceId) { body(captured) }
+            }
+        }
     }
 
     /** The request as JSON, or null after the promise has been rejected for it. */
@@ -127,6 +136,10 @@ class LocalProjectsModule(private val react: ReactApplicationContext) :
         } catch (refused: AndroidWorkspaceProjects.Refused) {
             android.util.Log.w(TAG, "$operation refused: ${refused.number}")
             promise.reject(refused.code, refused.code)
+        } catch (busy: AndroidWorkspaceRegistry.Refused) {
+            // The workspace is being removed: busy, as iOS reports a held lease.
+            android.util.Log.w(TAG, "$operation refused: ${busy.code}")
+            promise.reject("E_PROJECT_BUSY", "E_PROJECT_BUSY")
         } catch (failure: Throwable) {
             android.util.Log.w(TAG, "$operation could not be answered", failure)
             promise.reject("E_PROJECT_NATIVE", "E_PROJECT_NATIVE")

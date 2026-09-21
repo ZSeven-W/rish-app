@@ -7,7 +7,7 @@ import tech.zseven.rish.runtime.AndroidRuntimeState
 import tech.zseven.rish.runtime.RuntimeJson
 import org.json.JSONObject
 
-/** Opaque chat snapshots with atomic CAS. Workspace authority APIs remain unavailable. */
+/** Opaque chat snapshots with atomic CAS, and the workspace clearance the same store issues. */
 class SessionSnapshotsModule(react: ReactApplicationContext) : ReactContextBaseJavaModule(react) {
     private val runtime = AndroidRuntimeState.get(react)
     override fun getName() = "SessionSnapshots"
@@ -43,6 +43,17 @@ class SessionSnapshotsModule(react: ReactApplicationContext) : ReactContextBaseJ
     }
     private companion object { const val TAG = "RishSession" }
 
-    @ReactMethod fun persistSessionWithWorkspaceClearance(request: ReadableMap?, promise: Promise) = RishUnavailable.reject("SessionSnapshots", "E_SESSION_NATIVE", promise)
-    @ReactMethod fun queryWorkspaceClearance(request: ReadableMap?, promise: Promise) = RishUnavailable.reject("SessionSnapshots", "E_SESSION_NATIVE", promise)
+    @ReactMethod fun persistSessionWithWorkspaceClearance(request: ReadableMap?, promise: Promise) {
+        try {
+            val captured = capture(request)
+            run(promise) { runtime.sessions.persistWithClearance(JSONObject(captured), runtime.workspaceRemoval) }
+        } catch (failure: Exception) {
+            Log.w(TAG, "session clearance request refused", failure)
+            promise.reject("E_SESSION_NATIVE", "Invalid session request")
+        }
+    }
+    @ReactMethod fun queryWorkspaceClearance(request: ReadableMap?, promise: Promise) {
+        try { val captured = capture(request); run(promise) { runtime.sessions.queryClearance(JSONObject(captured)) } }
+        catch (_: Exception) { promise.reject("E_SESSION_NATIVE", "Invalid session request") }
+    }
 }

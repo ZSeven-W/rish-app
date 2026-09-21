@@ -24,6 +24,7 @@ const reasons: Readonly<Record<string, TranslationKey>> = {
   E_WORKSPACE_BUSY: 'recovery.busy',
   E_COMPLETION_BUSY: 'recovery.busy',
   E_WORKSPACE_CLEARANCE_UNAVAILABLE: 'recovery.clearance',
+  E_WORKSPACE_REMOVAL_PENDING: 'workspaces.removalPending',
   E_COMPLETION_TIMEOUT: 'recovery.timeout',
   E_COMPLETION_LENGTH: 'recovery.outputLimit',
   E_COMPLETION_TRANSPORT: 'recovery.network',

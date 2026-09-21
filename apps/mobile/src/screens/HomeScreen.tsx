@@ -202,6 +202,12 @@ import {
   WorkspaceBindingController,
 } from '../workspaces/WorkspaceBindingController';
 import {
+  WorkspaceRemovalCoordinator,
+  type WorkspaceRemovalAction,
+  type WorkspaceRemovalOutcome,
+  type WorkspaceRemovalTarget,
+} from '../workspaces/WorkspaceRemoval';
+import {
   assertWorkspaceRootRefV1,
   type WorkspaceRootRefV1,
 } from '../native/WorkspaceRoot';
@@ -874,6 +880,9 @@ export function HomeScreen({
   const retryActionInFlight = useRef(false);
   const started = useRef(false);
   const nativeAvailable = useMemo(() => LocalRuntime.isAvailable(), []);
+  // Forget and delete are only offered where native can carry them out;
+  // elsewhere the picker keeps its inert legacy button.
+  const workspaceRemovalAvailable = useMemo(() => LocalWorkspaces.isRemovalAvailable(), []);
   const [sessionSnapshotsAvailable, setSessionSnapshotsAvailable] = useState<
     boolean | null
   >(
@@ -1405,6 +1414,16 @@ export function HomeScreen({
     [installSessionAuthority, sessionPersistence],
   );
 
+  /** Runs one native session write behind every write already queued. */
+  const enqueueSessionWrite = useCallback(<T,>(work: () => Promise<T>): Promise<T> => {
+    const operation = sessionWriteTailRef.current.then(work, work);
+    sessionWriteTailRef.current = operation.then(
+      () => undefined,
+      () => undefined,
+    );
+    return operation;
+  }, []);
+
   const persistSessionCandidate = useCallback(
     (
       candidateJSON: string,
@@ -1599,6 +1618,57 @@ export function HomeScreen({
 
   const persistCurrentRef = useRef(persistCurrent);
   persistCurrentRef.current = persistCurrent;
+
+  // Forgetting and deleting workspaces: one coordinator owns the clearance,
+  // the native call and the acknowledgement, and the launch-time drain of
+  // requests an earlier launch left in the outbox.
+  const translateRef = useRef(t);
+  translateRef.current = t;
+  const workspaceRemoval = useMemo(
+    () =>
+      new WorkspaceRemovalCoordinator({
+        store,
+        serialize: () => synchronizePreferencesIntoChatState(),
+        enqueueSessionWrite,
+        persist: async () => (await persistCurrentRef.current()).status === 'committed',
+        createOperationId: () => LocalRuntime.createCompletionRequestId(),
+        confirmDelete: (workspace: WorkspaceRemovalTarget) =>
+          new Promise<boolean>(resolve => {
+            const translate = translateRef.current;
+            Alert.alert(
+              translate('workspaces.deleteTitle'),
+              translate('workspaces.deleteBody', { name: workspace.display_name }),
+              [
+                { text: translate('common.cancel'), style: 'cancel', onPress: () => resolve(false) },
+                { text: translate('common.delete'), style: 'destructive', onPress: () => resolve(true) },
+              ],
+              { cancelable: true, onDismiss: () => resolve(false) },
+            );
+          }),
+      }),
+    [enqueueSessionWrite, store, synchronizePreferencesIntoChatState],
+  );
+
+  const removeWorkspace = useCallback(
+    async (
+      workspace: WorkspaceRemovalTarget,
+      action: WorkspaceRemovalAction,
+    ): Promise<WorkspaceRemovalOutcome> => {
+      if (!nativeAvailable || !sessionSnapshotsAvailableRef.current || !sessionProjectionReady.current) {
+        return { status: 'unavailable' };
+      }
+      const outcome = await workspaceRemoval.remove(workspace, action);
+      if (outcome.status === 'forgotten' || outcome.status === 'deleted') {
+        setWorkspaceDescriptors(previous => {
+          const { [workspace.workspace_id]: _removed, ...rest } = previous;
+          return rest;
+        });
+        setWorkspaceRefreshToken(token => token + 1);
+      }
+      return outcome;
+    },
+    [nativeAvailable, workspaceRemoval],
+  );
 
   // One UI broker is shared by the durable controller and the composers.
   // The adapter below projects only safe call metadata; raw arguments and
@@ -2128,11 +2198,13 @@ export function HomeScreen({
       }
       if (store.getSessionAuthority() !== null) {
         drainInterruptedAgentCleanup().catch(() => undefined);
+        workspaceRemoval.drain().catch(() => undefined);
       }
       return true;
     },
     [
       drainInterruptedAgentCleanup,
+      workspaceRemoval,
       ensureConversation,
       installSessionAuthority,
       preferencesStore,
@@ -6759,6 +6831,7 @@ export function HomeScreen({
         visible={workspaceSheetVisible}
         onClose={closeWorkspacePicker}
         onSelect={workspacePickerOnSelect}
+        onRemove={workspaceRemovalAvailable ? removeWorkspace : undefined}
       />
       <MirrorSettingsSheet
         visible={mirrorsVisible}

@@ -14,6 +14,7 @@ import tech.zseven.rish.runtime.AndroidProjectContextSnapshots
 import tech.zseven.rish.runtime.AndroidRuntimeState
 import tech.zseven.rish.runtime.RishAgentCoreNative
 import tech.zseven.rish.runtime.RishLibgit2Native
+import tech.zseven.rish.runtime.AndroidWorkspaceRegistry
 import tech.zseven.rish.runtime.RuntimeJson
 
 /**
@@ -119,9 +120,15 @@ class LocalProjectContextModule(private val react: ReactApplicationContext) :
             promise.reject("E_CONTEXT_REQUEST_INVALID", "E_CONTEXT_REQUEST_INVALID")
             return
         }
+        val workspaceId = captured?.optJSONObject("root")?.optString("workspace_id")?.takeIf { RuntimeJson.uuid(it) }
         runtime.io.execute {
             try {
-                promise.resolve(Arguments.makeNativeMap(RuntimeJson.map(body(captured))))
+                val answered = if (workspaceId == null) body(captured)
+                    else runtime.workspaces.holding(workspaceId) { body(captured) }
+                promise.resolve(Arguments.makeNativeMap(RuntimeJson.map(answered)))
+            } catch (busy: AndroidWorkspaceRegistry.Refused) {
+                Log.w(TAG, "$operation refused: ${busy.code}")
+                promise.reject(busy.code, busy.code)
             } catch (refused: AndroidProjectContextSnapshots.Refused) {
                 // The code and nothing else: a reason could name a path.
                 Log.w(TAG, "$operation refused: ${refused.code}")

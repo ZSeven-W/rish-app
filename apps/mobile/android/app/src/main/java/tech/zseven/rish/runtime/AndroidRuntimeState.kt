@@ -21,6 +21,9 @@ internal class AndroidRuntimeState private constructor(val app: Application) {
     /// the registry, paired with the workspace root as its working tree.
     val workspaceProjects = AndroidWorkspaceProjects(workspaces)
     val roots = AndroidAgentRootResolver(workspaces, workspaceProjects)
+    /// Forgetting a workspace and deleting its owned content, cleared
+    /// against the committed session and journaled on disk.
+    val workspaceRemoval = AndroidWorkspaceRemoval(sessions, workspaces, workspaceProjects)
     val projectContext = AndroidProjectContextService(workspaceProjects, roots)
     /// Git HTTPS credentials by (project, host), and the roots OpenSSL trusts
     /// when a push leaves the device.

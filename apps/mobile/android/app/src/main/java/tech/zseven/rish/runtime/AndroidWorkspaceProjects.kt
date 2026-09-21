@@ -97,6 +97,39 @@ internal class AndroidWorkspaceProjects(
         remember(operationId, root, initialize(root, operationId))
     }
 
+    // --- what a removal needs to know ------------------------------------
+
+    /** A workspace's project relation, as a clearance sees it. */
+    enum class Relation { NONE, PUBLISHED, IN_FLIGHT }
+
+    /**
+     * Whether this workspace has a published project, an attach in flight, or
+     * neither. Anything under its gitdirs that is not a published project is
+     * treated as in flight: unknown entries fail closed, as on iOS.
+     */
+    fun relation(workspaceId: String): Relation = synchronized(lock) {
+        reconcileAtStartup()
+        val entries = File(gitdirs, workspaceId).listFiles() ?: return Relation.NONE
+        if (entries.isEmpty()) return Relation.NONE
+        if (entries.any { it.name.startsWith(STAGING_PREFIX) }) return Relation.IN_FLIGHT
+        if (entries.all { RuntimeJson.uuid(it.name) && File(it, BINDING_NAME).isFile }) return Relation.PUBLISHED
+        Relation.IN_FLIGHT
+    }
+
+    /**
+     * Runs [body] with no attach able to start, and afterwards drops what
+     * this class remembered about the workspace: an attach result cached for
+     * a root that no longer exists is not an answer for the next caller.
+     */
+    fun <T> excluding(workspaceId: String, body: () -> T): T = synchronized(lock) {
+        reconcileAtStartup()
+        try {
+            body()
+        } finally {
+            attachResults.entries.removeAll { it.value.first.optString("workspace_id") == workspaceId }
+        }
+    }
+
     // --- the layout -------------------------------------------------------
 
     /** The private gitdir of one project: `workspace-gitdirs/<workspace>/<project>`. */

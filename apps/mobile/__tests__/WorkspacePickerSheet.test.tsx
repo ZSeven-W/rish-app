@@ -116,6 +116,7 @@ async function renderSheet(
       operation_id: string;
       clearance_receipt_id: string;
     };
+    onRemove?: jest.Mock;
   } = {},
 ): Promise<Renderer> {
   let renderer: Renderer | undefined;
@@ -128,6 +129,7 @@ async function renderSheet(
           onClose={props.onClose ?? jest.fn()}
           onSelect={props.onSelect ?? jest.fn()}
           forgetAuthorization={props.forgetAuthorization}
+          onRemove={props.onRemove}
         />,
         props.locale,
       ),
@@ -735,4 +737,69 @@ test('onSelect invalidates an in-flight picker before owner handoff', async () =
 
   expect(onSelect).toHaveBeenCalledTimes(1);
   expect(onSelect).toHaveBeenCalledWith(WORKSPACE_A);
+});
+
+test('with a removal coordinator an owned workspace is deleted, a granted folder forgotten', async () => {
+  mockNativeLocalWorkspaces.list
+    .mockResolvedValueOnce({
+      schema_version: 1,
+      workspaces: [
+        descriptor(WORKSPACE_A, 'Alpha'),
+        { ...descriptor(WORKSPACE_B, 'Beta'), origin: 'granted_folder' as const },
+      ],
+    })
+    .mockResolvedValue({ schema_version: 1, workspaces: [] });
+  const onRemove = jest.fn().mockResolvedValue({ status: 'deleted' });
+  const renderer = await renderSheet({ onRemove });
+
+  expect(() => actionByLabel(renderer.root, 'Forget Alpha')).toThrow();
+  await act(async () => {
+    actionByLabel(renderer.root, 'Delete Alpha').props.onPress();
+  });
+  expect(onRemove).toHaveBeenCalledWith(
+    expect.objectContaining({ workspace_id: WORKSPACE_A }),
+    'delete_owned',
+  );
+  expect(mockNativeLocalWorkspaces.forget).not.toHaveBeenCalled();
+  expect(mockNativeLocalWorkspaces.deleteOwnedContent).not.toHaveBeenCalled();
+  // Reloaded after the removal.
+  expect(mockNativeLocalWorkspaces.list).toHaveBeenCalledTimes(2);
+
+  onRemove.mockResolvedValue({ status: 'forgotten' });
+  mockNativeLocalWorkspaces.list.mockResolvedValue({
+    schema_version: 1,
+    workspaces: [{ ...descriptor(WORKSPACE_B, 'Beta'), origin: 'granted_folder' as const }],
+  });
+  const second = await renderSheet({ onRemove });
+  expect(() => actionByLabel(second.root, 'Delete Beta')).toThrow();
+  await act(async () => {
+    actionByLabel(second.root, 'Forget Beta').props.onPress();
+  });
+  expect(onRemove).toHaveBeenLastCalledWith(
+    expect.objectContaining({ workspace_id: WORKSPACE_B }),
+    'forget',
+  );
+});
+
+test('a blocked or retired removal is shown, a cancelled one is not', async () => {
+  mockNativeLocalWorkspaces.list.mockResolvedValue({
+    schema_version: 1,
+    workspaces: [descriptor(WORKSPACE_A, 'Alpha')],
+  });
+  const onRemove = jest.fn().mockResolvedValue({ status: 'blocked' });
+  const renderer = await renderSheet({ onRemove });
+  await act(async () => {
+    actionByLabel(renderer.root, 'Delete Alpha').props.onPress();
+    await Promise.resolve();
+  });
+  expect(renderer.root.findByProps({ accessibilityRole: 'alert' })).toBeDefined();
+  expect(mockNativeLocalWorkspaces.list).toHaveBeenCalledTimes(1);
+
+  onRemove.mockResolvedValue({ status: 'cancelled' });
+  const cancelled = await renderSheet({ onRemove });
+  await act(async () => {
+    actionByLabel(cancelled.root, 'Delete Alpha').props.onPress();
+    await Promise.resolve();
+  });
+  expect(cancelled.root.findAllByProps({ accessibilityRole: 'alert' })).toHaveLength(0);
 });

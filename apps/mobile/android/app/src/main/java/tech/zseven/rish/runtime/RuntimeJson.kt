@@ -5,7 +5,8 @@ import org.json.JSONObject
 import java.security.MessageDigest
 
 internal object RuntimeJson {
-    fun now(): String = java.text.SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss.SSS'Z'", java.util.Locale.US).apply { timeZone = java.util.TimeZone.getTimeZone("UTC") }.format(java.util.Date())
+    fun now(): String = at(System.currentTimeMillis())
+    fun at(epochMs: Long): String = java.text.SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss.SSS'Z'", java.util.Locale.US).apply { timeZone = java.util.TimeZone.getTimeZone("UTC") }.format(java.util.Date(epochMs))
 
     fun canonical(value: Any?): String = when (value) {
         null, JSONObject.NULL -> "null"

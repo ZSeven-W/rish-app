@@ -42,6 +42,15 @@ internal class AndroidWorkspaceRegistry(val root: File) {
         private const val REGISTRY_NAME = "registry.json"
         private const val RECEIPTS_NAME = "receipts.json"
         private const val BINDINGS_DIR = "bindings"
+        private const val REMOVALS_DIR = "removals"
+        private const val JOURNAL_SUFFIX = ".journal.json"
+        private const val CONTENT_SUFFIX = "-content"
+        private const val GITDIRS_SUFFIX = "-gitdirs"
+        private const val PHASE_PREPARED = "prepared"
+        private const val PHASE_QUARANTINED = "quarantined"
+        private const val PHASE_PUBLISHED = "published"
+        private const val HOLD_DRAIN_MS = 3000L
+        private val OWNED_ORIGINS = setOf("rish_created", "imported")
 
         /**
          * The empty registry. Generation 0 with no records is what a fresh
@@ -90,6 +99,7 @@ internal class AndroidWorkspaceRegistry(val root: File) {
     private val registryFile = File(root, REGISTRY_NAME)
     private val receiptsFile = File(root, RECEIPTS_NAME)
     private val bindings = File(root, BINDINGS_DIR)
+    private val removals = File(root, REMOVALS_DIR)
 
     private val lock = Any()
 
@@ -217,7 +227,12 @@ internal class AndroidWorkspaceRegistry(val root: File) {
         // there. A retry then finds no receipt and refuses on the directory
         // that already exists, which is a visible failure instead of a silent
         // second workspace.
-        writeReceipt(operationId, record, generation, published, displayName, now)
+        val digest = RishAgentCoreNative.workspaceJournal(
+            JSONObject().put("op", "create_request_sha256")
+                .put("display_name", displayName),
+        )?.optString("digest")
+        if (digest.isNullOrEmpty()) throw Refused("E_WORKSPACE_PERSISTENCE")
+        writeReceipt(operationId, workspaceId, 1, "create", "committed", generation, published, digest, now)
         record
     }
 
@@ -320,32 +335,30 @@ internal class AndroidWorkspaceRegistry(val root: File) {
 
     private fun writeReceipt(
         operationId: String,
-        record: JSONObject,
+        workspaceId: String,
+        revision: Int,
+        operation: String,
+        outcome: String,
         generation: Int,
         published: JSONObject,
-        displayName: String,
+        requestDigest: String,
         now: String,
     ) {
         val store = loadReceipts()
-        val digest = RishAgentCoreNative.workspaceJournal(
-            JSONObject().put("op", "create_request_sha256")
-                .put("display_name", displayName),
-        )?.optString("digest")
-        if (digest.isNullOrEmpty()) throw Refused("E_WORKSPACE_PERSISTENCE")
         val canonical = RishAgentCoreNative.canonical(published.toString())
             ?: throw Refused("E_WORKSPACE_PERSISTENCE")
         val receipt = JSONObject()
             .put("schema_version", 1)
             .put("operation_id", operationId)
-            .put("workspace_id", record.getString("workspace_id"))
-            .put("operation", "create")
-            .put("binding_revision", record.getInt("binding_revision"))
+            .put("workspace_id", workspaceId)
+            .put("operation", operation)
+            .put("binding_revision", revision)
             // The generation and digest of the registry this committed
             // *against*, so a receipt describes one state of the store.
             .put("registry_generation", generation)
             .put("registry_sha256", sha256(canonical.toByteArray(Charsets.UTF_8)))
-            .put("request_sha256", digest)
-            .put("outcome", "committed")
+            .put("request_sha256", requestDigest)
+            .put("outcome", outcome)
             .put("committed_at", now)
         val reply = RishAgentCoreNative.workspaceReceipt(
             JSONObject().put("op", "receipt_shape").put("receipt", receipt),
@@ -363,6 +376,403 @@ internal class AndroidWorkspaceRegistry(val root: File) {
             JSONObject().put("schema_version", 1).put("receipts", receipts),
         )
     }
+
+    /** Refuses now, before anything moves, if no receipt could be written afterwards. */
+    private fun reserveReceiptRoom() {
+        val room = RishAgentCoreNative.workspaceReceipt(
+            JSONObject().put("op", "has_room")
+                .put("count", loadReceipts().getJSONArray("receipts").length()),
+        )
+        if (room?.optBoolean("has_room") != true) throw Refused("E_WORKSPACE_BUSY")
+    }
+
+    /** Rewrites one receipt's outcome in place; the store keeps its order. */
+    private fun settleReceipt(operationId: String, outcome: String, now: String) {
+        val store = loadReceipts()
+        val receipts = store.getJSONArray("receipts")
+        val rewritten = JSONArray()
+        var found = false
+        for (index in 0 until receipts.length()) {
+            val receipt = receipts.getJSONObject(index)
+            if (receipt.optString("operation_id") == operationId) {
+                found = true
+                val settled = JSONObject(receipt.toString()).put("outcome", outcome).put("committed_at", now)
+                val reply = RishAgentCoreNative.workspaceReceipt(
+                    JSONObject().put("op", "receipt_shape").put("receipt", settled),
+                )
+                if (reply?.optBoolean("valid") != true) throw Refused("E_WORKSPACE_PERSISTENCE")
+                rewritten.put(settled)
+            } else {
+                rewritten.put(receipt)
+            }
+        }
+        if (!found) throw Refused("E_WORKSPACE_PERSISTENCE")
+        writeJson(receiptsFile, JSONObject().put("schema_version", 1).put("receipts", rewritten))
+    }
+
+    // --- holds -----------------------------------------------------------------
+    //
+    // Work that uses a root holds the workspace while it runs -- a git
+    // operation, a file tool, a context capture, a clone. Removing a
+    // workspace waits for its holds to drain and refuses new ones for as long
+    // as it runs, so no operation ever finds its directory renamed from under
+    // it. The wait is bounded: a hold that will not drain is a busy workspace,
+    // not one to take apart anyway.
+
+    private val holdLock = Object()
+    private val holds = HashMap<String, Int>()
+    private val removing = HashSet<String>()
+
+    fun <T> holding(workspaceId: String, body: () -> T): T {
+        synchronized(holdLock) {
+            if (workspaceId in removing) throw Refused("E_WORKSPACE_BUSY")
+            holds[workspaceId] = (holds[workspaceId] ?: 0) + 1
+        }
+        try {
+            return body()
+        } finally {
+            synchronized(holdLock) {
+                val left = (holds[workspaceId] ?: 1) - 1
+                if (left <= 0) holds.remove(workspaceId) else holds[workspaceId] = left
+                holdLock.notifyAll()
+            }
+        }
+    }
+
+    /** Runs [body] with the workspace closed to new work and none in flight, or refuses busy. */
+    fun <T> removing(workspaceId: String, body: () -> T): T {
+        synchronized(holdLock) {
+            if (workspaceId in removing) throw Refused("E_WORKSPACE_BUSY")
+            removing.add(workspaceId)
+            val deadline = System.currentTimeMillis() + HOLD_DRAIN_MS
+            while ((holds[workspaceId] ?: 0) > 0) {
+                val left = deadline - System.currentTimeMillis()
+                if (left <= 0) {
+                    removing.remove(workspaceId)
+                    throw Refused("E_WORKSPACE_BUSY")
+                }
+                holdLock.wait(left)
+            }
+        }
+        try {
+            return body()
+        } finally {
+            synchronized(holdLock) { removing.remove(workspaceId) }
+        }
+    }
+
+    // --- forgetting and deleting -------------------------------------------------
+    //
+    // Forgetting removes the registration and its authority and leaves the
+    // directory where it is. Deleting removes the directory too, and the
+    // private gitdirs beside the registry that belong to it, through a
+    // journal written before anything moves: every step after it -- the two
+    // renames into quarantine, the authority, the registry, the receipt, the
+    // purge -- is a crash boundary the journal lets the next launch cross.
+    //
+    // Whether either may happen at all is not decided here. The clearance --
+    // that no conversation still names the workspace -- is the session
+    // store's, and the caller holds it while this runs.
+
+    /**
+     * Whether a workspace is one a clearance could be issued for: registered
+     * at this revision, owned, provable, and not already being removed. What
+     * iOS proves in `validateWorkspaceForClearanceId:`.
+     */
+    fun clearable(workspaceId: String, revision: Int): Boolean = synchronized(lock) {
+        val record = recordFor(loadRegistry(), workspaceId) ?: return false
+        if (record.optInt("binding_revision") != revision || !recordValid(record)) return false
+        if (record.optString("root_locator_kind") != "documents_owned" ||
+            record.optString("origin") !in OWNED_ORIGINS
+        ) {
+            return false
+        }
+        if (authorityFor(record) == null) return false
+        synchronized(holdLock) { workspaceId !in removing }
+    }
+
+    /** Whether a delete's intent is journaled and not yet finished. */
+    fun removalJournaled(operationId: String): Boolean = synchronized(lock) {
+        RuntimeJson.uuid(operationId) && journalFile(operationId).isFile
+    }
+
+    /** The removal receipt an operation already earned, or null. */
+    fun removalReceipt(operationId: String): JSONObject? = synchronized(lock) {
+        receiptFor(loadReceipts(), operationId)?.takeIf {
+            it.optString("operation") == "forget" || it.optString("operation") == "delete_owned"
+        }
+    }
+
+    /**
+     * `forget`: the registry without this record, the authority gone, a
+     * receipt. The directory and any private gitdir stay exactly where they
+     * are: forgetting is about the registration, never the content.
+     */
+    fun forget(
+        workspaceId: String,
+        expectedRevision: Int,
+        operationId: String,
+        clearanceReceiptId: String,
+        now: String = RuntimeJson.now(),
+    ): JSONObject = synchronized(lock) {
+        if (!RishAgentCoreNative.available) throw Refused("E_WORKSPACE_UNAVAILABLE")
+        val digest = removalDigest("forget", workspaceId, expectedRevision, clearanceReceiptId)
+        replayedRemoval(operationId, "forget", workspaceId, digest)?.let { return@synchronized forgotten() }
+        val registry = loadRegistry()
+        val record = recordFor(registry, workspaceId) ?: throw Refused("E_WORKSPACE_NOT_FOUND")
+        if (record.optInt("binding_revision") != expectedRevision) throw Refused("E_WORKSPACE_STALE")
+        reserveReceiptRoom()
+        val (generation, published) = publishWithout(registry, workspaceId)
+        authorityFile(workspaceId, expectedRevision).delete()
+        // The receipt is written last, as for create: a crash before it leaves
+        // a registry without the record and no receipt, and a retry finds
+        // nothing to forget -- a visible refusal, never a receipt for a
+        // registration that is still there.
+        writeReceipt(operationId, workspaceId, expectedRevision, "forget", "committed", generation, published, digest, now)
+        forgotten()
+    }
+
+    /**
+     * `deleteOwnedContent`, journaled. Returns only once the content is gone:
+     * a delete that reported success with the files still on disk would be
+     * the worst possible lie here. A crash part-way leaves the journal, and
+     * [sweepRemovals] or a retry of the same operation finishes it.
+     */
+    fun deleteOwned(
+        workspaceId: String,
+        expectedRevision: Int,
+        operationId: String,
+        clearanceReceiptId: String,
+        expectedRegistryGeneration: Int?,
+        now: String = RuntimeJson.now(),
+    ): JSONObject = synchronized(lock) {
+        if (!RishAgentCoreNative.available) throw Refused("E_WORKSPACE_UNAVAILABLE")
+        val digest = removalDigest("delete_owned", workspaceId, expectedRevision, clearanceReceiptId)
+        replayedRemoval(operationId, "delete_owned", workspaceId, digest)?.let { receipt ->
+            // Committed means purged. Pending means the purge was interrupted,
+            // and answering "deleted" now would have to be earned first.
+            if (receipt.optString("outcome") == "purge_pending") {
+                val journal = readJson(journalFile(operationId)) ?: throw Refused("E_WORKSPACE_PERSISTENCE")
+                resumeRemoval(journal, now)
+            }
+            return@synchronized deleted()
+        }
+        // An interrupted journal for this operation is this operation, resumed.
+        readJson(journalFile(operationId))?.let { journal ->
+            if (journal.optString("workspace_id") != workspaceId || journal.optString("request_sha256") != digest) {
+                throw Refused("E_WORKSPACE_CONFLICT")
+            }
+            resumeRemoval(journal, now)
+            return@synchronized deleted()
+        }
+        val registry = loadRegistry()
+        val record = recordFor(registry, workspaceId) ?: throw Refused("E_WORKSPACE_NOT_FOUND")
+        if (record.optInt("binding_revision") != expectedRevision) throw Refused("E_WORKSPACE_STALE")
+        if (expectedRegistryGeneration != null && registry.getInt("generation") != expectedRegistryGeneration) {
+            throw Refused("E_WORKSPACE_STALE")
+        }
+        if (record.optString("root_locator_kind") != "documents_owned" ||
+            record.optString("origin") !in OWNED_ORIGINS
+        ) {
+            throw Refused("E_WORKSPACE_CONFLICT")
+        }
+        if (authorityFor(record) == null) throw Refused("E_WORKSPACE_CONFLICT")
+        reserveReceiptRoom()
+        val directoryName = record.getString("owned_directory_name")
+        val content = identityOf(File(container, directoryName)) ?: throw Refused("E_WORKSPACE_CONFLICT")
+        val gitdirs = File(File(root, AndroidWorkspaceProjects.GITDIRS_NAME), workspaceId)
+        val gitIdentity = if (gitdirs.isDirectory) identityOf(gitdirs) else null
+        val canonical = RishAgentCoreNative.canonical(registry.toString()) ?: throw Refused("E_WORKSPACE_PERSISTENCE")
+        val journal = JSONObject()
+            .put("schema_version", 1)
+            .put("operation_id", operationId)
+            .put("workspace_id", workspaceId)
+            .put("operation", "delete_owned")
+            .put("binding_revision", expectedRevision)
+            .put("clearance_receipt_id", clearanceReceiptId)
+            .put("request_sha256", digest)
+            .put("directory_name", directoryName)
+            .put("content_device_id", content.first)
+            .put("content_inode_id", content.second)
+            .put("gitdirs_device_id", gitIdentity?.first ?: JSONObject.NULL)
+            .put("gitdirs_inode_id", gitIdentity?.second ?: JSONObject.NULL)
+            .put("previous_registry_generation", registry.getInt("generation"))
+            .put("previous_registry_sha256", sha256(canonical.toByteArray(Charsets.UTF_8)))
+            .put("phase", PHASE_PREPARED)
+            .put("created_at", now)
+            .put("updated_at", now)
+        if (!removals.isDirectory && !removals.mkdirs()) throw Refused("E_WORKSPACE_PERSISTENCE")
+        // The intent, durable before the first rename. From here the
+        // operation finishes or is finished by the next launch; the
+        // confirmation the caller consumed is not asked for again.
+        writeJson(journalFile(operationId), journal)
+        resumeRemoval(journal, now)
+        deleted()
+    }
+
+    /**
+     * Finishes every interrupted removal the journals describe. A journal
+     * that cannot be finished -- a purge that still fails -- is left for the
+     * next call rather than allowed to stop the others.
+     */
+    fun sweepRemovals(now: String = RuntimeJson.now()): Int = synchronized(lock) {
+        if (!RishAgentCoreNative.available) return 0
+        var finished = 0
+        val files = removals.listFiles { file -> file.isFile && file.name.endsWith(JOURNAL_SUFFIX) } ?: return 0
+        for (file in files.sortedBy { it.name }) {
+            val journal = readJson(file) ?: continue
+            try {
+                resumeRemoval(journal, now)
+                finished += 1
+            } catch (_: Refused) {
+                // Left in place: the journal is the record that it is unfinished.
+            }
+        }
+        finished
+    }
+
+    /**
+     * Carries a removal from whatever phase its journal records to the end.
+     * Each phase re-derives what it needs from disk instead of trusting the
+     * phase alone, because a crash lands between any two writes.
+     */
+    private fun resumeRemoval(journal: JSONObject, now: String) {
+        val operationId = journal.getString("operation_id")
+        val workspaceId = journal.getString("workspace_id")
+        val revision = journal.getInt("binding_revision")
+        val file = journalFile(operationId)
+        val original = File(container, journal.getString("directory_name"))
+        val quarantinedContent = File(removals, operationId + CONTENT_SUFFIX)
+        val originalGitdirs = File(File(root, AndroidWorkspaceProjects.GITDIRS_NAME), workspaceId)
+        val quarantinedGitdirs = File(removals, operationId + GITDIRS_SUFFIX)
+        val content = Pair(journal.getString("content_device_id"), journal.getString("content_inode_id"))
+        val gitIdentity = if (journal.isNull("gitdirs_device_id")) null
+            else Pair(journal.getString("gitdirs_device_id"), journal.getString("gitdirs_inode_id"))
+        var phase = journal.getString("phase")
+
+        if (phase == PHASE_PREPARED) {
+            quarantine(original, quarantinedContent, content)
+            if (gitIdentity != null) quarantine(originalGitdirs, quarantinedGitdirs, gitIdentity)
+            phase = PHASE_QUARANTINED
+            writeJson(file, JSONObject(journal.toString()).put("phase", phase).put("updated_at", now))
+        }
+        if (phase == PHASE_QUARANTINED) {
+            val registry = loadRegistry()
+            val record = recordFor(registry, workspaceId)
+            if (record != null) {
+                if (record.optInt("binding_revision") != revision) throw Refused("E_WORKSPACE_CONFLICT")
+                val (generation, published) = publishWithout(registry, workspaceId)
+                authorityFile(workspaceId, revision).delete()
+                if (receiptFor(loadReceipts(), operationId) == null) {
+                    writeReceipt(
+                        operationId, workspaceId, revision, "delete_owned", "purge_pending",
+                        generation, published, journal.getString("request_sha256"), now,
+                    )
+                }
+            } else {
+                authorityFile(workspaceId, revision).delete()
+                if (receiptFor(loadReceipts(), operationId) == null) {
+                    writeReceipt(
+                        operationId, workspaceId, revision, "delete_owned", "purge_pending",
+                        registry.getInt("generation"), registry, journal.getString("request_sha256"), now,
+                    )
+                }
+            }
+            phase = PHASE_PUBLISHED
+            writeJson(file, JSONObject(journal.toString()).put("phase", phase).put("updated_at", now))
+        }
+        if (phase == PHASE_PUBLISHED) {
+            purge(quarantinedContent, content)
+            if (gitIdentity != null) purge(quarantinedGitdirs, gitIdentity)
+            if (quarantinedContent.exists() || quarantinedGitdirs.exists()) throw Refused("E_WORKSPACE_PERSISTENCE")
+            settleReceipt(operationId, "committed", now)
+            if (!file.delete() && file.exists()) throw Refused("E_WORKSPACE_PERSISTENCE")
+        }
+    }
+
+    /**
+     * Moves a directory into quarantine, or finds it already there. The
+     * identity the journal recorded has to match at whichever place it is:
+     * a directory replaced since the intent was written is not the one the
+     * person agreed to delete.
+     */
+    private fun quarantine(original: File, quarantined: File, identity: Pair<String, String>) {
+        val atOrigin = identityOf(original)
+        val atQuarantine = identityOf(quarantined)
+        when {
+            atQuarantine == identity -> return
+            atOrigin == identity && atQuarantine == null -> {
+                if (!original.renameTo(quarantined)) throw Refused("E_WORKSPACE_PERSISTENCE")
+                fsync(original.parentFile ?: container)
+                fsync(removals)
+            }
+            else -> throw Refused("E_WORKSPACE_CONFLICT")
+        }
+    }
+
+    /** Unlinks a quarantined tree after proving it is the one the journal names. */
+    private fun purge(quarantined: File, identity: Pair<String, String>) {
+        val found = identityOf(quarantined) ?: return
+        if (found != identity) throw Refused("E_WORKSPACE_CONFLICT")
+        if (!quarantined.deleteRecursively()) throw Refused("E_WORKSPACE_PERSISTENCE")
+        fsync(removals)
+    }
+
+    private fun fsync(directory: File) {
+        try {
+            val descriptor = Os.open(directory.absolutePath, android.system.OsConstants.O_RDONLY, 0)
+            try { Os.fsync(descriptor) } finally { Os.close(descriptor) }
+        } catch (_: Exception) {
+            // A directory that cannot be synced is still renamed; the journal
+            // re-derives the state from disk either way.
+        }
+    }
+
+    /** The registry with [workspaceId]'s record taken out, written and returned with its generation. */
+    private fun publishWithout(registry: JSONObject, workspaceId: String): Pair<Int, JSONObject> {
+        val records = registry.getJSONArray("records")
+        val remaining = JSONArray()
+        for (index in 0 until records.length()) {
+            val record = records.getJSONObject(index)
+            if (record.optString("workspace_id") != workspaceId) remaining.put(record)
+        }
+        val generation = registry.getInt("generation") + 1
+        val published = JSONObject().put("schema_version", 1)
+            .put("generation", generation).put("records", remaining)
+        writeJson(registryFile, published)
+        return Pair(generation, published)
+    }
+
+    /**
+     * The receipt a removal already earned, when the request was the same
+     * one. A receipt for the same operation id and a different request is
+     * an id being reused, and is refused.
+     */
+    private fun replayedRemoval(operationId: String, operation: String, workspaceId: String, digest: String): JSONObject? {
+        val receipt = receiptFor(loadReceipts(), operationId) ?: return null
+        if (receipt.optString("operation") != operation || receipt.optString("workspace_id") != workspaceId ||
+            receipt.optString("request_sha256") != digest
+        ) {
+            throw Refused("E_WORKSPACE_CONFLICT")
+        }
+        return receipt
+    }
+
+    /** The idempotency binding of a removal request: what was asked, not by whom. */
+    private fun removalDigest(action: String, workspaceId: String, revision: Int, clearanceReceiptId: String): String {
+        if (!RuntimeJson.uuid(workspaceId) || !RuntimeJson.uuid(clearanceReceiptId) || revision < 1) {
+            throw Refused("E_WORKSPACE_INVALID")
+        }
+        return RishAgentCoreNative.hash(
+            "workspace_removal_request",
+            JSONObject().put("action", action).put("workspace_id", workspaceId)
+                .put("expected_binding_revision", revision).put("clearance_receipt_id", clearanceReceiptId),
+        )
+    }
+
+    private fun forgotten(): JSONObject = JSONObject().put("schema_version", 1).put("status", "forgotten")
+    private fun deleted(): JSONObject = JSONObject().put("schema_version", 1).put("status", "deleted")
+    private fun journalFile(operationId: String): File = File(removals, operationId + JOURNAL_SUFFIX)
 
     /**
      * The root fingerprint of a provable workspace, or null. It is read from
@@ -398,6 +808,7 @@ internal class AndroidWorkspaceRegistry(val root: File) {
         ) ?: return null
         reply.optJSONObject("descriptor")
     }
+
 
     // --- rules, asked rather than answered -------------------------------
 
