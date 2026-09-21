@@ -220,6 +220,14 @@ class LocalProjectsModule(private val react: ReactApplicationContext) :
         answer("pushV2", request, promise) { runtime.projectGit.push(it) }
 
     @ReactMethod
+    fun cloneWorkspaceV2(request: ReadableMap?, promise: Promise) =
+        answer("cloneWorkspaceV2", request, promise) { runtime.workspaceClone.clone(it) }
+
+    @ReactMethod
+    fun cancelWorkspaceCloneV2(request: ReadableMap?, promise: Promise) =
+        answer("cancelWorkspaceCloneV2", request, promise, cancels) { runtime.workspaceClone.cancel(it) }
+
+    @ReactMethod
     fun pushReceiptsV2(request: ReadableMap?, promise: Promise) =
         answer("pushReceiptsV2", request, promise) { runtime.projectGit.pushReceipts(it) }
 

@@ -275,6 +275,23 @@ export type ProjectPushReceiptsV2 = {
   receipts: ProjectPushReceipt[];
 };
 
+export type WorkspaceCloneRequestV1 = {
+  schema_version: 1;
+  operation_id: string;
+  url: string;
+  display_name: string;
+};
+
+/** A public repository cloned into a new workspace with a project attached. */
+export type WorkspaceCloneResultV2 = {
+  schema_version: 2;
+  root: WorkspaceRootRefV1;
+  project: LocalProjectDescriptorV2;
+  workspace: { workspace_id: string; display_name: string };
+  branch: string;
+  oid: string;
+};
+
 /** A fast-forward: `updated` is false when the branch was already at origin's tip. */
 export type ProjectPullResultV2 = {
   schema_version: 2;
@@ -429,6 +446,8 @@ type NativeLocalProjects = {
   fetchV2?(request: GitFetchRequestV1): Promise<unknown>;
   pullFastForwardV2?(request: GitPullRequestV1): Promise<unknown>;
   pushReceiptsV2?(request: GitWorkspaceRequestV1): Promise<unknown>;
+  cloneWorkspaceV2?(request: WorkspaceCloneRequestV1): Promise<unknown>;
+  cancelWorkspaceCloneV2?(request: { schema_version: 1; operation_id: string }): Promise<unknown>;
 };
 
 const native = NativeModules.LocalProjects as unknown;
@@ -1319,6 +1338,48 @@ function projectV2Receipts(
   };
 }
 
+function projectV2WorkspaceCloneRequest(value: unknown): WorkspaceCloneRequestV1 {
+  const row = projectV2ExactRecord(value, ['schema_version', 'operation_id', 'url', 'display_name'], 'E_PROJECT_REQUEST_INVALID');
+  if (row.schema_version !== 1 || !projectV2String(row.url, 2048) || !projectV2String(row.display_name, 120)) {
+    return projectV2Fail('E_PROJECT_REQUEST_INVALID');
+  }
+  return {
+    schema_version: 1,
+    operation_id: projectV2OperationId(row.operation_id),
+    url: row.url,
+    display_name: row.display_name,
+  };
+}
+
+function projectV2WorkspaceClone(value: unknown): WorkspaceCloneResultV2 {
+  const row = projectV2ExactRecord(value, [
+    'schema_version', 'root', 'project', 'workspace', 'branch', 'oid',
+  ], 'E_PROJECT_RESULT_INVALID');
+  const root = projectV2RootResult(row.root);
+  const workspace = projectV2ExactRecord(row.workspace, ['workspace_id', 'display_name'], 'E_PROJECT_RESULT_INVALID');
+  const project = projectV2Descriptor(row.project);
+  if (
+    row.schema_version !== 2 ||
+    root.project_id !== project.project_id ||
+    root.workspace_id !== project.workspace_id ||
+    workspace.workspace_id !== root.workspace_id ||
+    !projectV2String(workspace.display_name, 120) ||
+    typeof row.branch !== 'string' ||
+    !projectV2Branch(row.branch) ||
+    !projectV2OID(row.oid)
+  ) {
+    return projectV2Fail('E_PROJECT_RESULT_INVALID');
+  }
+  return {
+    schema_version: 2,
+    root,
+    project,
+    workspace: { workspace_id: workspace.workspace_id as string, display_name: workspace.display_name },
+    branch: row.branch as string,
+    oid: row.oid as string,
+  };
+}
+
 function projectV2CancelPushRequest(value: unknown): GitCancelPushRequestV1 {
   const row = projectV2ExactRecord(value, ['schema_version', 'root', 'operation_id'], 'E_PROJECT_REQUEST_INVALID');
   if (row.schema_version !== 1) return projectV2Fail('E_PROJECT_REQUEST_INVALID');
@@ -1820,6 +1881,16 @@ function reviewPage(value: unknown, projectId: string, staged: boolean, offset: 
 
 export const LocalProjects = {
   isAvailable: () => hasNativeCapabilities(native),
+  /** Whether the legacy clone controls exist here (they do not on Android, whose module stubs the rest). */
+  isLegacyCloneAvailable: (): boolean => {
+    try {
+      const row = native as Partial<NativeLocalProjects> | null;
+      return hasNativeCapabilities(native) && typeof row?.startClone === 'function' &&
+        typeof row?.cancelClone === 'function';
+    } catch {
+      return false;
+    }
+  },
   startClone: async (
     url: string,
     name?: string,
@@ -2079,6 +2150,50 @@ export const LocalProjects = {
       return await projectV2Boundary(
         () => requiredV2().clearCredentialV2!(request),
         raw => projectV2CredentialStatus(raw, request.root),
+      );
+    } catch (error) {
+      throw projectV2Error(error);
+    }
+  },
+  /** Whether this build clones a public repository into a new workspace (Android). */
+  isWorkspaceCloneAvailable: (): boolean => {
+    try {
+      const row = native as Partial<NativeLocalProjects> | null;
+      return hasV2Capabilities(native) && typeof row?.cloneWorkspaceV2 === 'function' &&
+        typeof row?.cancelWorkspaceCloneV2 === 'function';
+    } catch {
+      return false;
+    }
+  },
+  /** A public HTTPS repository into a new workspace with its project attached; the network runs before anything is made. */
+  cloneWorkspaceV2: async (requestValue: unknown): Promise<WorkspaceCloneResultV2> => {
+    try {
+      const request = projectV2WorkspaceCloneRequest(requestValue);
+      const row = native as Partial<NativeLocalProjects> | null;
+      if (!hasV2Capabilities(native) || typeof row?.cloneWorkspaceV2 !== 'function') projectV2Fail('E_PROJECT_NATIVE');
+      return await projectV2Boundary(
+        () => row!.cloneWorkspaceV2!(request),
+        projectV2WorkspaceClone,
+      );
+    } catch (error) {
+      throw projectV2Error(error);
+    }
+  },
+  cancelWorkspaceCloneV2: async (operationIdValue: unknown): Promise<'cancel_requested' | 'not_running'> => {
+    try {
+      const operationId = projectV2OperationId(operationIdValue);
+      const row = native as Partial<NativeLocalProjects> | null;
+      if (!hasV2Capabilities(native) || typeof row?.cancelWorkspaceCloneV2 !== 'function') projectV2Fail('E_PROJECT_NATIVE');
+      return await projectV2Boundary(
+        () => row!.cancelWorkspaceCloneV2!({ schema_version: 1, operation_id: operationId }),
+        raw => {
+          const answer = projectV2ExactRecord(raw, ['schema_version', 'operation_id', 'status'], 'E_PROJECT_RESULT_INVALID');
+          if (answer.schema_version !== 2 || answer.operation_id !== operationId ||
+              (answer.status !== 'cancel_requested' && answer.status !== 'not_running')) {
+            return projectV2Fail('E_PROJECT_RESULT_INVALID');
+          }
+          return answer.status;
+        },
       );
     } catch (error) {
       throw projectV2Error(error);

@@ -118,6 +118,13 @@ export type ProjectReviewPreviewProps = {
   diffMode?: DiffMode;
 };
 
+/** A workspace name from a repository URL: its last path segment without `.git`. */
+function workspaceNameFromUrl(url: string): string {
+  const segment = url.replace(/\/+$/u, '').split('/').pop() ?? '';
+  const name = segment.replace(/\.git$/iu, '').trim();
+  return name.length === 0 ? 'Repository' : name.slice(0, 120);
+}
+
 /** The stable code a bridge rejection carries, or an empty string. */
 function errorCode(error: unknown): string {
   return typeof error === 'object' && error !== null && 'code' in error
@@ -384,6 +391,9 @@ export function ProjectsSurface({
   const [busy, setBusy] = useState(false);
   const [pushing, setPushing] = useState(false);
   const pushOperationId = useRef<string | null>(null);
+  /** A clone into a new workspace (Android): its operation id while the network runs. */
+  const [workspaceClone, setWorkspaceClone] = useState<{ operationId: string; url: string } | null>(null);
+  const workspaceCloneRef = useRef<string | null>(null);
   const [pushBranch, setPushBranch] = useState('');
   const [receipt, setReceipt] = useState<ProjectPushReceipt | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -723,6 +733,12 @@ export function ProjectsSurface({
     };
   }, [applyCloneSnapshot, visible, cloneOperation?.operation_id]);
 
+  const cancelWorkspaceClone = useCallback(() => {
+    const operationId = workspaceCloneRef.current;
+    if (operationId === null) return;
+    LocalProjects.cancelWorkspaceCloneV2(operationId).catch(() => undefined);
+  }, []);
+
   const cancelClone = useCallback(async () => {
     const operation = cloneOperationRef.current;
     if (!cloneIsActive(operation) || operation === null) return;
@@ -761,6 +777,55 @@ export function ProjectsSurface({
       setError(null);
       setNotice(null);
       try {
+        if (kind === 'clone' && !LocalProjects.isLegacyCloneAvailable() && LocalProjects.isWorkspaceCloneAvailable()) {
+          // No legacy clone on this build: the repository becomes a new
+          // workspace with its project attached, and the row appears in the
+          // list the way any workspace project does.
+          const operationId = LocalRuntime.createCompletionRequestId();
+          workspaceCloneRef.current = operationId;
+          setWorkspaceClone({ operationId, url: trimmedUrl });
+          try {
+            const cloned = await LocalProjects.cloneWorkspaceV2({
+              schema_version: 1,
+              operation_id: operationId,
+              url: trimmedUrl,
+              display_name: trimmedName.length === 0 ? workspaceNameFromUrl(trimmedUrl) : trimmedName,
+            });
+            if (!tasks.owns(task)) return;
+            setCreateMode(null);
+            setName('');
+            setCloneUrl('');
+            const row: ProjectRow = {
+              schema_version: 1,
+              id: cloned.project.project_id,
+              name: cloned.project.display_name,
+              workspace_path: `projects/${cloned.project.project_id}/repo`,
+              origin_url: trimmedUrl,
+              created_at: new Date().toISOString(),
+              updated_at: new Date().toISOString(),
+              root: cloned.root,
+              workspaceName: cloned.workspace.display_name,
+            };
+            setProjects(previous => [row, ...previous.filter(item => item.id !== row.id)]);
+            selectView(row);
+            setNotice(t('projects.clonedSuccess'));
+            setTab('files');
+          } catch (caught) {
+            if (!tasks.owns(task)) return;
+            const code = errorCode(caught);
+            if (code === 'E_PROJECT_CANCELLED') setNotice(t('projects.cloneCancelled'));
+            else if (code === 'E_PROJECT_CREDENTIAL') setError(t('projects.cloneAuthRequired'));
+            else if (code === 'E_PROJECT_TIMEOUT') setError(t('projects.cloneTimeout'));
+            else if (code === 'E_PROJECT_REQUEST_INVALID') setError(t('projects.cloneUrlInvalid'));
+            else setError(t('projects.operationFailed', { error: errorText(caught) }));
+          } finally {
+            if (workspaceCloneRef.current === operationId) {
+              workspaceCloneRef.current = null;
+              setWorkspaceClone(null);
+            }
+          }
+          return;
+        }
         if (kind === 'clone') {
           cloneStarting.current = true;
           setStartingClone(true);
@@ -1445,6 +1510,8 @@ export function ProjectsSurface({
             createMode={createMode}
             cloneOperation={cloneOperation}
             onCancelClone={cancelClone}
+            workspaceClone={workspaceClone}
+            onCancelWorkspaceClone={cancelWorkspaceClone}
             name={name}
             projects={projects}
             styles={styles}
@@ -1970,8 +2037,12 @@ function ProjectList({
   onChooseMode,
   onOpenProject,
   onSubmit,
+  workspaceClone,
+  onCancelWorkspaceClone,
 }: {
   cloneOperation: ProjectCloneOperation | null;
+  workspaceClone: { operationId: string; url: string } | null;
+  onCancelWorkspaceClone: () => void;
   onCancelClone: () => Promise<void>;
   busy: boolean;
   cloneUrl: string;
@@ -2090,6 +2161,20 @@ function ProjectList({
             value={name}
             onChangeText={onChangeName}
           />
+          {workspaceClone !== null && (
+            <View style={styles.card} testID="projects-workspace-clone">
+              <Text style={styles.cardTitle}>{t('projects.cloningWorkspace')}</Text>
+              <Text style={styles.cardBody}>{workspaceClone.url}</Text>
+              <Pressable
+                accessibilityLabel={t('projects.cancelClone')}
+                accessibilityRole="button"
+                onPress={onCancelWorkspaceClone}
+                style={({ pressed }) => [styles.textButton, pressed && styles.pressed]}
+              >
+                <Text style={styles.textButtonDanger}>{t('common.cancel')}</Text>
+              </Pressable>
+            </View>
+          )}
           {createMode === 'clone' && (
             <>
               <View style={styles.fieldGap} />

@@ -19,6 +19,8 @@ const native = {
   fetchV2: jest.fn(),
   pullFastForwardV2: jest.fn(),
   pushReceiptsV2: jest.fn(),
+  cloneWorkspaceV2: jest.fn(),
+  cancelWorkspaceCloneV2: jest.fn(),
 };
 
 (NativeModules as Record<string, unknown>).LocalProjects = native;
@@ -497,4 +499,36 @@ test('push receipts travel by root and carry only what a push proved', async () 
   });
   native.pushReceiptsV2.mockResolvedValueOnce({ schema_version: 2, root: root(), project_id: PROJECT_ID, receipts: [] });
   await expect(LocalProjects.pushReceiptsV2({ schema_version: 1, root: root() })).resolves.toMatchObject({ receipts: [] });
+});
+
+test('a workspace clone is requested by url and name and answers the attached project', async () => {
+  const cloned = {
+    schema_version: 2, root: root(), project: project(),
+    workspace: { workspace_id: WORKSPACE_ID, display_name: 'V2 Project' }, branch: 'main', oid: OID,
+  };
+  native.cloneWorkspaceV2.mockResolvedValue(cloned);
+  expect(LocalProjects.isWorkspaceCloneAvailable()).toBe(true);
+  await expect(
+    LocalProjects.cloneWorkspaceV2({ schema_version: 1, operation_id: OPERATION_ID, url: 'https://github.com/example/demo.git', display_name: 'demo' }),
+  ).resolves.toEqual(cloned);
+  expect(native.cloneWorkspaceV2).toHaveBeenCalledWith({
+    schema_version: 1, operation_id: OPERATION_ID, url: 'https://github.com/example/demo.git', display_name: 'demo',
+  });
+  // The answer must agree with itself: root, project and workspace name one thing.
+  native.cloneWorkspaceV2.mockResolvedValueOnce({ ...cloned, workspace: { workspace_id: PROJECT_ID, display_name: 'x' } });
+  await expect(
+    LocalProjects.cloneWorkspaceV2({ schema_version: 1, operation_id: OPERATION_ID, url: 'https://github.com/example/demo.git', display_name: 'demo' }),
+  ).rejects.toMatchObject({ code: 'E_PROJECT_RESULT_INVALID' });
+  await expect(
+    LocalProjects.cloneWorkspaceV2({ schema_version: 1, operation_id: OPERATION_ID, url: '', display_name: 'demo' }),
+  ).rejects.toMatchObject({ code: 'E_PROJECT_REQUEST_INVALID' });
+  native.cancelWorkspaceCloneV2.mockResolvedValue({ schema_version: 2, operation_id: OPERATION_ID, status: 'cancel_requested' });
+  await expect(LocalProjects.cancelWorkspaceCloneV2(OPERATION_ID)).resolves.toBe('cancel_requested');
+  const partial = native as { cloneWorkspaceV2?: jest.Mock };
+  const clone = partial.cloneWorkspaceV2;
+  delete partial.cloneWorkspaceV2;
+  // Not part of the V2 Git set: a build without it still has V2 Git.
+  expect(LocalProjects.isV2Available()).toBe(true);
+  expect(LocalProjects.isWorkspaceCloneAvailable()).toBe(false);
+  partial.cloneWorkspaceV2 = clone;
 });

@@ -748,6 +748,110 @@ Java_tech_zseven_rish_runtime_RishLibgit2Native_fastForward(JNIEnv *env, jclass,
   return rish::Bytes(env, answer);
 }
 
+/// The network half of a clone into an empty split repository whose origin
+/// is already set: connect, learn the remote's default branch, fetch, put a
+/// local branch at the fetched tip, point HEAD at it, check the tree out
+/// into the (empty) working tree, and track origin. Anonymous: a remote
+/// that asks for a credential is `auth_failure`. Cancelled by cancelPush
+/// with the same operation id. Answers `{"ok":true,"outcome":success|
+/// auth_failure|timed_out|cancelled|empty|failed,"branch":…,"oid":…}`.
+JNIEXPORT jbyteArray JNICALL
+Java_tech_zseven_rish_runtime_RishLibgit2Native_cloneCheckout(JNIEnv *env, jclass, jstring gitDirValue,
+                                                              jstring workDirValue, jstring operationValue,
+                                                              jint timeoutSeconds) {
+  const char *gitdir = Chars(env, gitDirValue);
+  const char *workdir = Chars(env, workDirValue);
+  const std::string operation = String(env, operationValue);
+  std::string answer;
+  git_repository *repository = nullptr;
+  git_remote *remote = nullptr;
+  git_reference *tracking = nullptr;
+  git_reference *local = nullptr;
+  git_commit *commit = nullptr;
+  const auto encode = [](const char *outcome, const std::string &branch, const std::string &oid) {
+    return std::string("{\"ok\":true,\"outcome\":") + Quoted(outcome) + ",\"branch\":" +
+           (branch.empty() ? "null" : Quoted(branch)) + ",\"oid\":" + (oid.empty() ? "null" : Quoted(oid)) + "}";
+  };
+  do {
+    if (workdir == nullptr || operation.empty() || timeoutSeconds < 1) { answer = Failure(3101, "arguments"); break; }
+    const char *stage = OpenRepository(&repository, gitdir, workdir);
+    if (stage != nullptr) { answer = Failure(3102, stage); break; }
+    std::atomic<bool> *cancel = RegisterCancel(operation);
+    PushState state;
+    state.cancel = cancel;
+    state.deadline = std::chrono::steady_clock::now() + std::chrono::seconds(timeoutSeconds);
+    int code = git_remote_lookup(&remote, repository, "origin");
+    git_fetch_options options = {};
+    if (code == 0) code = git_fetch_options_init(&options, GIT_FETCH_OPTIONS_VERSION);
+    std::string branch;
+    if (code == 0) {
+      options.follow_redirects = GIT_REMOTE_REDIRECT_NONE;
+      options.proxy_opts.type = GIT_PROXY_NONE;
+      FillCallbacks(&options.callbacks, &state, false);
+      options.callbacks.transfer_progress = FetchProgress;
+      git_remote_connect_options connect_options = {};
+      code = git_remote_connect_options_init(&connect_options, GIT_REMOTE_CONNECT_OPTIONS_VERSION);
+      if (code == 0) {
+        connect_options.callbacks = options.callbacks;
+        connect_options.follow_redirects = options.follow_redirects;
+        connect_options.proxy_opts = options.proxy_opts;
+        code = git_remote_connect_ext(remote, GIT_DIRECTION_FETCH, &connect_options);
+      }
+      if (code == 0) {
+        git_buf head = GIT_BUF_INIT;
+        const int named = git_remote_default_branch(&head, remote);
+        if (named == 0 && head.ptr != nullptr && std::string(head.ptr).rfind("refs/heads/", 0) == 0) {
+          branch = std::string(head.ptr).substr(11);
+        } else if (named == GIT_ENOTFOUND) {
+          git_buf_dispose(&head);
+          git_remote_disconnect(remote);
+          UnregisterCancel(operation, cancel);
+          answer = encode("empty", "", "");
+          break;
+        } else {
+          code = named == 0 ? -1 : named;
+        }
+        git_buf_dispose(&head);
+      }
+      if (code == 0) code = git_remote_fetch(remote, nullptr, &options, "rish clone");
+      if (git_remote_connected(remote)) git_remote_disconnect(remote);
+    }
+    UnregisterCancel(operation, cancel);
+    if (code != 0) {
+      answer = encode(OutcomeName(InterruptedOutcome(state, code, 7)), "", "");
+      break;
+    }
+    const std::string tracking_name = "refs/remotes/origin/" + branch;
+    if (git_reference_lookup(&tracking, repository, tracking_name.c_str()) != 0 || tracking == nullptr ||
+        git_reference_target(tracking) == nullptr) {
+      answer = Failure(3199, "tracking");
+      break;
+    }
+    const git_oid *tip = git_reference_target(tracking);
+    if (git_commit_lookup(&commit, repository, tip) != 0) { answer = Failure(3199, "commit"); break; }
+    if (git_branch_create(&local, repository, branch.c_str(), commit, 0) != 0) { answer = Failure(3199, "branch"); break; }
+    if (git_repository_set_head(repository, ("refs/heads/" + branch).c_str()) != 0) { answer = Failure(3199, "head"); break; }
+    git_checkout_options checkout = GIT_CHECKOUT_OPTIONS_INIT;
+    checkout.checkout_strategy = GIT_CHECKOUT_SAFE | GIT_CHECKOUT_RECREATE_MISSING;
+    if (git_checkout_tree(repository, reinterpret_cast<const git_object *>(commit), &checkout) != 0) {
+      answer = Failure(3199, "checkout");
+      break;
+    }
+    (void)git_branch_set_upstream(local, ("origin/" + branch).c_str());
+    char oid[GIT_OID_SHA1_HEXSIZE + 1] = {};
+    git_oid_tostr(oid, sizeof(oid), tip);
+    answer = encode("success", branch, oid);
+  } while (false);
+  if (commit != nullptr) git_commit_free(commit);
+  if (local != nullptr) git_reference_free(local);
+  if (tracking != nullptr) git_reference_free(tracking);
+  if (remote != nullptr) git_remote_free(remote);
+  if (repository != nullptr) git_repository_free(repository);
+  Release(env, gitDirValue, gitdir);
+  Release(env, workDirValue, workdir);
+  return rish::Bytes(env, answer);
+}
+
 /// Asks a running push to stop at its next callback. Answers whether a push
 /// by that id was running.
 JNIEXPORT jboolean JNICALL

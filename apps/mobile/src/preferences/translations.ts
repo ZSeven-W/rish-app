@@ -813,6 +813,10 @@ const enUS = {
   'projects.credentialBody':
     'The native prompt stores the token for this host. Rish never returns it to React Native.',
   'projects.push': 'Push',
+  'projects.cloningWorkspace': 'Cloning into a new workspace…',
+  'projects.cloneCancelled': 'Clone cancelled. Nothing was created.',
+  'projects.cloneAuthRequired': 'That repository asks for a credential. Only public HTTPS repositories can be cloned here.',
+  'projects.cloneUrlInvalid': 'Enter a public HTTPS repository URL.',
   'projects.fetch': 'Fetch',
   'projects.pull': 'Pull (fast-forward)',
   'projects.fetched': 'Fetched. Ahead {ahead} · behind {behind}.',
@@ -1809,6 +1813,10 @@ const zhCN: Readonly<Record<TranslationKey, string>> = {
   'projects.credentialBody':
     '原生弹窗会为此 Host 保存 Token，Rish 不会把它返回 React Native。',
   'projects.push': '推送',
+  'projects.cloningWorkspace': '正在克隆到新工作区…',
+  'projects.cloneCancelled': '已取消克隆，什么都没有创建。',
+  'projects.cloneAuthRequired': '这个仓库需要凭据。这里只能克隆公开的 HTTPS 仓库。',
+  'projects.cloneUrlInvalid': '请输入公开的 HTTPS 仓库地址。',
   'projects.fetch': '拉取远端（fetch）',
   'projects.pull': '快进更新（pull）',
   'projects.fetched': '已拉取。领先 {ahead} · 落后 {behind}。',

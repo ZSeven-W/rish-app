@@ -157,6 +157,14 @@ internal object RishLibgit2Native {
      */
     @JvmStatic external fun fastForward(gitDir: String?, workDir: String, expectedHeadOid: String): ByteArray
 
+    /**
+     * The network half of a clone into an empty split repository whose
+     * origin is set: `{"ok":true,"outcome":success|auth_failure|timed_out|
+     * cancelled|empty|failed,"branch":…,"oid":…}`. Anonymous; cancelled by
+     * `cancelPush` with the same operation id.
+     */
+    @JvmStatic external fun cloneCheckout(gitDir: String?, workDir: String, operationId: String, timeoutSeconds: Int): ByteArray
+
     // --- capturing a selection --------------------------------------------
     //
     // What `captureLease` reads from git on iOS, with nothing decided: the

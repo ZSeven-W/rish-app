@@ -40,6 +40,10 @@ jest.mock('../src/native/LocalProjects', () => ({
     fetchV2: jest.fn(),
     pullFastForwardV2: jest.fn(),
     pushReceiptsV2: jest.fn(),
+    isLegacyCloneAvailable: jest.fn(),
+    isWorkspaceCloneAvailable: jest.fn(),
+    cloneWorkspaceV2: jest.fn(),
+    cancelWorkspaceCloneV2: jest.fn(),
     create: jest.fn(),
     clone: jest.fn(),
     startClone: jest.fn(),
@@ -303,6 +307,8 @@ beforeEach(() => {
   jest.clearAllMocks();
   mockLocalProjects.isAvailable.mockReturnValue(true);
   mockLocalProjects.isV2Available.mockReturnValue(false);
+  mockLocalProjects.isLegacyCloneAvailable.mockReturnValue(true);
+  mockLocalProjects.isWorkspaceCloneAvailable.mockReturnValue(false);
   mockWorkspaceProjects.mockResolvedValue([]);
   mockLocalProjects.list.mockResolvedValue({
     schema_version: 1,
@@ -1708,4 +1714,49 @@ test('a workspace project fetches and fast-forwards by root, and a diverged bran
     renderer.root.findAll(instance => typeof instance.props.children === 'string' &&
       instance.props.children.startsWith('Local and remote histories have diverged')).length,
   ).toBeGreaterThan(0);
+});
+
+test('without legacy projects a clone becomes a new workspace project, and can be cancelled while it runs', async () => {
+  // Android: the legacy module is linked (its methods stubbed) but has no clone controls.
+  mockLocalProjects.isAvailable.mockReturnValue(true);
+  mockLocalProjects.isLegacyCloneAvailable.mockReturnValue(false);
+  mockLocalProjects.list.mockRejectedValue(Object.assign(new Error('E_PROJECT_NATIVE'), { code: 'E_PROJECT_NATIVE' }));
+  mockLocalProjects.isV2Available.mockReturnValue(true);
+  mockLocalProjects.isWorkspaceCloneAvailable.mockReturnValue(true);
+  mockWorkspaceProjects.mockResolvedValue([]);
+  const v2Status = { ...dirtyStatus, schema_version: 2, root: workspaceRoot, project_id: workspaceRoot.project_id };
+  mockLocalProjects.statusV2.mockResolvedValue(v2Status);
+  mockLocalProjects.diffV2.mockImplementation(async (request: { staged: boolean }) => ({
+    ...diff, schema_version: 2, root: workspaceRoot, project_id: workspaceRoot.project_id, staged: request.staged,
+  }));
+  const held = deferred<unknown>();
+  mockLocalProjects.cloneWorkspaceV2.mockReturnValue(held.promise);
+  mockLocalProjects.cancelWorkspaceCloneV2.mockResolvedValue('cancel_requested');
+  const renderer = await renderSurface();
+  await act(async () => { actionByLabel(renderer.root, 'Clone repository').props.onPress(); await settle(); });
+  await act(async () => inputByLabel(renderer.root, 'Remote URL').props.onChangeText('https://github.com/example/demo.git'));
+  await act(async () => { actionByLabel(renderer.root, 'Clone').props.onPress(); await settle(); });
+  expect(mockLocalProjects.cloneWorkspaceV2).toHaveBeenCalledWith({
+    schema_version: 1, operation_id: 'op-1', url: 'https://github.com/example/demo.git', display_name: 'demo',
+  });
+  expect(mockLocalProjects.startClone).not.toHaveBeenCalled();
+  expect(renderer.root.findAllByProps({ testID: 'projects-workspace-clone' }).length).toBeGreaterThan(0);
+  // Cancel asks native by the same operation id.
+  await act(async () => { actionByLabel(renderer.root, 'Cancel repository clone').props.onPress(); await settle(); });
+  expect(mockLocalProjects.cancelWorkspaceCloneV2).toHaveBeenCalledWith('op-1');
+  await act(async () => {
+    held.resolve({
+      schema_version: 2, root: workspaceRoot,
+      project: {
+        schema_version: 2, project_id: workspaceRoot.project_id, workspace_id: workspaceRoot.workspace_id,
+        workspace_binding_revision: 1, display_name: 'demo', git_topology: 'private_split_gitdir',
+      },
+      workspace: { workspace_id: workspaceRoot.workspace_id, display_name: 'demo' }, branch: 'main', oid: 'f'.repeat(40),
+    });
+    await settle(); await settle();
+  });
+  expect(renderer.root.findAllByProps({ testID: 'projects-workspace-clone' }).length).toBe(0);
+  expect(renderer.root.findAllByProps({ children: 'Repository cloned locally.' }).length).toBeGreaterThan(0);
+  // The new project opened by its root.
+  expect(mockLocalProjects.statusV2).toHaveBeenCalledWith({ schema_version: 1, root: workspaceRoot });
 });
