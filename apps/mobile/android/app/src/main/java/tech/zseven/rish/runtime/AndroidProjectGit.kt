@@ -1,6 +1,8 @@
 package tech.zseven.rish.runtime
 
+import org.json.JSONArray
 import org.json.JSONObject
+import java.io.File
 
 /**
  * The git panel over a workspace's project: `statusV2`, `diffV2`,
@@ -200,9 +202,28 @@ internal class AndroidProjectGit(
                 "git push $outcome",
             )
         }
+        val pushedAt = RuntimeJson.now()
+        val remoteOid = reply.optString("remote_oid").takeIf { it.isNotEmpty() } ?: expected
+        // What this push proved, kept beside the gitdir for the panel; a
+        // receipt that cannot be written does not unmake the push.
+        try {
+            AndroidGitPushReceipts.record(File(opened.gitDir), opened.projectId, AndroidGitPushReceipts.receipt(host, branch, expected, remoteOid, pushedAt))
+        } catch (refused: AndroidWorkspaceProjects.Refused) {
+            android.util.Log.w("RishProjects", "push receipt not recorded: ${refused.number}")
+        }
         return JSONObject().put("schema_version", 2).put("root", opened.root).put("project_id", opened.projectId)
-            .put("remote", "origin").put("branch", branch).put("oid", reply.optString("remote_oid", expected))
-            .put("pushed_at", RuntimeJson.now())
+            .put("remote", "origin").put("branch", branch).put("oid", remoteOid)
+            .put("pushed_at", pushedAt)
+    }
+
+    /** `pushReceiptsV2`: what every recorded push proved, oldest first, sanitized. */
+    fun pushReceipts(rawRequest: JSONObject?): JSONObject {
+        val request = exact(rawRequest, WORKSPACE_KEYS)
+        val opened = open(request, write = false)
+        val receipts = AndroidGitPushReceipts.load(File(opened.gitDir), opened.projectId)
+        val rows = JSONArray()
+        for (index in 0 until receipts.length()) rows.put(AndroidGitPushReceipts.sanitized(receipts.getJSONObject(index)))
+        return stamped(JSONObject().put("receipts", rows), opened)
     }
 
     /**

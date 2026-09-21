@@ -268,6 +268,13 @@ export type ProjectFetchResultV2 = {
   fetched_at: string;
 };
 
+export type ProjectPushReceiptsV2 = {
+  schema_version: 2;
+  root: WorkspaceRootRefV1;
+  project_id: string;
+  receipts: ProjectPushReceipt[];
+};
+
 /** A fast-forward: `updated` is false when the branch was already at origin's tip. */
 export type ProjectPullResultV2 = {
   schema_version: 2;
@@ -421,6 +428,7 @@ type NativeLocalProjects = {
   cancelPushV2?(request: GitCancelPushRequestV1): Promise<unknown>;
   fetchV2?(request: GitFetchRequestV1): Promise<unknown>;
   pullFastForwardV2?(request: GitPullRequestV1): Promise<unknown>;
+  pushReceiptsV2?(request: GitWorkspaceRequestV1): Promise<unknown>;
 };
 
 const native = NativeModules.LocalProjects as unknown;
@@ -1260,6 +1268,57 @@ function projectV2Pull(
   };
 }
 
+function projectV2Receipt(value: unknown): ProjectPushReceipt {
+  const row = projectV2ExactRecord(value, [
+    'schema_version', 'remote', 'host', 'branch', 'local_oid', 'remote_oid', 'pushed_at',
+  ], 'E_PROJECT_RESULT_INVALID');
+  if (
+    row.schema_version !== 1 ||
+    row.remote !== 'origin' ||
+    !projectV2Host(row.host) ||
+    typeof row.branch !== 'string' ||
+    !projectV2Branch(row.branch) ||
+    !projectV2OID(row.local_oid) ||
+    !projectV2OID(row.remote_oid) ||
+    !projectV2Timestamp(row.pushed_at)
+  ) {
+    return projectV2Fail('E_PROJECT_RESULT_INVALID');
+  }
+  return {
+    schema_version: 1,
+    remote: 'origin',
+    host: row.host,
+    branch: row.branch as string,
+    local_oid: row.local_oid as string,
+    remote_oid: row.remote_oid as string,
+    pushed_at: row.pushed_at,
+  };
+}
+
+function projectV2Receipts(
+  value: unknown,
+  expectedRoot: WorkspaceRootRefV1,
+): ProjectPushReceiptsV2 {
+  const row = projectV2ExactRecord(value, [
+    'schema_version', 'root', 'project_id', 'receipts',
+  ], 'E_PROJECT_RESULT_INVALID');
+  const root = projectV2RootResult(row.root, expectedRoot);
+  if (
+    row.schema_version !== 2 ||
+    row.project_id !== expectedRoot.project_id ||
+    !Array.isArray(row.receipts) ||
+    row.receipts.length > 25
+  ) {
+    return projectV2Fail('E_PROJECT_RESULT_INVALID');
+  }
+  return {
+    schema_version: 2,
+    root,
+    project_id: expectedRoot.project_id as string,
+    receipts: projectV2ArrayMap.call(row.receipts, projectV2Receipt) as ProjectPushReceipt[],
+  };
+}
+
 function projectV2CancelPushRequest(value: unknown): GitCancelPushRequestV1 {
   const row = projectV2ExactRecord(value, ['schema_version', 'root', 'operation_id'], 'E_PROJECT_REQUEST_INVALID');
   if (row.schema_version !== 1) return projectV2Fail('E_PROJECT_REQUEST_INVALID');
@@ -1653,7 +1712,8 @@ function hasV2Capabilities(value: unknown): value is NativeLocalProjects {
       typeof row.clearCredentialV2 === 'function' &&
       typeof row.cancelPushV2 === 'function' &&
       typeof row.fetchV2 === 'function' &&
-      typeof row.pullFastForwardV2 === 'function'
+      typeof row.pullFastForwardV2 === 'function' &&
+      typeof row.pushReceiptsV2 === 'function'
     );
   } catch {
     return false;
@@ -2019,6 +2079,18 @@ export const LocalProjects = {
       return await projectV2Boundary(
         () => requiredV2().clearCredentialV2!(request),
         raw => projectV2CredentialStatus(raw, request.root),
+      );
+    } catch (error) {
+      throw projectV2Error(error);
+    }
+  },
+  /** What every recorded push of a workspace project proved, oldest first. */
+  pushReceiptsV2: async (requestValue: unknown): Promise<ProjectPushReceiptsV2> => {
+    try {
+      const request = projectV2WorkspaceRequest(requestValue);
+      return await projectV2Boundary(
+        () => requiredV2().pushReceiptsV2!(request),
+        raw => projectV2Receipts(raw, request.root),
       );
     } catch (error) {
       throw projectV2Error(error);

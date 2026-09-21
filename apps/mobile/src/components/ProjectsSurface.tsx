@@ -141,6 +141,16 @@ async function workspaceCredential(
   return { ...status, origin_url: remote.url };
 }
 
+/** A workspace project's push receipts in the panel's v1 shape, or null when it has no origin to have pushed to. */
+async function workspaceReceipts(
+  root: WorkspaceRootRefV1,
+): Promise<{ schema_version: 1; project_id: string; receipts: ProjectPushReceipt[] } | null> {
+  const remote = await LocalProjects.remoteV2({ schema_version: 1, root });
+  if (remote.url === null) return null;
+  const receipts = await LocalProjects.pushReceiptsV2({ schema_version: 1, root });
+  return { schema_version: 1, project_id: receipts.project_id, receipts: receipts.receipts };
+}
+
 function errorText(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
@@ -548,7 +558,7 @@ export function ProjectsSurface({
                 staged: true,
               }).then(legacyShaped),
               workspaceCredential(project.root),
-              Promise.resolve(null),
+              workspaceReceipts(project.root),
             ])
           : await Promise.all([
               LocalProjects.status(project.id),
@@ -1867,7 +1877,7 @@ export function ProjectsSurface({
               )}
             </View>
 
-            {selected.origin_url !== null && selected.root === null && (
+            {selected.origin_url !== null && (
               <View style={styles.card}>
                 <Text style={styles.cardTitle}>
                   {t('projects.pushReceiptTitle')}

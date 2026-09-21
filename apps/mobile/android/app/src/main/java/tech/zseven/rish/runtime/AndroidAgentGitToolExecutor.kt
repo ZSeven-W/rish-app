@@ -196,6 +196,16 @@ internal class AndroidAgentGitToolExecutor(
                 if (RishLibgit2Native.setTrackingReference(opened.gitDir, opened.workDir, branchName, target) != "ok") {
                     return failure(name, "E_AGENT_EXECUTION_AMBIGUOUS", ambiguous = true)
                 }
+                // The receipt the panel shows; iOS records one here too, with
+                // `localhost` standing in for a path origin.
+                try {
+                    AndroidGitPushReceipts.record(
+                        java.io.File(opened.gitDir), opened.projectId,
+                        AndroidGitPushReceipts.receipt(origin.host.ifEmpty { "localhost" }, branchName, target, remoteOid, RuntimeJson.now()),
+                    )
+                } catch (refused: AndroidWorkspaceProjects.Refused) {
+                    android.util.Log.w("RishAgent", "push receipt not recorded: ${refused.number}")
+                }
                 effect(
                     feedback(
                         name,

@@ -39,6 +39,7 @@ jest.mock('../src/native/LocalProjects', () => ({
     cancelPushV2: jest.fn(),
     fetchV2: jest.fn(),
     pullFastForwardV2: jest.fn(),
+    pushReceiptsV2: jest.fn(),
     create: jest.fn(),
     clone: jest.fn(),
     startClone: jest.fn(),
@@ -386,6 +387,9 @@ beforeEach(() => {
   mockLocalProjects.remoteV2.mockResolvedValue({
     schema_version: 2, root: workspaceRoot, project_id: workspaceRoot.project_id,
     remote: 'origin', url: null, host: null,
+  });
+  mockLocalProjects.pushReceiptsV2.mockResolvedValue({
+    schema_version: 2, root: workspaceRoot, project_id: workspaceRoot.project_id, receipts: [],
   });
 });
 
@@ -1617,6 +1621,21 @@ test('a workspace project sets its origin, provisions a credential natively and 
   });
   expect(mockLocalProjects.push).not.toHaveBeenCalled();
   expect(renderer.root.findAllByProps({ children: 'Branch pushed successfully.' }).length).toBeGreaterThan(0);
+  // The reload after the push reads the receipt the native side recorded.
+  mockLocalProjects.pushReceiptsV2.mockResolvedValue({
+    schema_version: 2, root: workspaceRoot, project_id: workspaceRoot.project_id,
+    receipts: [{
+      schema_version: 1, remote: 'origin', host: 'github.com', branch: 'main',
+      local_oid: dirtyStatus.head_oid, remote_oid: dirtyStatus.head_oid, pushed_at: '2026-09-21T00:00:00.000Z',
+    }],
+  });
+  await act(async () => { actionByLabel(renderer.root, 'Refresh project status').props.onPress(); await settle(); await settle(); });
+  expect(mockLocalProjects.pushReceiptsV2).toHaveBeenCalledWith({ schema_version: 1, root: workspaceRoot });
+  expect(renderer.root.findAllByProps({ children: 'Last push receipt' }).length).toBeGreaterThan(0);
+  expect(
+    renderer.root.findAll(instance => typeof instance.props.accessibilityLabel === 'string' &&
+      instance.props.accessibilityLabel.includes('github.com')).length,
+  ).toBeGreaterThan(0);
 
   // A V2 refusal reads as the same message the legacy path shows.
   mockLocalProjects.pushV2.mockRejectedValueOnce(

@@ -18,6 +18,7 @@ const native = {
   cancelPushV2: jest.fn(),
   fetchV2: jest.fn(),
   pullFastForwardV2: jest.fn(),
+  pushReceiptsV2: jest.fn(),
 };
 
 (NativeModules as Record<string, unknown>).LocalProjects = native;
@@ -478,4 +479,22 @@ test('fetch and fast-forward pull travel by root and are held to their shapes', 
   await expect(
     LocalProjects.pullFastForwardV2({ schema_version: 1, root: root(), expected_head_oid: previous }),
   ).rejects.toMatchObject({ code: 'E_PROJECT_NON_FAST_FORWARD' });
+});
+
+test('push receipts travel by root and carry only what a push proved', async () => {
+  const receipt = {
+    schema_version: 1, remote: 'origin', host: 'github.com', branch: 'main',
+    local_oid: OID, remote_oid: OID, pushed_at: '2026-09-21T00:00:00.000Z',
+  };
+  native.pushReceiptsV2.mockResolvedValue({ schema_version: 2, root: root(), project_id: PROJECT_ID, receipts: [receipt] });
+  await expect(LocalProjects.pushReceiptsV2({ schema_version: 1, root: root() })).resolves.toEqual({
+    schema_version: 2, root: root(), project_id: PROJECT_ID, receipts: [receipt],
+  });
+  expect(native.pushReceiptsV2).toHaveBeenCalledWith({ schema_version: 1, root: root() });
+  native.pushReceiptsV2.mockResolvedValueOnce({ schema_version: 2, root: root(), project_id: PROJECT_ID, receipts: [{ ...receipt, token: 'x' }] });
+  await expect(LocalProjects.pushReceiptsV2({ schema_version: 1, root: root() })).rejects.toMatchObject({
+    code: 'E_PROJECT_RESULT_INVALID',
+  });
+  native.pushReceiptsV2.mockResolvedValueOnce({ schema_version: 2, root: root(), project_id: PROJECT_ID, receipts: [] });
+  await expect(LocalProjects.pushReceiptsV2({ schema_version: 1, root: root() })).resolves.toMatchObject({ receipts: [] });
 });

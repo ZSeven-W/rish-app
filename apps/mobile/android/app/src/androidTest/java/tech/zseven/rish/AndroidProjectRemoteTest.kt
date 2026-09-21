@@ -260,6 +260,14 @@ class AndroidProjectRemoteTest {
         assertEquals(branch, pushed.getString("branch"))
         assertEquals(first, pushed.getString("oid"))
         assertEquals(first, remote.tip("target.git", branch))
+        // The receipt says what the push proved, and only that.
+        val receipts = f.git.pushReceipts(f.request()).getJSONArray("receipts")
+        assertEquals(1, receipts.length())
+        val receipt = receipts.getJSONObject(0)
+        assertEquals(setOf("schema_version", "remote", "host", "branch", "local_oid", "remote_oid", "pushed_at"), receipt.keys().asSequence().toSet())
+        assertEquals(remote.host, receipt.getString("host")); assertEquals(branch, receipt.getString("branch"))
+        assertEquals(first, receipt.getString("local_oid")); assertEquals(first, receipt.getString("remote_oid"))
+        assertFalse(receipts.toString().contains(remote.token))
         // The Mac commits on top; the phone's next push is not a fast-forward, and the remote keeps the Mac's tip.
         val competing = remote.control("POST", "/g2/compete", JSONObject().put("repo", "target.git").put("branch", branch).toString())
         assertEquals(first, competing.getString("old_oid"))
@@ -424,5 +432,30 @@ class AndroidProjectRemoteTest {
         val again = g.git.pullFastForward(g.request().put("expected_head_oid", competing.getString("oid")))
         assertFalse(again.getBoolean("updated"))
         g.scratch.deleteRecursively()
+    }
+
+    @Test
+    fun theReceiptJournalKeepsTheNewestTwentyFiveAndRefusesACorruptOne() {
+        val f = fixture()
+        assertEquals(0, f.git.pushReceipts(f.request()).getJSONArray("receipts").length())
+        val gitDir = f.gitDir
+        for (index in 1..27) {
+            tech.zseven.rish.runtime.AndroidGitPushReceipts.record(
+                gitDir, f.projectId,
+                tech.zseven.rish.runtime.AndroidGitPushReceipts.receipt("example.com", "main", "a".repeat(40), index.toString(16).padStart(40, '0'), "2026-09-21T00:00:${index.toString().padStart(2, '0')}Z"),
+            )
+        }
+        val kept = f.git.pushReceipts(f.request()).getJSONArray("receipts")
+        assertEquals(25, kept.length())
+        assertEquals(3.toString(16).padStart(40, '0'), kept.getJSONObject(0).getString("remote_oid"))
+        assertEquals(27.toString(16).padStart(40, '0'), kept.getJSONObject(24).getString("remote_oid"))
+        // A receipt with anything but the seven fields never enters the journal.
+        assertEquals(3021, refusal {
+            tech.zseven.rish.runtime.AndroidGitPushReceipts.record(gitDir, f.projectId, tech.zseven.rish.runtime.AndroidGitPushReceipts.receipt("example.com", "main", "a".repeat(40), "b".repeat(40), "now").put("token", "x"))
+        })
+        // A corrupt journal is refused whole rather than read around.
+        File(gitDir, tech.zseven.rish.runtime.AndroidGitPushReceipts.FILENAME).writeText("{\"schema_version\":1,\"project_id\":\"other\",\"receipts\":[]}")
+        assertEquals(3021, refusal { f.git.pushReceipts(f.request()) })
+        f.scratch.deleteRecursively()
     }
 }

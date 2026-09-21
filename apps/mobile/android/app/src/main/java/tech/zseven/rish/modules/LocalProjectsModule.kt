@@ -220,6 +220,10 @@ class LocalProjectsModule(private val react: ReactApplicationContext) :
         answer("pushV2", request, promise) { runtime.projectGit.push(it) }
 
     @ReactMethod
+    fun pushReceiptsV2(request: ReadableMap?, promise: Promise) =
+        answer("pushReceiptsV2", request, promise) { runtime.projectGit.pushReceipts(it) }
+
+    @ReactMethod
     fun fetchV2(request: ReadableMap?, promise: Promise) =
         answer("fetchV2", request, promise) { runtime.projectGit.fetch(it) }
 

@@ -196,6 +196,11 @@ class AndroidAgentGitToolExecutorTest {
         assertEquals(first, effect.getJSONObject("settled_facts").getString("actual_remote_oid"))
         assertEquals(first, File(bare, "refs/heads/main").readText().trim())
         assertEquals(first, File(f.gitDir, "refs/remotes/origin/main").readText().trim())
+        // The panel's receipt, with `localhost` standing in for a path origin.
+        val receipts = tech.zseven.rish.runtime.AndroidGitPushReceipts.load(f.gitDir, f.projectId)
+        assertEquals(1, receipts.length())
+        assertEquals("localhost", receipts.getJSONObject(0).getString("host"))
+        assertEquals(first, receipts.getJSONObject(0).getString("remote_oid"))
         assertEquals("settled", recoverPush(f, pre).getString("status"))
         assertEquals(first, recoverPush(f, pre).getString("actual_remote_oid"))
 

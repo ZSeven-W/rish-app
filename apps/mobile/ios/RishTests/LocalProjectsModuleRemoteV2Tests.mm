@@ -21,6 +21,7 @@ typedef void (^RV2Reject)(NSString *code, NSString *message, NSError *error);
 - (void)cancelPushV2Request:(id)request resolver:(RV2Resolve)resolve rejecter:(RV2Reject)reject;
 - (void)statusV2Request:(id)request resolver:(RV2Resolve)resolve rejecter:(RV2Reject)reject;
 - (void)fetchV2Request:(id)request resolver:(RV2Resolve)resolve rejecter:(RV2Reject)reject;
+- (void)pushReceiptsV2Request:(id)request resolver:(RV2Resolve)resolve rejecter:(RV2Reject)reject;
 - (void)pullFastForwardV2Request:(id)request resolver:(RV2Resolve)resolve rejecter:(RV2Reject)reject;
 @end
 
@@ -451,6 +452,37 @@ static BOOL RV2PushMain(git_repository *repository) {
   XCTAssertNil(refused);
   XCTAssertEqualObjects(code, @"E_PROJECT_NON_FAST_FORWARD");
   [NSFileManager.defaultManager removeItemAtPath:scratch error:nil];
+}
+
+
+- (void)testPushReceiptsAreReadByRootAndSanitized {
+  NSString *code = nil;
+  NSDictionary *none = [self bridge:^(RV2Resolve resolve, RV2Reject reject) {
+    [self.module pushReceiptsV2Request:[self request] resolver:resolve rejecter:reject];
+  } code:&code];
+  XCTAssertNotNil(none, @"%@", code);
+  XCTAssertEqualObjects(none[@"receipts"], @[]);
+  XCTAssertEqualObjects(none[@"root"], self.projectRoot);
+  NSError *error = nil;
+  @autoreleasepool {
+    __attribute__((objc_precise_lifetime)) DSHLocalProjectLease *lease = [self.projectAccess
+        leaseWorkspaceRootRef:self.projectRoot mode:DSHLocalProjectAccessModeWrite includeMetadata:NO timeout:1 error:&error];
+    XCTAssertNotNil(lease, @"%@", error);
+    NSString *a = [@"" stringByPaddingToLength:40 withString:@"a" startingAtIndex:0];
+    NSString *b = [@"" stringByPaddingToLength:40 withString:@"b" startingAtIndex:0];
+    XCTAssertTrue(DSHGitPushRecordReceipt(lease.gitDescriptor, self.projectRoot[@"project_id"],
+        DSHGitPushReceipt(@"github.com", @"main", a, b, @"2026-09-21T00:00:00.000Z"), &error), @"%@", error);
+  }
+  NSDictionary *one = [self bridge:^(RV2Resolve resolve, RV2Reject reject) {
+    [self.module pushReceiptsV2Request:[self request] resolver:resolve rejecter:reject];
+  } code:&code];
+  XCTAssertNotNil(one, @"%@", code);
+  NSArray *receipts = one[@"receipts"];
+  XCTAssertEqual(receipts.count, 1u);
+  XCTAssertEqualObjects(receipts[0][@"host"], @"github.com");
+  XCTAssertEqualObjects(receipts[0][@"branch"], @"main");
+  XCTAssertEqualObjects([[receipts[0] allKeys] sortedArrayUsingSelector:@selector(compare:)],
+      (@[@"branch", @"host", @"local_oid", @"pushed_at", @"remote", @"remote_oid", @"schema_version"]));
 }
 
 @end

@@ -5563,6 +5563,65 @@ static NSString *LPV2FetchOrigin(git_repository *repository, NSString **hostOut)
   return nil;
 }
 
+RCT_REMAP_METHOD(pushReceiptsV2,
+                 pushReceiptsV2Request:(id)requestValue
+                 resolver:(RCTPromiseResolveBlock)resolve
+                 rejecter:(RCTPromiseRejectBlock)reject) {
+  NSDictionary *request = nil;
+  NSError *validationError = nil;
+  NSDictionary *root = nil;
+  BOOL inputValid = NO;
+  @try {
+    request = LPDictionary(requestValue);
+    root = LPV2Root(request[@"root"], YES, &validationError);
+    inputValid = LPV2ExactKeys(request, @[@"schema_version", @"root"]) &&
+        [request[@"schema_version"] isEqual:@1] && root != nil;
+  } @catch (__unused NSException *exception) {
+    validationError = LPError(3199, @"Git request is invalid");
+  }
+  if (!inputValid) {
+    LPV2Reject(reject, validationError ?: LPError(3101, @"Git request is invalid"));
+    return;
+  }
+  dispatch_async(self.projectQueue, ^{ @autoreleasepool {
+    NSError *error = nil;
+    __attribute__((objc_precise_lifetime)) DSHLocalProjectLease *lease = [self v2LeaseForRoot:root
+                                                   mode:DSHLocalProjectAccessModeRead
+                                                  error:&error];
+    NSString *projectId = root[@"project_id"];
+    NSArray<NSDictionary *> *receipts = lease == nil ? nil
+        : DSHGitPushLoadReceipts(lease.gitDescriptor, projectId, &error);
+    BOOL valid = receipts != nil && [self.projectAccessV2 validateWorkspaceLeaseIdentity:lease
+                                                                                  rootRef:root
+                                                                                    error:&error];
+    lease = nil;
+    if (!valid) {
+      LPV2Reject(reject, error ?: LPError(3199, @"Receipt storage is unavailable"));
+      return;
+    }
+    // Sanitize before crossing the bridge: hosts, branch names, OIDs, and
+    // timestamps only.
+    NSMutableArray *rows = [NSMutableArray array];
+    for (NSDictionary *receipt in receipts) {
+      [rows addObject:@{
+        @"schema_version" : @1,
+        @"remote" : receipt[@"remote"],
+        @"host" : receipt[@"host"],
+        @"branch" : receipt[@"branch"],
+        @"local_oid" : receipt[@"local_oid"],
+        @"remote_oid" : receipt[@"remote_oid"],
+        @"pushed_at" : receipt[@"pushed_at"],
+      }];
+    }
+    resolve(@{
+      @"schema_version" : @2,
+      @"root" : root,
+      @"project_id" : projectId,
+      @"receipts" : rows,
+    });
+  } });
+}
+
 RCT_REMAP_METHOD(fetchV2,
                  fetchV2Request:(id)requestValue
                  resolver:(RCTPromiseResolveBlock)resolve
