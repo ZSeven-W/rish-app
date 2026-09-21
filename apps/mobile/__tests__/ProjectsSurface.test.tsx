@@ -44,6 +44,8 @@ jest.mock('../src/native/LocalProjects', () => ({
     isWorkspaceCloneAvailable: jest.fn(),
     cloneWorkspaceV2: jest.fn(),
     cancelWorkspaceCloneV2: jest.fn(),
+    isCloneCredentialPromptAvailable: jest.fn(),
+    presentCloneCredentialPromptV2: jest.fn(),
     create: jest.fn(),
     clone: jest.fn(),
     startClone: jest.fn(),
@@ -1759,4 +1761,81 @@ test('without legacy projects a clone becomes a new workspace project, and can b
   expect(renderer.root.findAllByProps({ children: 'Repository cloned locally.' }).length).toBeGreaterThan(0);
   // The new project opened by its root.
   expect(mockLocalProjects.statusV2).toHaveBeenCalledWith({ schema_version: 1, root: workspaceRoot });
+});
+
+function privateCloneSetup() {
+  mockLocalProjects.isLegacyCloneAvailable.mockReturnValue(false);
+  mockLocalProjects.isWorkspaceCloneAvailable.mockReturnValue(true);
+  mockLocalProjects.isCloneCredentialPromptAvailable.mockReturnValue(true);
+  mockWorkspaceProjects.mockResolvedValue([]);
+  const v2Status = { ...dirtyStatus, schema_version: 2, root: workspaceRoot, project_id: workspaceRoot.project_id };
+  mockLocalProjects.statusV2.mockResolvedValue(v2Status);
+  mockLocalProjects.diffV2.mockImplementation(async (request: { staged: boolean }) => ({
+    ...diff, schema_version: 2, root: workspaceRoot, project_id: workspaceRoot.project_id, staged: request.staged,
+  }));
+  return {
+    refused: Object.assign(new Error('E_PROJECT_CREDENTIAL'), { code: 'E_PROJECT_CREDENTIAL' }),
+    cloned: {
+      schema_version: 2, root: workspaceRoot,
+      project: {
+        schema_version: 2, project_id: workspaceRoot.project_id, workspace_id: workspaceRoot.workspace_id,
+        workspace_binding_revision: 1, display_name: 'demo', git_topology: 'private_split_gitdir',
+      },
+      workspace: { workspace_id: workspaceRoot.workspace_id, display_name: 'demo' }, branch: 'main', oid: 'f'.repeat(40),
+    },
+  };
+}
+
+async function startPrivateClone(renderer: Awaited<ReturnType<typeof renderSurface>>, url: string) {
+  await act(async () => { actionByLabel(renderer.root, 'Clone repository').props.onPress(); await settle(); });
+  await act(async () => inputByLabel(renderer.root, 'Remote URL').props.onChangeText(url));
+  await act(async () => { actionByLabel(renderer.root, 'Clone').props.onPress(); await settle(); await settle(); await settle(); });
+}
+
+test('a workspace clone that asks for a credential gets the native prompt once and is retried with it', async () => {
+  const { refused, cloned } = privateCloneSetup();
+  mockLocalProjects.cloneWorkspaceV2.mockRejectedValueOnce(refused).mockResolvedValueOnce(cloned);
+  mockLocalProjects.presentCloneCredentialPromptV2.mockResolvedValue({
+    schema_version: 2, operation_id: 'op-1', host: 'github.com', expiry_seconds: 3600,
+  });
+  const renderer = await renderSurface();
+  await startPrivateClone(renderer, 'https://github.com/example/demo.git');
+  // Prompted for the same operation and URL, then cloned again naming the credential by reference.
+  expect(mockLocalProjects.presentCloneCredentialPromptV2).toHaveBeenCalledWith({
+    schema_version: 1, operation_id: 'op-1', url: 'https://github.com/example/demo.git', locale: 'en',
+  });
+  expect(mockLocalProjects.cloneWorkspaceV2).toHaveBeenCalledTimes(2);
+  expect(mockLocalProjects.cloneWorkspaceV2).toHaveBeenLastCalledWith({
+    schema_version: 1, operation_id: 'op-1', url: 'https://github.com/example/demo.git', display_name: 'demo',
+    credential_reference: 'prompt',
+  });
+  expect(renderer.root.findAllByProps({ children: 'Repository cloned locally.' }).length).toBeGreaterThan(0);
+});
+
+test('dismissing the clone credential prompt is a cancelled clone', async () => {
+  const { refused } = privateCloneSetup();
+  mockLocalProjects.cloneWorkspaceV2.mockRejectedValue(refused);
+  mockLocalProjects.presentCloneCredentialPromptV2.mockRejectedValue(
+    Object.assign(new Error('E_PROJECT_CANCELLED'), { code: 'E_PROJECT_CANCELLED' }),
+  );
+  const renderer = await renderSurface();
+  await startPrivateClone(renderer, 'https://github.com/example/private.git');
+  expect(mockLocalProjects.cloneWorkspaceV2).toHaveBeenCalledTimes(1);
+  expect(renderer.root.findAllByProps({ children: 'Clone cancelled. Nothing was created.' }).length).toBeGreaterThan(0);
+});
+
+test('a clone credential the remote turns away is reported and nothing is created', async () => {
+  const { refused } = privateCloneSetup();
+  mockLocalProjects.cloneWorkspaceV2.mockRejectedValue(refused);
+  mockLocalProjects.presentCloneCredentialPromptV2.mockResolvedValue({
+    schema_version: 2, operation_id: 'op-1', host: 'github.com', expiry_seconds: 3600,
+  });
+  const renderer = await renderSurface();
+  await startPrivateClone(renderer, 'https://github.com/example/private.git');
+  expect(mockLocalProjects.cloneWorkspaceV2).toHaveBeenCalledTimes(2);
+  expect(mockLocalProjects.presentCloneCredentialPromptV2).toHaveBeenCalledTimes(1);
+  expect(
+    renderer.root.findAllByProps({ children: 'The repository did not accept that credential. Nothing was created.' }).length,
+  ).toBeGreaterThan(0);
+  expect(renderer.root.findAllByProps({ testID: 'projects-workspace-clone' }).length).toBe(0);
 });

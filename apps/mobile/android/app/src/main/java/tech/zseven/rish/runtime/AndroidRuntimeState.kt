@@ -31,7 +31,7 @@ internal class AndroidRuntimeState private constructor(val app: Application) {
     val gitRoots = AndroidGitCertificates.ensure(app)
     val projectGit = AndroidProjectGit(workspaceProjects, workspaces, gitCredentials)
     /// A public repository into a new workspace, the network half staged first.
-    val workspaceClone = AndroidWorkspaceClone(app, workspaces, workspaceProjects)
+    val workspaceClone = AndroidWorkspaceClone(app, workspaces, workspaceProjects, gitCredentials)
     /// Prepared context snapshots, outside backup like the agent WAL.
     val projectContextStore = AndroidProjectContextStore(java.io.File(app.noBackupFilesDir, "project-context"))
     val projectSnapshots = AndroidProjectContextSnapshots(

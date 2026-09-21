@@ -160,10 +160,15 @@ internal object RishLibgit2Native {
     /**
      * The network half of a clone into an empty split repository whose
      * origin is set: `{"ok":true,"outcome":success|auth_failure|timed_out|
-     * cancelled|empty|failed,"branch":…,"oid":…}`. Anonymous; cancelled by
-     * `cancelPush` with the same operation id.
+     * cancelled|empty|failed,"branch":…,"oid":…}`. Anonymous when
+     * `username` or `token` is empty; otherwise the credential is offered
+     * once and only to `host`. Cancelled by `cancelPush` with the same
+     * operation id.
      */
-    @JvmStatic external fun cloneCheckout(gitDir: String?, workDir: String, operationId: String, timeoutSeconds: Int): ByteArray
+    @JvmStatic external fun cloneCheckout(
+        gitDir: String?, workDir: String, operationId: String, host: String, username: String, token: String,
+        timeoutSeconds: Int,
+    ): ByteArray
 
     // --- capturing a selection --------------------------------------------
     //

@@ -240,6 +240,45 @@ class LocalProjectsModule(private val react: ReactApplicationContext) :
     fun cancelWorkspaceCloneV2(request: ReadableMap?, promise: Promise) =
         answer("cancelWorkspaceCloneV2", request, promise, cancels) { runtime.workspaceClone.cancel(it) }
 
+    /**
+     * A credential for one clone, typed into the same native dialog a push
+     * uses and kept by the clone service for the operation id it was asked
+     * for. Nothing of it reaches JavaScript: the answer is the host and the
+     * expiry the person chose.
+     */
+    @ReactMethod
+    fun presentCloneCredentialPromptV2(request: ReadableMap?, promise: Promise) {
+        val captured = captured(request, promise) ?: return
+        runtime.io.execute {
+            val scope = try {
+                runtime.workspaceClone.promptScope(captured)
+            } catch (refused: AndroidWorkspaceProjects.Refused) {
+                android.util.Log.w(TAG, "presentCloneCredentialPromptV2 refused: ${refused.number}")
+                promise.reject(refused.code, refused.code); return@execute
+            } catch (failure: Throwable) {
+                android.util.Log.w(TAG, "presentCloneCredentialPromptV2 could not be answered", failure)
+                promise.reject("E_PROJECT_NATIVE", "E_PROJECT_NATIVE"); return@execute
+            }
+            val host = scope.getString("host")
+            UiThreadUtil.runOnUiThread {
+                AndroidGitCredentialPrompt.present(
+                    react.currentActivity, host, scope.getBoolean("chinese"), scope.getBoolean("plaintext"),
+                ) { username, token, expiry, failure ->
+                    if (failure != null || username == null || token == null) {
+                        val number = if (failure == "presentation") AndroidWorkspaceProjects.UNAVAILABLE else CANCELLED
+                        promise.reject(AndroidWorkspaceProjects.codeFor(number), AndroidWorkspaceProjects.codeFor(number))
+                        return@present
+                    }
+                    runtime.io.execute {
+                        settle("presentCloneCredentialPromptV2", promise) {
+                            runtime.workspaceClone.offerCredential(scope.getString("operation_id"), host, username, token, expiry)
+                        }
+                    }
+                }
+            }
+        }
+    }
+
     @ReactMethod
     fun pushReceiptsV2(request: ReadableMap?, promise: Promise) =
         answer("pushReceiptsV2", request, promise) { runtime.projectGit.pushReceipts(it) }

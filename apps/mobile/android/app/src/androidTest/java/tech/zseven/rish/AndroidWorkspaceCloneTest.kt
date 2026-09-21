@@ -5,10 +5,12 @@ import androidx.test.platform.app.InstrumentationRegistry
 import org.json.JSONObject
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertTrue
 import org.junit.Assume.assumeTrue
 import org.junit.Test
 import org.junit.runner.RunWith
+import tech.zseven.rish.runtime.AndroidGitCredentials
 import tech.zseven.rish.runtime.AndroidWorkspaceClone
 import tech.zseven.rish.runtime.AndroidWorkspaceProjects
 import tech.zseven.rish.runtime.AndroidWorkspaceRegistry
@@ -29,7 +31,8 @@ class AndroidWorkspaceCloneTest {
     private class Fixture(val scratch: File, context: android.content.Context) {
         val workspaces = AndroidWorkspaceRegistry(File(scratch, "registry").apply { mkdirs() })
         val projects = AndroidWorkspaceProjects(workspaces)
-        val clone = AndroidWorkspaceClone(context, workspaces, projects)
+        val credentials = AndroidGitCredentials(context, "rish.git-credentials.clone-test-${UUID.randomUUID()}")
+        val clone = AndroidWorkspaceClone(context, workspaces, projects, credentials)
         val staging = File(context.noBackupFilesDir, "clone-staging")
     }
 
@@ -80,6 +83,55 @@ class AndroidWorkspaceCloneTest {
         assertEquals(result.getString("oid"), status.getString("head_oid"))
         assertEquals(0, status.getInt("ahead")); assertEquals(0, status.getInt("behind"))
         assertEquals("$base/public.git", JSONObject(String(RishLibgit2Native.remoteUrl(gitDir.absolutePath, workDir.absolutePath), Charsets.UTF_8)).getString("url"))
+        assertFalse(f.staging.listFiles()?.any { it.isDirectory } ?: false)
+        f.scratch.deleteRecursively()
+    }
+
+    /**
+     * A private repository: anonymous is refused, the credential the person
+     * typed for this operation is offered once to the URL's host, and the
+     * clone that succeeds keeps it for the new project so fetch and push do
+     * not ask again. A wrong credential is refused the same way as none, and
+     * an offer is spent by the clone that names it.
+     */
+    @Test
+    fun aPrivateRepositoryClonesWithTheCredentialOfferedForItAndKeepsIt() {
+        val base = base()
+        val args = InstrumentationRegistry.getArguments()
+        val user = args.getString("rish_g2_user")
+        val token = args.getString("rish_g2_token")
+        assumeTrue("no local test remote credential: pass rish_g2_user and rish_g2_token", user != null && token != null)
+        val f = fixture()
+        val host = java.net.URI(base).host
+        val operationId = UUID.randomUUID().toString()
+        // No credential typed: naming one refuses before the network.
+        assertEquals(3197, refusal {
+            f.clone.clone(request("$base/target.git", "Private", operationId).put("credential_reference", "prompt"))
+        })
+        // The wrong one is turned away by the remote.
+        f.clone.offerCredential(operationId, host, user!!, "not-the-token", 3600)
+        assertEquals(3197, refusal {
+            f.clone.clone(request("$base/target.git", "Private", operationId).put("credential_reference", "prompt"))
+        })
+        assertEquals(0, f.workspaces.list().size)
+        // An offer for another host is not offered to this one.
+        f.clone.offerCredential(operationId, "example.com", user, token!!, 3600)
+        assertEquals(3197, refusal {
+            f.clone.clone(request("$base/target.git", "Private", operationId).put("credential_reference", "prompt"))
+        })
+        // The right one clones, and is the project's afterwards.
+        f.clone.offerCredential(operationId, host, user, token, 86400)
+        val result = f.clone.clone(request("$base/target.git", "Private", operationId).put("credential_reference", "prompt"))
+        val root = result.getJSONObject("root")
+        val projectId = root.getString("project_id")
+        assertEquals("main", result.getString("branch"))
+        val stored = f.credentials.read(projectId, host)
+        assertNotNull(stored)
+        assertEquals(user, stored!!.username); assertEquals(token, stored.token); assertEquals(86400L, stored.expirySeconds)
+        // Spent: the same reference again finds nothing offered, before any network.
+        assertEquals(3197, refusal {
+            f.clone.clone(request("$base/target.git", "Again", operationId).put("credential_reference", "prompt"))
+        })
         assertFalse(f.staging.listFiles()?.any { it.isDirectory } ?: false)
         f.scratch.deleteRecursively()
     }

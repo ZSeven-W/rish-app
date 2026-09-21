@@ -280,6 +280,16 @@ export type WorkspaceCloneRequestV1 = {
   operation_id: string;
   url: string;
   display_name: string;
+  /** `prompt`: use the credential typed for this operation id (see presentCloneCredentialPromptV2). */
+  credential_reference?: 'prompt';
+};
+
+/** What the clone credential prompt answers: never the secret. */
+export type WorkspaceCloneCredentialV2 = {
+  schema_version: 2;
+  operation_id: string;
+  host: string;
+  expiry_seconds: number;
 };
 
 /** A public repository cloned into a new workspace with a project attached. */
@@ -448,6 +458,9 @@ type NativeLocalProjects = {
   pushReceiptsV2?(request: GitWorkspaceRequestV1): Promise<unknown>;
   cloneWorkspaceV2?(request: WorkspaceCloneRequestV1): Promise<unknown>;
   cancelWorkspaceCloneV2?(request: { schema_version: 1; operation_id: string }): Promise<unknown>;
+  presentCloneCredentialPromptV2?(request: {
+    schema_version: 1; operation_id: string; url: string; locale: 'zh-CN' | 'en';
+  }): Promise<unknown>;
 };
 
 const native = NativeModules.LocalProjects as unknown;
@@ -1339,8 +1352,17 @@ function projectV2Receipts(
 }
 
 function projectV2WorkspaceCloneRequest(value: unknown): WorkspaceCloneRequestV1 {
-  const row = projectV2ExactRecord(value, ['schema_version', 'operation_id', 'url', 'display_name'], 'E_PROJECT_REQUEST_INVALID');
-  if (row.schema_version !== 1 || !projectV2String(row.url, 2048) || !projectV2String(row.display_name, 120)) {
+  const record = value as { credential_reference?: unknown } | null;
+  const withCredential = typeof record === 'object' && record !== null && 'credential_reference' in record;
+  const row = projectV2ExactRecord(
+    value,
+    withCredential
+      ? ['schema_version', 'operation_id', 'url', 'display_name', 'credential_reference']
+      : ['schema_version', 'operation_id', 'url', 'display_name'],
+    'E_PROJECT_REQUEST_INVALID',
+  );
+  if (row.schema_version !== 1 || !projectV2String(row.url, 2048) || !projectV2String(row.display_name, 120) ||
+      (withCredential && row.credential_reference !== 'prompt')) {
     return projectV2Fail('E_PROJECT_REQUEST_INVALID');
   }
   return {
@@ -1348,6 +1370,7 @@ function projectV2WorkspaceCloneRequest(value: unknown): WorkspaceCloneRequestV1
     operation_id: projectV2OperationId(row.operation_id),
     url: row.url,
     display_name: row.display_name,
+    ...(withCredential ? { credential_reference: 'prompt' as const } : {}),
   };
 }
 
@@ -2174,6 +2197,56 @@ export const LocalProjects = {
       return await projectV2Boundary(
         () => row!.cloneWorkspaceV2!(request),
         projectV2WorkspaceClone,
+      );
+    } catch (error) {
+      throw projectV2Error(error);
+    }
+  },
+  /** Whether a clone that asks for a credential can be given one here (Android). */
+  isCloneCredentialPromptAvailable: (): boolean => {
+    try {
+      const row = native as Partial<NativeLocalProjects> | null;
+      return LocalProjects.isWorkspaceCloneAvailable() && typeof row?.presentCloneCredentialPromptV2 === 'function';
+    } catch {
+      return false;
+    }
+  },
+  /**
+   * The native credential dialog for one clone. The secret stays native,
+   * keyed by the operation id; the clone that names it with
+   * `credential_reference: 'prompt'` uses it, and a clone that succeeds keeps
+   * it for the new project. Dismissing the dialog rejects E_PROJECT_CANCELLED.
+   */
+  presentCloneCredentialPromptV2: async (requestValue: unknown): Promise<WorkspaceCloneCredentialV2> => {
+    try {
+      const row = projectV2ExactRecord(requestValue, ['schema_version', 'operation_id', 'url', 'locale'], 'E_PROJECT_REQUEST_INVALID');
+      if (row.schema_version !== 1 || !projectV2String(row.url, 2048) || (row.locale !== 'zh-CN' && row.locale !== 'en')) {
+        return projectV2Fail('E_PROJECT_REQUEST_INVALID');
+      }
+      const request = {
+        schema_version: 1 as const,
+        operation_id: projectV2OperationId(row.operation_id),
+        url: row.url,
+        locale: row.locale as 'zh-CN' | 'en',
+      };
+      const native_ = native as Partial<NativeLocalProjects> | null;
+      if (!hasV2Capabilities(native) || typeof native_?.presentCloneCredentialPromptV2 !== 'function') projectV2Fail('E_PROJECT_NATIVE');
+      return await projectV2Boundary(
+        () => native_!.presentCloneCredentialPromptV2!(request),
+        raw => {
+          const answer = projectV2ExactRecord(raw, ['schema_version', 'operation_id', 'host', 'expiry_seconds'], 'E_PROJECT_RESULT_INVALID');
+          if (answer.schema_version !== 2 || answer.operation_id !== request.operation_id ||
+              !projectV2String(answer.host, 253) || typeof answer.expiry_seconds !== 'number' ||
+              !Number.isSafeInteger(answer.expiry_seconds) || answer.expiry_seconds <= 0) {
+            return projectV2Fail('E_PROJECT_RESULT_INVALID');
+          }
+          return {
+            schema_version: 2 as const,
+            operation_id: answer.operation_id,
+            host: answer.host,
+            expiry_seconds: answer.expiry_seconds,
+          };
+        },
       );
     } catch (error) {
       throw projectV2Error(error);

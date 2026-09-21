@@ -21,6 +21,7 @@ const native = {
   pushReceiptsV2: jest.fn(),
   cloneWorkspaceV2: jest.fn(),
   cancelWorkspaceCloneV2: jest.fn(),
+  presentCloneCredentialPromptV2: jest.fn(),
 };
 
 (NativeModules as Record<string, unknown>).LocalProjects = native;
@@ -531,4 +532,63 @@ test('a workspace clone is requested by url and name and answers the attached pr
   expect(LocalProjects.isV2Available()).toBe(true);
   expect(LocalProjects.isWorkspaceCloneAvailable()).toBe(false);
   partial.cloneWorkspaceV2 = clone;
+});
+
+test('a clone that asks for a credential is given one through the native prompt, by operation id', async () => {
+  native.presentCloneCredentialPromptV2.mockResolvedValue({
+    schema_version: 2, operation_id: OPERATION_ID, host: 'github.com', expiry_seconds: 3600,
+  });
+  expect(LocalProjects.isCloneCredentialPromptAvailable()).toBe(true);
+  await expect(
+    LocalProjects.presentCloneCredentialPromptV2({
+      schema_version: 1, operation_id: OPERATION_ID, url: 'https://github.com/example/demo.git', locale: 'en',
+    }),
+  ).resolves.toEqual({ schema_version: 2, operation_id: OPERATION_ID, host: 'github.com', expiry_seconds: 3600 });
+  expect(native.presentCloneCredentialPromptV2).toHaveBeenCalledWith({
+    schema_version: 1, operation_id: OPERATION_ID, url: 'https://github.com/example/demo.git', locale: 'en',
+  });
+  // The answer names the operation it was asked for, and never a secret.
+  native.presentCloneCredentialPromptV2.mockResolvedValueOnce({
+    schema_version: 2, operation_id: PROJECT_ID, host: 'github.com', expiry_seconds: 3600,
+  });
+  await expect(
+    LocalProjects.presentCloneCredentialPromptV2({
+      schema_version: 1, operation_id: OPERATION_ID, url: 'https://github.com/example/demo.git', locale: 'en',
+    }),
+  ).rejects.toMatchObject({ code: 'E_PROJECT_RESULT_INVALID' });
+  native.presentCloneCredentialPromptV2.mockResolvedValueOnce({
+    schema_version: 2, operation_id: OPERATION_ID, host: 'github.com', expiry_seconds: 3600, token: 'leak',
+  });
+  await expect(
+    LocalProjects.presentCloneCredentialPromptV2({
+      schema_version: 1, operation_id: OPERATION_ID, url: 'https://github.com/example/demo.git', locale: 'en',
+    }),
+  ).rejects.toMatchObject({ code: 'E_PROJECT_RESULT_INVALID' });
+  await expect(
+    LocalProjects.presentCloneCredentialPromptV2({
+      schema_version: 1, operation_id: OPERATION_ID, url: 'https://github.com/example/demo.git', locale: 'fr',
+    }),
+  ).rejects.toMatchObject({ code: 'E_PROJECT_REQUEST_INVALID' });
+  // The clone then names the credential by reference only.
+  const cloned = {
+    schema_version: 2, root: root(), project: project(),
+    workspace: { workspace_id: WORKSPACE_ID, display_name: 'demo' }, branch: 'main', oid: OID,
+  };
+  native.cloneWorkspaceV2.mockResolvedValue(cloned);
+  await expect(
+    LocalProjects.cloneWorkspaceV2({
+      schema_version: 1, operation_id: OPERATION_ID, url: 'https://github.com/example/demo.git', display_name: 'demo',
+      credential_reference: 'prompt',
+    }),
+  ).resolves.toEqual(cloned);
+  expect(native.cloneWorkspaceV2).toHaveBeenLastCalledWith({
+    schema_version: 1, operation_id: OPERATION_ID, url: 'https://github.com/example/demo.git', display_name: 'demo',
+    credential_reference: 'prompt',
+  });
+  await expect(
+    LocalProjects.cloneWorkspaceV2({
+      schema_version: 1, operation_id: OPERATION_ID, url: 'https://github.com/example/demo.git', display_name: 'demo',
+      credential_reference: 'stored',
+    }),
+  ).rejects.toMatchObject({ code: 'E_PROJECT_REQUEST_INVALID' });
 });

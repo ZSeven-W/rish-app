@@ -751,17 +751,24 @@ Java_tech_zseven_rish_runtime_RishLibgit2Native_fastForward(JNIEnv *env, jclass,
 /// The network half of a clone into an empty split repository whose origin
 /// is already set: connect, learn the remote's default branch, fetch, put a
 /// local branch at the fetched tip, point HEAD at it, check the tree out
-/// into the (empty) working tree, and track origin. Anonymous: a remote
-/// that asks for a credential is `auth_failure`. Cancelled by cancelPush
-/// with the same operation id. Answers `{"ok":true,"outcome":success|
-/// auth_failure|timed_out|cancelled|empty|failed,"branch":…,"oid":…}`.
+/// into the (empty) working tree, and track origin. With an empty username
+/// or token it is anonymous and a remote that asks for a credential is
+/// `auth_failure`; with both, the credential is offered once and only to
+/// `host`, under the same rule as a push, and a remote that turns it away
+/// is `auth_failure` too. Cancelled by cancelPush with the same operation
+/// id. Answers `{"ok":true,"outcome":success|auth_failure|timed_out|
+/// cancelled|empty|failed,"branch":…,"oid":…}`.
 JNIEXPORT jbyteArray JNICALL
 Java_tech_zseven_rish_runtime_RishLibgit2Native_cloneCheckout(JNIEnv *env, jclass, jstring gitDirValue,
                                                               jstring workDirValue, jstring operationValue,
-                                                              jint timeoutSeconds) {
+                                                              jstring hostValue, jstring usernameValue,
+                                                              jstring tokenValue, jint timeoutSeconds) {
   const char *gitdir = Chars(env, gitDirValue);
   const char *workdir = Chars(env, workDirValue);
   const std::string operation = String(env, operationValue);
+  const std::string host = String(env, hostValue);
+  const std::string username = String(env, usernameValue);
+  const std::string token = String(env, tokenValue);
   std::string answer;
   git_repository *repository = nullptr;
   git_remote *remote = nullptr;
@@ -779,7 +786,11 @@ Java_tech_zseven_rish_runtime_RishLibgit2Native_cloneCheckout(JNIEnv *env, jclas
     std::atomic<bool> *cancel = RegisterCancel(operation);
     PushState state;
     state.cancel = cancel;
+    state.host = host;
+    state.username = username;
+    state.token = token;
     state.deadline = std::chrono::steady_clock::now() + std::chrono::seconds(timeoutSeconds);
+    const bool with_credentials = !state.token.empty() && !state.username.empty();
     int code = git_remote_lookup(&remote, repository, "origin");
     git_fetch_options options = {};
     if (code == 0) code = git_fetch_options_init(&options, GIT_FETCH_OPTIONS_VERSION);
@@ -787,7 +798,7 @@ Java_tech_zseven_rish_runtime_RishLibgit2Native_cloneCheckout(JNIEnv *env, jclas
     if (code == 0) {
       options.follow_redirects = GIT_REMOTE_REDIRECT_NONE;
       options.proxy_opts.type = GIT_PROXY_NONE;
-      FillCallbacks(&options.callbacks, &state, false);
+      FillCallbacks(&options.callbacks, &state, with_credentials);
       options.callbacks.transfer_progress = FetchProgress;
       git_remote_connect_options connect_options = {};
       code = git_remote_connect_options_init(&connect_options, GIT_REMOTE_CONNECT_OPTIONS_VERSION);

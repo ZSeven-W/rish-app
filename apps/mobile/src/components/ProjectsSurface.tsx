@@ -784,13 +784,40 @@ export function ProjectsSurface({
           const operationId = LocalRuntime.createCompletionRequestId();
           workspaceCloneRef.current = operationId;
           setWorkspaceClone({ operationId, url: trimmedUrl });
+          const cloneRequest = {
+            schema_version: 1 as const,
+            operation_id: operationId,
+            url: trimmedUrl,
+            display_name: trimmedName.length === 0 ? workspaceNameFromUrl(trimmedUrl) : trimmedName,
+          };
           try {
-            const cloned = await LocalProjects.cloneWorkspaceV2({
-              schema_version: 1,
-              operation_id: operationId,
-              url: trimmedUrl,
-              display_name: trimmedName.length === 0 ? workspaceNameFromUrl(trimmedUrl) : trimmedName,
-            });
+            let cloned;
+            try {
+              cloned = await LocalProjects.cloneWorkspaceV2(cloneRequest);
+            } catch (first) {
+              // A repository that asks for a credential gets one chance: the
+              // native dialog, then the same clone again with what was typed.
+              // The secret never comes through here.
+              if (!tasks.owns(task) || errorCode(first) !== 'E_PROJECT_CREDENTIAL' ||
+                  !LocalProjects.isCloneCredentialPromptAvailable() || workspaceCloneRef.current !== operationId) {
+                throw first;
+              }
+              await LocalProjects.presentCloneCredentialPromptV2({
+                schema_version: 1,
+                operation_id: operationId,
+                url: trimmedUrl,
+                locale: locale === 'zh-CN' ? 'zh-CN' : 'en',
+              });
+              if (!tasks.owns(task) || workspaceCloneRef.current !== operationId) return;
+              try {
+                cloned = await LocalProjects.cloneWorkspaceV2({ ...cloneRequest, credential_reference: 'prompt' });
+              } catch (second) {
+                if (errorCode(second) === 'E_PROJECT_CREDENTIAL') {
+                  throw Object.assign(new Error('E_PROJECT_CREDENTIAL_REJECTED'), { code: 'E_PROJECT_CREDENTIAL_REJECTED' });
+                }
+                throw second;
+              }
+            }
             if (!tasks.owns(task)) return;
             setCreateMode(null);
             setName('');
@@ -815,6 +842,7 @@ export function ProjectsSurface({
             const code = errorCode(caught);
             if (code === 'E_PROJECT_CANCELLED') setNotice(t('projects.cloneCancelled'));
             else if (code === 'E_PROJECT_CREDENTIAL') setError(t('projects.cloneAuthRequired'));
+            else if (code === 'E_PROJECT_CREDENTIAL_REJECTED') setError(t('projects.cloneCredentialRejected'));
             else if (code === 'E_PROJECT_TIMEOUT') setError(t('projects.cloneTimeout'));
             else if (code === 'E_PROJECT_REQUEST_INVALID') setError(t('projects.cloneUrlInvalid'));
             else setError(t('projects.operationFailed', { error: errorText(caught) }));
