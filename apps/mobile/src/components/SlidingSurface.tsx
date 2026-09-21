@@ -3,6 +3,8 @@ import {
   Animated,
   BackHandler,
   Easing,
+  Keyboard,
+  Platform,
   Pressable,
   StyleSheet,
   useWindowDimensions,
@@ -26,6 +28,29 @@ type Props = React.PropsWithChildren<{
 
 const disableAnimations = process.env.NODE_ENV === 'test';
 
+/**
+ * The keyboard's height on Android, and 0 elsewhere. The Android window
+ * does not shrink for the keyboard here (edge-to-edge), so a surface that
+ * fills the window keeps its full height and whatever sits under the
+ * keyboard cannot be scrolled to. On iOS the screen's KeyboardAvoidingView
+ * already pads the root the surface is laid over.
+ */
+function useKeyboardHeight(): number {
+  const [height, setHeight] = useState(0);
+  useEffect(() => {
+    if (Platform.OS !== 'android') return;
+    const show = Keyboard.addListener('keyboardDidShow', event => {
+      setHeight(Math.max(0, event.endCoordinates?.height ?? 0));
+    });
+    const hide = Keyboard.addListener('keyboardDidHide', () => setHeight(0));
+    return () => {
+      show.remove();
+      hide.remove();
+    };
+  }, []);
+  return height;
+}
+
 export function SlidingSurface({
   accessibilityLabel,
   accessibilityHidden = false,
@@ -43,6 +68,7 @@ export function SlidingSurface({
 }: Props) {
   const { width, height } = useWindowDimensions();
   const panelWidth = Math.min(width * widthRatio, maxWidth);
+  const keyboardHeight = useKeyboardHeight();
   const progress = useRef(new Animated.Value(visible ? 1 : 0)).current;
   const presented = useRef(false);
   const onDismissRef = useRef(onDismiss);
@@ -146,7 +172,11 @@ export function SlidingSurface({
   );
 
   return (
-    <View pointerEvents={active ? 'auto' : 'none'} style={styles.container}>
+    <View
+      pointerEvents={active ? 'auto' : 'none'}
+      style={[styles.container, keyboardHeight > 0 && { paddingBottom: keyboardHeight }]}
+      testID="sliding-surface-container"
+    >
       <View style={styles.row}>
         {side === 'right' && scrim && scrimView}
         <Animated.View

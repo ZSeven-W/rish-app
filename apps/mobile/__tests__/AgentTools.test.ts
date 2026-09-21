@@ -35,6 +35,15 @@ const stubProjects = {
   stageAllV2: jest.fn(),
   commitV2: jest.fn(),
   pushV2: jest.fn(),
+  setRemoteV2: jest.fn(),
+  remoteV2: jest.fn(),
+  credentialStatusV2: jest.fn(),
+  presentCredentialPromptV2: jest.fn(),
+  clearCredentialV2: jest.fn(),
+  cancelPushV2: jest.fn(),
+  fetchV2: jest.fn(),
+  pullFastForwardV2: jest.fn(),
+  pushReceiptsV2: jest.fn(),
 };
 
 (NativeModules as Record<string, unknown>).LocalWorkspace = stubWorkspace;

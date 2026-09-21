@@ -1,6 +1,6 @@
 import React from 'react';
 import ReactTestRenderer, { act } from 'react-test-renderer';
-import { Modal, Text } from 'react-native';
+import { Keyboard, Modal, Platform, Text } from 'react-native';
 
 import { SlidingSurface } from '../src/components/SlidingSurface';
 
@@ -120,4 +120,48 @@ test('keeps a docked surface mounted when visible is false', async () => {
   });
   expect(renderer!.root.findByProps({ children: 'Docked navigation' })).toBeDefined();
   expect(renderer!.root.findAllByType(Modal)).toHaveLength(0);
+});
+
+test('on Android the surface gives the keyboard its height so the bottom stays reachable', async () => {
+  const platform = jest.replaceProperty(Platform, 'OS', 'android');
+  const listeners = new Map<string, (event: { endCoordinates: { height: number } }) => void>();
+  const addListener = jest.spyOn(Keyboard, 'addListener').mockImplementation(((name: string, listener: never) => {
+    listeners.set(name, listener as never);
+    return { remove: () => listeners.delete(name) };
+  }) as never);
+  let renderer: ReactTestRenderer.ReactTestRenderer | undefined;
+  await act(async () => {
+    renderer = ReactTestRenderer.create(
+      <SlidingSurface closeAccessibilityLabel="Close surface" onClose={() => undefined} visible>
+        <Text>Projects surface</Text>
+      </SlidingSurface>,
+    );
+  });
+  const container = () => renderer!.root.findByProps({ testID: 'sliding-surface-container' });
+  const flat = (style: unknown): Record<string, unknown> =>
+    Object.assign({}, ...(Array.isArray(style) ? style.flat(Infinity) : [style]).filter(Boolean));
+  expect(flat(container().props.style).paddingBottom).toBeUndefined();
+  await act(async () => { listeners.get('keyboardDidShow')?.({ endCoordinates: { height: 349 } }); });
+  expect(flat(container().props.style).paddingBottom).toBe(349);
+  await act(async () => { listeners.get('keyboardDidHide')?.({ endCoordinates: { height: 0 } }); });
+  expect(flat(container().props.style).paddingBottom).toBeUndefined();
+  await act(async () => { renderer!.unmount(); });
+  expect(listeners.size).toBe(0);
+  addListener.mockRestore();
+  platform.restore();
+});
+
+test('on iOS the surface leaves the keyboard to the screen', async () => {
+  const platform = jest.replaceProperty(Platform, 'OS', 'ios');
+  const addListener = jest.spyOn(Keyboard, 'addListener');
+  await act(async () => {
+    ReactTestRenderer.create(
+      <SlidingSurface closeAccessibilityLabel="Close surface" onClose={() => undefined} visible>
+        <Text>Projects surface</Text>
+      </SlidingSurface>,
+    );
+  });
+  expect(addListener).not.toHaveBeenCalled();
+  addListener.mockRestore();
+  platform.restore();
 });
