@@ -1,3 +1,4 @@
+import { agentAmbiguityCode } from '../agent/AgentAmbiguity';
 import { conversationGrantIdsForBatch, hasFrozenConversationGrant, hasLiveConversationGrant, isConversationGrantBoundCall } from '../agent/agent-conversation-grants';
 import { ALL_AGENT_TOOL_NAMES, ALL_AGENT_AUTO_TOOLS, agentToolRegistryCompatible, isGuestServiceAgentTool } from '../agent/tool-registry';
 import { isHarnessModelId } from '../harness/types';
@@ -4794,14 +4795,11 @@ function agentOuterAttemptCheckpoint(
   const failureCode: TurnAttemptV1['failureCode'] =
     status !== 'failed'
       ? null
-      // NOTE: an ambiguous *round* is still reported here as an ambiguous
-      // *execution*, which says something different and worse -- that a tool
-      // may already have changed the person's files. `persistence.ts`
-      // requires an ambiguous journal to carry exactly this code and
-      // sessions on disk have it, so correcting it needs a widened reader of
-      // its own. The banner already says the right thing; see the docs.
+      // Which uncertainty this is decides what the person is told: a round
+      // that may have reached the service, or a tool that may already have
+      // changed their files. `agentAmbiguityCode` reads it off the batch.
       : journal.phase === 'ambiguous'
-        ? 'E_AGENT_EXECUTION_AMBIGUOUS'
+        ? agentAmbiguityCode(journal)
         : journal.phase === 'unknown'
           ? 'E_AGENT_CONFLICT'
           : journal.phase === 'failed' &&

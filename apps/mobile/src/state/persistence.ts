@@ -1,3 +1,4 @@
+import { agentAmbiguityCode } from '../agent/AgentAmbiguity';
 import { hasFrozenConversationGrant, hasLiveConversationGrant, isConversationGrantBoundCall } from '../agent/agent-conversation-grants';
 import { ALL_AGENT_TOOL_NAMES, ALL_AGENT_AUTO_TOOLS, agentToolRegistryCompatible } from '../agent/tool-registry';
 import { parseProviderBinding } from '../providers/configuration';
@@ -4666,9 +4667,18 @@ function parseConversation(
           'unknown Agent journals require the conflict failure code',
         );
       }
+      // An ambiguous journal carries whichever uncertainty it actually has --
+      // a round that may have reached the service, or a tool that may have
+      // run -- and `agentAmbiguityCode` says which from the batch. Sessions
+      // written before that distinction existed recorded every ambiguity as
+      // an execution one, and they stay readable: that older code is still
+      // accepted here. The reverse is not: a journal whose batch holds an
+      // ambiguous receipt must keep saying a tool may have run, because that
+      // is the warning that sends the person to check their files.
       if (
         journal.phase === 'ambiguous' &&
-        attempt.failureCode !== 'E_AGENT_EXECUTION_AMBIGUOUS'
+        attempt.failureCode !== 'E_AGENT_EXECUTION_AMBIGUOUS' &&
+        attempt.failureCode !== agentAmbiguityCode(journal)
       ) {
         invalid(
           `${path}.attempts[${index}].failure_code`,

@@ -31,6 +31,7 @@ import {
   type AgentStoreTransitionEvidence,
 } from '../agent/AgentStoreTransitions';
 import { AGENT_FAILURE_CODES, type AgentFailureCode } from '../state/types';
+import { agentAmbiguityCode } from '../agent/AgentAmbiguity';
 import type {
   AgentApprovalBindingTokenV2,
   AgentApprovalPreviewV1,
@@ -5835,10 +5836,15 @@ export function createCompletionController(
             attemptId: attempt.attemptId,
             roundId: attempt.agent.round_lineage?.round_id ?? null,
             transportSchemaVersion: agentTransportSchema(attempt),
+            // What a cold start shows has to be what a warm one showed. An
+            // unknown journal is the conflict the warm path publishes; an
+            // ambiguous one is whichever uncertainty its batch records.
             failureCode:
-              attempt.agent.phase === 'unknown' || attempt.agent.phase === 'ambiguous'
-                ? 'E_AGENT_EXECUTION_AMBIGUOUS'
-                : null,
+              attempt.agent.phase === 'unknown'
+                ? 'E_AGENT_CONFLICT'
+                : attempt.agent.phase === 'ambiguous'
+                  ? agentAmbiguityCode(attempt.agent)
+                  : null,
           }),
         );
       } else if (attempt?.status === 'prepared' && attempt.rounds.length === 0) {

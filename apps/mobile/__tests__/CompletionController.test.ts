@@ -2114,16 +2114,18 @@ describe('project Agent completion controller', () => {
       });
       const controller = agentController(store, runtime, persistCurrent);
       const result = await controller.send({ conversationId, harnessId: 'glm', text: 'read only', attachments: [] });
+      // The round never produced a call, so nothing in the batch carries an
+      // ambiguous receipt: this is the round's own uncertainty. Hydrating the
+      // committed snapshot below is what proves the persistence reader
+      // accepts it.
       const failureCode = status === 'ambiguous'
-        ? 'E_AGENT_EXECUTION_AMBIGUOUS'
+        ? 'E_AGENT_ROUND_AMBIGUOUS'
         : 'E_AGENT_CONFLICT';
       expect(result.status).toBe('retryable');
-      // What the person is shown. An ambiguous round says a request may have
-      // reached the service; it used to be shown as an ambiguous
-      // *execution*, which says instead that a tool may already have changed
-      // their files. The persisted attempt still carries the older code --
-      // `persistence.ts` requires it and sessions on disk have it -- so the
-      // two differ until that migration lands.
+      // What the person is shown, and what is written down, now agree. An
+      // ambiguous round says a request may have reached the service; it used
+      // to be shown and stored as an ambiguous *execution*, which says
+      // instead that a tool may already have changed their files.
       expect(controller.getState().failureCode).toBe(
         status === 'ambiguous' ? 'E_AGENT_ROUND_AMBIGUOUS' : 'E_AGENT_CONFLICT',
       );
@@ -2138,6 +2140,20 @@ describe('project Agent completion controller', () => {
       const restored = hydrateChatState(committed.at(-1)!);
       expect(restored.conversations[conversationId]?.attempts[0]).toMatchObject(expectedAttempt);
       expect(restored.agentTranscriptCleanupOutbox).toEqual([]);
+      if (status === 'ambiguous') {
+        // A session written before the distinction existed recorded every
+        // ambiguity as an execution one. It has to stay readable: a person
+        // updating the app must not lose the conversation it was in.
+        const current = committed.at(-1)!;
+        expect(current.split('"E_AGENT_ROUND_AMBIGUOUS"')).toHaveLength(2);
+        const legacy = hydrateChatState(
+          current.replace('"E_AGENT_ROUND_AMBIGUOUS"', '"E_AGENT_EXECUTION_AMBIGUOUS"'),
+        );
+        expect(legacy.conversations[conversationId]?.attempts[0]).toMatchObject({
+          ...expectedAttempt,
+          failureCode: 'E_AGENT_EXECUTION_AMBIGUOUS',
+        });
+      }
       expect(runtime.completeAgentRoundV2).toHaveBeenCalledTimes(1);
       expect(runtime.prepareAgentToolBatch).not.toHaveBeenCalled();
       expect(runtime.executeAgentTool).not.toHaveBeenCalled();
