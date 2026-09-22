@@ -71,7 +71,7 @@ internal class AndroidProjectGit(
         val expected = request.opt("expected_head_oid").takeIf { it != JSONObject.NULL }
         if (operationId == null || !projects.canonicalOperationId(operationId) ||
             message == null || !bounded(message, MAX_COMMIT_MESSAGE_BYTES) || message.isBlank() ||
-            name == null || !bounded(name, MAX_AUTHOR_NAME_BYTES) || name.any { it.isWhitespace() } ||
+            name == null || !bounded(name, MAX_AUTHOR_NAME_BYTES) || !nameShaped(name) ||
             email == null || !bounded(email, MAX_EMAIL_BYTES) || !emailShaped(email) ||
             (expected != null && (expected !is String || !oid(expected)))
         ) {
@@ -375,6 +375,13 @@ internal class AndroidProjectGit(
 
     private fun bounded(value: String, maximumBytes: Int): Boolean =
         value.isNotEmpty() && value.toByteArray(Charsets.UTF_8).size <= maximumBytes
+
+    /**
+     * A person's name as a git signature can carry it: spaces inside, but
+     * no edge whitespace, no control characters, no angle brackets.
+     */
+    private fun nameShaped(value: String): Boolean =
+        value == value.trim() && value.none { it.isISOControl() || it == '<' || it == '>' }
 
     /** iOS's shape: one `@` with something on both sides, no whitespace, no angle brackets. */
     private fun emailShaped(value: String): Boolean {

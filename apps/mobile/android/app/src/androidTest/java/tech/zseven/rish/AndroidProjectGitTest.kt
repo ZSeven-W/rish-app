@@ -135,7 +135,7 @@ class AndroidProjectGitTest {
         val modified = entries(f.git.status(f.request())).getValue("notes.md")
         assertEquals("modified", modified.getString("worktree_status"))
         f.git.stageAll(f.request())
-        val second = f.git.commit(f.commitRequest(message = "second", expectedHead = commit.getString("oid")))
+        val second = f.git.commit(f.commitRequest(message = "second", name = "Rish Bot", expectedHead = commit.getString("oid")))
         assertNotEquals(commit.getString("oid"), second.getString("oid"))
         assertEquals(second.getString("oid"), f.git.status(f.request()).getString("head_oid"))
         // The workspace holds only the person's file; git's state lives beside the registry.
@@ -166,7 +166,10 @@ class AndroidProjectGitTest {
         assertEquals("E_PROJECT_REQUEST_INVALID", refusal { f.git.diff(f.diffRequest(maxBytes = 1024 * 1024 + 1)) })
         assertEquals("E_PROJECT_REQUEST_INVALID", refusal { f.git.diff(f.diffRequest(maxBytes = true)) })
         assertEquals("E_PROJECT_REQUEST_INVALID", refusal { f.git.commit(f.commitRequest(message = "  \n")) })
-        assertEquals("E_PROJECT_REQUEST_INVALID", refusal { f.git.commit(f.commitRequest(name = "Rish Bot")) })
+        // A person's name has spaces in it; only what a signature cannot carry is refused.
+        assertEquals("E_PROJECT_REQUEST_INVALID", refusal { f.git.commit(f.commitRequest(name = " Rish")) })
+        assertEquals("E_PROJECT_REQUEST_INVALID", refusal { f.git.commit(f.commitRequest(name = "Rish\nBot")) })
+        assertEquals("E_PROJECT_REQUEST_INVALID", refusal { f.git.commit(f.commitRequest(name = "Rish <bot>")) })
         assertEquals("E_PROJECT_REQUEST_INVALID", refusal { f.git.commit(f.commitRequest(email = "rish")) })
         assertEquals("E_PROJECT_REQUEST_INVALID", refusal { f.git.commit(f.commitRequest(email = "<rish@x.y>")) })
         assertEquals("E_PROJECT_REQUEST_INVALID", refusal { f.git.commit(f.commitRequest(expectedHead = "abc")) })

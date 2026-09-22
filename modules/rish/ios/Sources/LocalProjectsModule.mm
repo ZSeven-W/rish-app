@@ -4920,8 +4920,8 @@ RCT_REMAP_METHOD(commitV2,
         [authorName isEqualToString:[authorName
             stringByTrimmingCharactersInSet:
                 NSCharacterSet.whitespaceAndNewlineCharacterSet]] &&
-        [authorName rangeOfCharacterFromSet:
-            NSCharacterSet.whitespaceAndNewlineCharacterSet].location == NSNotFound;
+        !LPHasControlCharacter(authorName) &&
+        ![authorName containsString:@"<"] && ![authorName containsString:@">"];
     NSArray<NSString *> *emailParts =
         [authorEmail componentsSeparatedByString:@"@"];
     BOOL emailValid = LPV2BoundedString(authorEmail, 254, NO) &&
