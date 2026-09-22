@@ -840,6 +840,21 @@ pub fn failure_code(provider_error_code: Option<&str>, digest_mismatch: bool) ->
         | "E_COMPLETION_TOOL_CALL_INVALID"
         | "E_COMPLETION_FINISH_RELATION" => "E_AGENT_TRANSCRIPT",
         "E_COMPLETION_CREDENTIAL_CHANGED" => "E_AGENT_PERSISTENCE",
+        // Refusals the transport raises while *building* the request: an
+        // attachment it cannot carry, a dialect that cannot express a round
+        // transcript, a body past a limit, a model or a thinking mode it does
+        // not know. None of them depend on the provider, so none of them are
+        // ambiguous -- the request never left the device -- and none of them
+        // will succeed unchanged. Saying `E_AGENT_ROUND_AMBIGUOUS` here told
+        // a person their turn might have happened and offered them a retry
+        // that could only fail again.
+        "E_COMPLETION_CONTEXT_UNSUPPORTED"
+        | "E_COMPLETION_CONTEXT_INVALID"
+        | "E_COMPLETION_BODY_TOO_LARGE"
+        | "E_COMPLETION_HISTORY"
+        | "E_COMPLETION_TOOLS"
+        | "E_COMPLETION_THINKING"
+        | "E_COMPLETION_MODEL" => "E_AGENT_CAPABILITY",
         _ => "E_AGENT_ROUND_AMBIGUOUS",
     }
 }
@@ -1309,6 +1324,40 @@ mod tests {
         assert_eq!(
             context_bundle(Some(&wrong), Some(&digest)),
             Err(StoreError::Conflict)
+        );
+    }
+
+    /// A refusal raised while the request was being built is not an
+    /// ambiguity. Nothing was sent, so nothing may have happened, and
+    /// nothing will change on a retry. Saying `E_AGENT_ROUND_AMBIGUOUS`
+    /// here told a person their turn might have gone through and offered
+    /// them a retry that could only fail the same way.
+    #[test]
+    fn a_refusal_raised_before_anything_was_sent_is_not_an_ambiguity() {
+        for local in [
+            "E_COMPLETION_CONTEXT_UNSUPPORTED",
+            "E_COMPLETION_CONTEXT_INVALID",
+            "E_COMPLETION_BODY_TOO_LARGE",
+            "E_COMPLETION_HISTORY",
+            "E_COMPLETION_TOOLS",
+            "E_COMPLETION_THINKING",
+            "E_COMPLETION_MODEL",
+        ] {
+            assert_eq!(failure_code(Some(local), false), "E_AGENT_CAPABILITY", "{local}");
+        }
+        // A silence from the provider still is one: the request went, and
+        // what became of it is genuinely unknown.
+        for remote in ["E_COMPLETION_TIMEOUT", "E_COMPLETION_TRANSPORT", ""] {
+            assert_eq!(
+                failure_code(Some(remote), false),
+                "E_AGENT_ROUND_AMBIGUOUS",
+                "{remote}",
+            );
+        }
+        // And a digest mismatch outranks everything, as it always has.
+        assert_eq!(
+            failure_code(Some("E_COMPLETION_CONTEXT_UNSUPPORTED"), true),
+            "E_AGENT_TRANSCRIPT",
         );
     }
 }

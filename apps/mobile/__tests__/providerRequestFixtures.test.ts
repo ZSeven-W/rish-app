@@ -141,9 +141,30 @@ describe.each(FIXTURES)('frozen $file', ({ file, harnessId }) => {
       const ceiling = entry.body.max_tokens ?? entry.body.max_output_tokens;
       expect(typeof ceiling).toBe('number');
       if (harnessId === 'dsh') {
-        // This dialect sends the turns as they are; Anthropic rewrites them
-        // into content blocks, which is the dialect's own business.
-        expect(entry.body.messages).toEqual(entry.messages);
+        // This dialect sends a turn of plain words as it is; Anthropic
+        // rewrites them into content blocks, which is the dialect's own
+        // business. A turn carrying parts is the one exception: the app's
+        // own picture part becomes OpenAI's spelling here, and asserting the
+        // rewrite is stronger than exempting the case from the check.
+        expect(entry.body.messages).toEqual(
+          entry.messages.map(message =>
+            Array.isArray(message.content)
+              ? {
+                  ...message,
+                  content: (message.content as readonly Record<string, unknown>[]).map(part =>
+                    part.type === 'image'
+                      ? {
+                          type: 'image_url',
+                          image_url: {
+                            url: `data:${String(part.mime_type)};base64,${String(part.data)}`,
+                          },
+                        }
+                      : part,
+                  ),
+                }
+              : message,
+          ),
+        );
       }
       if (entry.tools.length === 0) {
         expect(entry.body.tools).toBeUndefined();

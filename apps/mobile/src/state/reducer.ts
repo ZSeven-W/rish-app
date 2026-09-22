@@ -2872,6 +2872,12 @@ function agentFinalMaterial(
     };
   }
   if (journal.phase !== 'failed') return null;
+  // NOTE: a round that failed retryably says *why* -- native derives a code
+  // from what the provider, or the transport before it reached one, reported
+  // -- and that cause dies here, because the journal has nowhere to keep it
+  // and `agentAttemptFromJournal` derives the attempt's code from the
+  // journal alone. Carrying it needs a persisted field, which is a schema
+  // change on both hosts and a frozen golden; see the docs.
   const failureCode: AgentFailureCode =
     receipt?.finishReason === 'length'
       ? 'E_COMPLETION_LENGTH'
@@ -4760,6 +4766,12 @@ function agentOuterAttemptCheckpoint(
   const failureCode: TurnAttemptV1['failureCode'] =
     status !== 'failed'
       ? null
+      // NOTE: an ambiguous *round* is reported here as an ambiguous
+      // *execution*, which says something different and worse -- that a tool
+      // may already have changed the person's files. It cannot simply be
+      // corrected: `persistence.ts` requires an ambiguous journal to carry
+      // exactly this code, and sessions already on disk carry it, so putting
+      // the round's own code here needs a migration. See the docs.
       : journal.phase === 'ambiguous'
         ? 'E_AGENT_EXECUTION_AMBIGUOUS'
         : journal.phase === 'unknown'

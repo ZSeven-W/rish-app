@@ -2118,6 +2118,15 @@ describe('project Agent completion controller', () => {
         ? 'E_AGENT_EXECUTION_AMBIGUOUS'
         : 'E_AGENT_CONFLICT';
       expect(result.status).toBe('retryable');
+      // What the person is shown. An ambiguous round says a request may have
+      // reached the service; it used to be shown as an ambiguous
+      // *execution*, which says instead that a tool may already have changed
+      // their files. The persisted attempt still carries the older code --
+      // `persistence.ts` requires it and sessions on disk have it -- so the
+      // two differ until that migration lands.
+      expect(controller.getState().failureCode).toBe(
+        status === 'ambiguous' ? 'E_AGENT_ROUND_AMBIGUOUS' : 'E_AGENT_CONFLICT',
+      );
       expect(checkpoint).toHaveBeenCalledTimes(1);
       expect(checkpoint.mock.calls[0]![0].cleanup).toBeUndefined();
       const expectedAttempt = {
@@ -2494,11 +2503,16 @@ describe('project Agent completion controller', () => {
     expect(attempt.agent!.phase).toBe('failed');
     expect(attempt.agent!.round_lineage!.status).toBe('failed_retryable');
     expect(attempt.status).toBe('failed');
+    // NOTE: the round's own cause is not carried here. The journal has
+    // nowhere to keep it, so every retryable round reads as a save that
+    // could not be confirmed, whatever actually happened.
+    expect(attempt.failureCode).toBe('E_AGENT_PERSISTENCE');
     // The terminal checkpoint carries its cleanup, and finalize/discard drain
     // it: a refused checkpoint reached neither.
     expect(runtime.finalizeAgentAttempt).toHaveBeenCalledTimes(1);
     expect(runtime.discardAgentAttempt).toHaveBeenCalledTimes(1);
   });
+
 
   /**
    * A turn interrupted while it was waiting for a person has to be able to

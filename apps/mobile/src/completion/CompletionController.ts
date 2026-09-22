@@ -2780,7 +2780,8 @@ export function createCompletionController(
     // The atomic final checkpoint reads one terminal event and matches every
     // field of it, including the failure code the reducer derives: a round
     // that failed retryably carries no completion receipt, so the code is
-    // always E_AGENT_PERSISTENCE.
+    // always E_AGENT_PERSISTENCE. The round's own cause is lost here; see the
+    // note in `agentFinalMaterial`.
     const event = terminal
       ? agentEvent(
           attemptId,
@@ -2882,7 +2883,7 @@ export function createCompletionController(
           );
           return finalized;
         }
-        publish(stateFor('retryable', { conversationId, turnId: located.attempt.turnId, attemptId, roundId: request.round_id, transportSchemaVersion: request.transport_schema_version, failureCode: result.status === 'unknown' ? 'E_AGENT_CONFLICT' : 'E_AGENT_EXECUTION_AMBIGUOUS' }));
+        publish(stateFor('retryable', { conversationId, turnId: located.attempt.turnId, attemptId, roundId: request.round_id, transportSchemaVersion: request.transport_schema_version, failureCode: result.status === 'unknown' ? 'E_AGENT_CONFLICT' : 'E_AGENT_ROUND_AMBIGUOUS' }));
         return outcome('retryable', state);
       },
       runEpoch,
