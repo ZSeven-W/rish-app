@@ -2494,7 +2494,7 @@ describe('project Agent completion controller', () => {
       launch_attempt: request.launch_attempt,
       result_round_revision: 1,
       transcript: request.transcript,
-      failure_code: 'E_AGENT_ROUND_AMBIGUOUS',
+      failure_code: 'E_AGENT_CAPABILITY',
     }));
     const controller = agentController(store, runtime, committedPersistence(store));
     const conversationId = store.getState().selectedConversationId!;
@@ -2503,10 +2503,16 @@ describe('project Agent completion controller', () => {
     expect(attempt.agent!.phase).toBe('failed');
     expect(attempt.agent!.round_lineage!.status).toBe('failed_retryable');
     expect(attempt.status).toBe('failed');
-    // NOTE: the round's own cause is not carried here. The journal has
-    // nowhere to keep it, so every retryable round reads as a save that
-    // could not be confirmed, whatever actually happened.
-    expect(attempt.failureCode).toBe('E_AGENT_PERSISTENCE');
+    // The round said why, and that is what the attempt records. It used to
+    // be flattened to E_AGENT_PERSISTENCE, so a request refused for carrying
+    // an attachment read as a save that could not be confirmed, with Retry
+    // save as the only advice.
+    expect(attempt.failureCode).toBe('E_AGENT_CAPABILITY');
+    const terminal = (store.getState().sessionEvents ?? []).filter(
+      event => event.attempt_id === attempt.attemptId && event.kind === 'terminal',
+    );
+    expect(terminal).toHaveLength(1);
+    expect(terminal[0]!.failure_code).toBe('E_AGENT_CAPABILITY');
     // The terminal checkpoint carries its cleanup, and finalize/discard drain
     // it: a refused checkpoint reached neither.
     expect(runtime.finalizeAgentAttempt).toHaveBeenCalledTimes(1);

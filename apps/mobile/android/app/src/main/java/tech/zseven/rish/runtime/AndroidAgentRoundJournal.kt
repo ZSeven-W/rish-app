@@ -195,9 +195,26 @@ internal class AndroidAgentRoundJournal(
      * every caller quietly fell back to the row it already had -- which is
      * how a round nobody was running stayed `in_flight` for good.
      */
-    fun reconcile(locator: JSONObject, expectedCas: JSONObject): JSONObject? =
-        run("reconcile", JSONObject().put("locator", locator).put("cas", expectedCas),
-            locator, null, null, false, false)
+    /**
+     * Settles a round whose writer is gone.
+     *
+     * `cause` is what the caller knows about why, and the core takes it only
+     * for a round that was never dispatched -- a dispatched round whose
+     * answer never came is ambiguous whatever its writer believed. Without
+     * it the row records the generic "could not be saved", which is what
+     * every later reader and every restart then has to report.
+     */
+    fun reconcile(
+        locator: JSONObject,
+        expectedCas: JSONObject,
+        cause: String? = null,
+    ): JSONObject? =
+        run(
+            "reconcile",
+            JSONObject().put("locator", locator).put("cas", expectedCas)
+                .put("failure_code", cause ?: JSONObject.NULL),
+            locator, null, null, false, false,
+        )
 
     fun query(locator: JSONObject): JSONObject? =
         run("query", JSONObject().put("locator", locator), locator, null, null, false, true)

@@ -348,7 +348,12 @@ internal class AndroidAgentProviderRoundService(
         // finalized and its cleanup never drains. iOS releases and reconciles
         // at exactly this point.
         liveTasks.unregister(nativeTaskId)
-        val reconciled = rounds.reconcile(locator, completeCas)?.optJSONObject("row")
+        // The cause travels into the row. A refusal raised while the request
+        // was being built is the only account of why this turn ended, and
+        // the core keeps it only for a round it can see was never
+        // dispatched, so an ambiguity cannot be talked out of.
+        val reconciled = rounds.reconcile(locator, completeCas, failure.ifEmpty { null })
+            ?.optJSONObject("row")
         val settled = reconciled ?: rowFor(wal.snapshot(), locator) ?: throw Refused(CONFLICT)
         // The reconcile decides what the round became: a request that never
         // reached the provider is `failed_retryable`, one that did is
@@ -717,7 +722,8 @@ internal class AndroidAgentProviderRoundService(
             val state = row.optString("state")
             val ownerless = decide(
                 JSONObject().put("op", "round_failure_code").put("kind", "ownerless")
-                    .put("state", state),
+                    .put("state", state)
+                    .put("recorded", row.opt("failure_code") ?: JSONObject.NULL),
             )
             if (!ownerless.optBoolean("reportable")) throw Refused(CONFLICT)
             return queryResult(request, row, state, ownerless.opt("code"))
@@ -735,7 +741,8 @@ internal class AndroidAgentProviderRoundService(
         val state = reconciled.optString("state")
         val failure = decide(
             JSONObject().put("op", "round_failure_code").put("kind", "reconciled")
-                .put("state", state),
+                .put("state", state)
+                .put("recorded", reconciled.opt("failure_code") ?: JSONObject.NULL),
         ).opt("code")
         return queryResult(request, reconciled, state, failure)
     }

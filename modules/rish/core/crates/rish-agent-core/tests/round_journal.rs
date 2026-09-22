@@ -486,3 +486,75 @@ fn json_envelope_round_trips_effects_and_errors() {
     let malformed: Value = serde_json::from_str(&reduce_json("not json")).unwrap();
     assert_eq!(malformed, json!({ "ok": false, "error": 2 }));
 }
+
+/// A round that provably never left the device keeps the reason it did not.
+///
+/// A refusal raised while the request was being built -- an attachment the
+/// transport cannot carry, a dialect that cannot express a round transcript
+/// -- is the only account of why the turn ended. Every later reader takes
+/// the row's code and recovery after a restart has nothing else, so the row
+/// is where the cause has to live. It used to be flattened to
+/// E_AGENT_PERSISTENCE, which reads to a person as a save that could not be
+/// confirmed, with Retry save as the only advice.
+#[test]
+fn a_round_settled_before_dispatch_keeps_its_stated_cause() {
+    let row = in_flight_row();
+    let mut dead = view(Some(row.clone()), Some("not_dispatched"));
+    dead.row_owner_alive = false;
+    let stated = reduce(
+        "reconcile",
+        &args(json!({
+            "locator": locator(),
+            "cas": cas_for(&row),
+            "failure_code": "E_AGENT_CAPABILITY",
+        })),
+        &env(),
+        &dead,
+    )
+    .unwrap();
+    let settled = stated.row.unwrap();
+    assert_eq!(settled["state"], "failed_retryable");
+    assert_eq!(settled["failure_code"], "E_AGENT_CAPABILITY");
+
+    // A dispatched round is ambiguous whatever its writer believes. Letting
+    // a caller name a confident cause here would turn an ambiguity into
+    // false certainty, which is the one thing the marker exists to prevent.
+    let mut dead_dispatched = dead.clone();
+    dead_dispatched.dispatch_state = Some("dispatched".to_string());
+    let dispatched = reduce(
+        "reconcile",
+        &args(json!({
+            "locator": locator(),
+            "cas": cas_for(&row),
+            "failure_code": "E_AGENT_CAPABILITY",
+        })),
+        &env(),
+        &dead_dispatched,
+    )
+    .unwrap();
+    assert_eq!(
+        dispatched.row.unwrap()["failure_code"],
+        "E_AGENT_ROUND_AMBIGUOUS",
+    );
+
+    // A cause outside the closed union, and the generic answer restated, are
+    // both ignored rather than written.
+    for ignored in [json!("not a code"), json!("E_AGENT_PERSISTENCE"), json!(7)] {
+        let answer = reduce(
+            "reconcile",
+            &args(json!({
+                "locator": locator(),
+                "cas": cas_for(&row),
+                "failure_code": ignored,
+            })),
+            &env(),
+            &dead,
+        )
+        .unwrap();
+        assert_eq!(
+            answer.row.unwrap()["failure_code"],
+            "E_AGENT_PERSISTENCE",
+            "{ignored}",
+        );
+    }
+}

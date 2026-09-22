@@ -4635,22 +4635,26 @@ function parseConversation(
           'failed Agent journals require a failed attempt',
         );
       }
+      // A failed journal may now carry the cause the round itself reported,
+      // so this no longer names the handful of codes JavaScript used to
+      // invent. What it still holds is the part that means something: the
+      // two completion codes stay coupled to the finish reason that proves
+      // them, and the codes belonging to the other two failed phases are
+      // refused, so `failed`, `unknown` and `ambiguous` stay tellable apart
+      // on the way back in.
       if (
         journal.phase === 'failed' &&
-        attempt.failureCode !== 'E_AGENT_PERSISTENCE' &&
-        attempt.failureCode !== 'E_AGENT_ROUND_LIMIT' &&
-        !(
-          attempt.failureCode === 'E_COMPLETION_LENGTH' &&
-          attempt.rounds.at(-1)?.finishReason === 'length'
-        ) &&
-        !(
-          attempt.failureCode === 'E_COMPLETION_CONTENT_FILTER' &&
-          attempt.rounds.at(-1)?.finishReason === 'content_filter'
-        )
+        (attempt.failureCode === null ||
+          attempt.failureCode === 'E_AGENT_CONFLICT' ||
+          attempt.failureCode === 'E_AGENT_EXECUTION_AMBIGUOUS' ||
+          (attempt.failureCode === 'E_COMPLETION_LENGTH' &&
+            attempt.rounds.at(-1)?.finishReason !== 'length') ||
+          (attempt.failureCode === 'E_COMPLETION_CONTENT_FILTER' &&
+            attempt.rounds.at(-1)?.finishReason !== 'content_filter'))
       ) {
         invalid(
           `${path}.attempts[${index}].failure_code`,
-          'failed Agent journals require a stable completion, persistence, or round-limit code',
+          'failed Agent journals require a cause that is not another phase\'s',
         );
       }
       if (

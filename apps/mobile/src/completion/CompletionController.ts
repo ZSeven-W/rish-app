@@ -30,6 +30,7 @@ import {
   validateAgentStoreTransition,
   type AgentStoreTransitionEvidence,
 } from '../agent/AgentStoreTransitions';
+import { AGENT_FAILURE_CODES, type AgentFailureCode } from '../state/types';
 import type {
   AgentApprovalBindingTokenV2,
   AgentApprovalPreviewV1,
@@ -2778,10 +2779,19 @@ export function createCompletionController(
       return await failAgentWithoutNative(conversationId, attemptId, 'E_AGENT_PERSISTENCE');
     }
     // The atomic final checkpoint reads one terminal event and matches every
-    // field of it, including the failure code the reducer derives: a round
-    // that failed retryably carries no completion receipt, so the code is
-    // always E_AGENT_PERSISTENCE. The round's own cause is lost here; see the
-    // note in `agentFinalMaterial`.
+    // field of it, including the failure code the reducer derives, so the
+    // two have to agree. A round that failed retryably carries no completion
+    // receipt, but it does carry the code native derived from what the
+    // provider -- or the transport, before the request ever left -- said.
+    // The reducer's `evidenceRoundCauseFor` reads the same value and refuses
+    // the same two codes, which belong to other phases.
+    const roundCause =
+      result.status === 'failed_retryable' &&
+      result.failure_code !== 'E_AGENT_CONFLICT' &&
+      result.failure_code !== 'E_AGENT_EXECUTION_AMBIGUOUS' &&
+      (AGENT_FAILURE_CODES as readonly string[]).includes(result.failure_code)
+        ? (result.failure_code as AgentFailureCode)
+        : 'E_AGENT_PERSISTENCE';
     const event = terminal
       ? agentEvent(
           attemptId,
@@ -2794,7 +2804,7 @@ export function createCompletionController(
           null,
           null,
           null,
-          phase === 'cancelled' ? 'E_AGENT_CANCELLED' : 'E_AGENT_PERSISTENCE',
+          phase === 'cancelled' ? 'E_AGENT_CANCELLED' : roundCause,
           transitionCreatedAt,
         )
       : agentEvent(

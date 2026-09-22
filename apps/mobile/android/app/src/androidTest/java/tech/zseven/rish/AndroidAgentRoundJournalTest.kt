@@ -222,4 +222,79 @@ class AndroidAgentRoundJournalTest {
             )
         } finally { root.deleteRecursively() }
     }
+
+    /**
+     * A round that was never dispatched keeps the reason it was not.
+     *
+     * The transport refuses some requests while it is still building them --
+     * an attachment it cannot carry, a dialect that cannot express a round
+     * transcript -- and that refusal is the only account of why the turn
+     * ended. It used to be flattened into `E_AGENT_PERSISTENCE` here, which
+     * reads to a person as a save that could not be confirmed, with Retry
+     * save as the only advice; every later reader and every restart took the
+     * row's code, so the cause was gone before it left this process.
+     */
+    @Test fun aRoundSettledBeforeDispatchKeepsItsCause() {
+        val root = directory()
+        try {
+            val wal = AndroidAgentWal(root)
+            val liveTasks = AndroidLiveTasks()
+            val transcripts = AndroidAgentTranscriptStore(wal)
+            val journal = AndroidAgentRoundJournal(wal, liveTasks)
+            val taskId = uuid(); val attemptId = uuid(); val roundId = uuid()
+            val transcript = transcripts.create(JSONObject().put("schema_version", 1)
+                .put("attempt_id", attemptId).put("root", workspaceRoot()))!!
+            val where = locator(taskId, attemptId, roundId)
+            val nativeTask = uuid()
+            liveTasks.register(nativeTask)
+            val owner = JSONObject().put("schema_version", 1).put("task_id", taskId)
+                .put("launch_id", AndroidAgentWal.launchId).put("native_task_id", nativeTask)
+                .put("owner_generation", 1).put("heartbeat_at", "2026-09-15T00:00:00.000Z")
+            val round = JSONObject()
+                .put("schema_version", 3).put("locator", where).put("row_revision", 1)
+                .put("root_fingerprint_sha256", fingerprint).put("binding_revision", 1)
+                .put("request_sha256", "a".repeat(64))
+                .put("transcript_before", transcript)
+                .put("launch_attempt", 1).put("state", "in_flight").put("owner", owner)
+                .put("failure_code", JSONObject.NULL)
+                .put("completion_receipt", JSONObject.NULL)
+                .put("transcript_after", JSONObject.NULL)
+                .put("calls", JSONArray()).put("batch_class", JSONObject.NULL)
+                .put("executable_call_count", 0).put("denied_call_count", 0)
+                .put("terminal_kind", JSONObject.NULL)
+                .put("created_at", "2026-09-15T00:00:00.000Z")
+                .put("updated_at", "2026-09-15T00:00:00.000Z")
+            val insertCas = JSONObject().put("schema_version", 1).put("locator", where)
+                .put("expected_absent", true)
+                .put("expected_transcript_generation", transcript.getLong("generation"))
+                .put("expected_transcript_sha256", transcript.getString("transcript_sha256"))
+                .put("expected_root_fingerprint_sha256", fingerprint)
+                .put("expected_binding_revision", 1)
+            val created = journal.create(insertCas, round)!!
+            val cas = JSONObject().put("schema_version", 2).put("locator", where)
+                .put("expected_row_revision", created.getJSONObject("row").get("row_revision"))
+                .put("expected_state", "in_flight")
+                .put("expected_owner_generation", owner.get("owner_generation"))
+                .put("expected_launch_id", owner.getString("launch_id"))
+                .put("expected_native_task_id", owner.getString("native_task_id"))
+                .put("expected_transcript_generation", transcript.getLong("generation"))
+                .put("expected_transcript_sha256", transcript.getString("transcript_sha256"))
+                .put("expected_root_fingerprint_sha256", fingerprint)
+                .put("expected_binding_revision", 1)
+            // Never marked dispatched: this is the round the transport
+            // refused while the request was still being assembled.
+            liveTasks.unregister(nativeTask)
+            val settled = journal.reconcile(where, cas, "E_AGENT_CAPABILITY")
+            assertNotNull("the round was not settled", settled)
+            val row = settled!!.getJSONObject("row")
+            assertEquals("failed_retryable", row.getString("state"))
+            assertEquals("E_AGENT_CAPABILITY", row.getString("failure_code"))
+            // And it survives in the log, which is what a reader after a
+            // restart actually sees.
+            assertEquals(
+                "E_AGENT_CAPABILITY",
+                wal.snapshot().getJSONArray("rounds").getJSONObject(0).getString("failure_code"),
+            )
+        } finally { root.deleteRecursively() }
+    }
 }

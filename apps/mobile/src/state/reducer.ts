@@ -2746,6 +2746,7 @@ function applyFinalAgentCheckpoint(
     evidenceRoundReceiptFor(evidence),
     payload.at,
     evidence.kind === 'recover_agent_attempt' && evidence.result.status === 'resumed' && evidence.result.next_action === 'persist_batch',
+    evidenceRoundCauseFor(evidence),
   );
   if (nextAgentAttempt === null) return state;
   const nextAttempt: TurnAttemptV1 = {
@@ -2872,12 +2873,6 @@ function agentFinalMaterial(
     };
   }
   if (journal.phase !== 'failed') return null;
-  // NOTE: a round that failed retryably says *why* -- native derives a code
-  // from what the provider, or the transport before it reached one, reported
-  // -- and that cause dies here, because the journal has nowhere to keep it
-  // and `agentAttemptFromJournal` derives the attempt's code from the
-  // journal alone. Carrying it needs a persisted field, which is a schema
-  // change on both hosts and a frozen golden; see the docs.
   const failureCode: AgentFailureCode =
     receipt?.finishReason === 'length'
       ? 'E_COMPLETION_LENGTH'
@@ -2886,7 +2881,7 @@ function agentFinalMaterial(
         : journal.round_index >= MAX_AGENT_ROUNDS - 1 &&
             journal.round_lineage?.status === 'completed'
           ? 'E_AGENT_ROUND_LIMIT'
-          : 'E_AGENT_PERSISTENCE';
+          : (evidenceRoundCauseFor(evidence) ?? 'E_AGENT_PERSISTENCE');
   return {
     receipt,
     text: null,
@@ -4098,6 +4093,35 @@ function evidenceAttemptProjectionMatchesJournal(
   );
 }
 
+/**
+ * Why a round ended, when the round said so.
+ *
+ * A round that failed retryably carries the code native derived from what
+ * the provider -- or the transport, before the request ever reached one --
+ * reported. It is the only account of why the turn ended, and both the
+ * attempt and the terminal event are derived from this one answer so the two
+ * can never disagree about it.
+ *
+ * The codes that belong to other phases are refused here: the conflict code
+ * is what an `unknown` journal means and the execution ambiguity is what an
+ * `ambiguous` one means, and a `failed` journal wearing either would make
+ * the three indistinguishable on the way back in.
+ */
+function evidenceRoundCauseFor(
+  evidence: AgentCheckpointEvidence,
+): AgentFailureCode | null {
+  if (isControllerPreflight(evidence)) return null;
+  if (
+    evidence.kind !== 'complete_agent_round_v2' ||
+    evidence.result.status !== 'failed_retryable'
+  ) return null;
+  const code = evidence.result.failure_code;
+  if (!isAgentFailureCode(code)) return null;
+  return code === 'E_AGENT_CONFLICT' || code === 'E_AGENT_EXECUTION_AMBIGUOUS'
+    ? null
+    : code;
+}
+
 function evidenceRoundReceiptFor(
   evidence: AgentCheckpointEvidence,
 ): CompletionRoundReceiptV1 | undefined {
@@ -4711,6 +4735,10 @@ function agentOuterAttemptCheckpoint(
   roundReceipt: CompletionRoundReceiptV1 | undefined,
   at: string,
   allowRecordedRound = false,
+  // Why the round ended, from the same evidence the terminal event reads. A
+  // checkpoint with no evidence to read passes nothing and the generic
+  // answer stands, which is what a journal-only checkpoint has always done.
+  cause: AgentFailureCode | null = null,
 ): TurnAttemptV1 | null {
   if (
     attempt.status === 'completed' ||
@@ -4766,12 +4794,12 @@ function agentOuterAttemptCheckpoint(
   const failureCode: TurnAttemptV1['failureCode'] =
     status !== 'failed'
       ? null
-      // NOTE: an ambiguous *round* is reported here as an ambiguous
+      // NOTE: an ambiguous *round* is still reported here as an ambiguous
       // *execution*, which says something different and worse -- that a tool
-      // may already have changed the person's files. It cannot simply be
-      // corrected: `persistence.ts` requires an ambiguous journal to carry
-      // exactly this code, and sessions already on disk carry it, so putting
-      // the round's own code here needs a migration. See the docs.
+      // may already have changed the person's files. `persistence.ts`
+      // requires an ambiguous journal to carry exactly this code and
+      // sessions on disk have it, so correcting it needs a widened reader of
+      // its own. The banner already says the right thing; see the docs.
       : journal.phase === 'ambiguous'
         ? 'E_AGENT_EXECUTION_AMBIGUOUS'
         : journal.phase === 'unknown'
@@ -4785,6 +4813,8 @@ function agentOuterAttemptCheckpoint(
           : journal.round_index >= MAX_AGENT_ROUNDS - 1 &&
               journal.round_lineage?.status === 'completed'
             ? 'E_AGENT_ROUND_LIMIT'
+          : journal.phase === 'failed' && cause !== null
+            ? cause
           : 'E_AGENT_PERSISTENCE';
   return {
     ...attempt,

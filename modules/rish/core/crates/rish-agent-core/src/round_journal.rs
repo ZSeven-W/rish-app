@@ -1051,10 +1051,27 @@ fn reconcile(args: &Map<String, Value>, env: &Env, view: &View) -> Result<Effect
     } else {
         "ambiguous"
     };
+    // The cause, when the caller knows one and the round provably never
+    // left the device.
+    //
+    // A refusal raised while the request was being built -- an attachment
+    // the transport cannot carry, a dialect that cannot express a round
+    // transcript -- is the only account of why the turn ended, and it dies
+    // here unless the row keeps it: every later reader takes the row's code,
+    // and recovery after a restart has nothing else to read.
+    //
+    // It is honoured **only** for a round that was never dispatched. A
+    // dispatched round whose answer never came is ambiguous no matter what
+    // its writer believes, and letting a caller name a confident cause there
+    // would turn an ambiguity into false certainty -- the one thing this
+    // whole marker exists to prevent.
+    let stated = as_str(args.get("failure_code"))
+        .filter(|_| not_dispatched && !cancel_before_dispatch)
+        .filter(|code| crate::schema::failure_code(args.get("failure_code")) && *code != "E_AGENT_ROUND_AMBIGUOUS");
     let failure = if cancel_before_dispatch {
         "E_AGENT_CANCELLED"
     } else if not_dispatched {
-        "E_AGENT_PERSISTENCE"
+        stated.unwrap_or("E_AGENT_PERSISTENCE")
     } else {
         "E_AGENT_ROUND_AMBIGUOUS"
     };

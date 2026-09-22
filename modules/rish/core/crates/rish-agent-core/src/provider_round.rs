@@ -1099,6 +1099,29 @@ pub fn reconciled_failure_code(state: &str) -> &'static str {
     }
 }
 
+/// The cause a row recorded, when it is worth more than the generic answer
+/// its state alone would give.
+///
+/// Three rules, and each one is load-bearing:
+/// - an **ambiguous** round answers with its ambiguity whatever the row
+///   says, because no recorded cause can establish that a dispatched
+///   request was not acted on;
+/// - a recorded `E_AGENT_PERSISTENCE` is the fallback itself, so it adds
+///   nothing and is ignored;
+/// - anything outside the closed failure-code union is not read at all.
+fn recorded_cause<'a>(envelope: &'a Value, state: &str) -> Option<&'a str> {
+    if state == "ambiguous" {
+        return None;
+    }
+    let value = get(envelope, "recorded");
+    if !crate::schema::failure_code(value) {
+        return None;
+    }
+    as_str(value).filter(|code| {
+        *code != "E_AGENT_PERSISTENCE" && *code != "E_AGENT_ROUND_AMBIGUOUS"
+    })
+}
+
 /// The failure code a cancellation reports for the row it left behind.
 pub fn cancelled_failure_code(state: &str) -> Option<&'static str> {
     if state == "cancelled" {
@@ -1232,12 +1255,23 @@ fn reduce_json_inner(input: &str) -> Result<Value, StoreError> {
         )})),
         "round_failure_code" => {
             let state = as_str(get(&envelope, "state")).unwrap_or_default();
+            // What the row itself recorded, when it recorded anything more
+            // than the generic fallback. A round settled with a known local
+            // cause keeps it in the row precisely so a reader after a
+            // restart has something better than "could not be saved" to
+            // say. `recorded_cause` refuses to soften an ambiguity, so this
+            // can only ever make an answer more specific, never less honest.
+            let recorded = recorded_cause(&envelope, state);
             Ok(match as_str(get(&envelope, "kind")) {
-                Some("query") => json!({ "code": query_failure_code(state) }),
-                Some("reconciled") => json!({ "code": reconciled_failure_code(state) }),
+                Some("query") => json!({
+                    "code": recorded.or_else(|| query_failure_code(state)),
+                }),
+                Some("reconciled") => json!({
+                    "code": recorded.unwrap_or_else(|| reconciled_failure_code(state)),
+                }),
                 Some("cancelled") => json!({ "code": cancelled_failure_code(state) }),
                 Some("ownerless") => match recovered_ownerless_state(state) {
-                    Some(code) => json!({ "reportable": true, "code": code }),
+                    Some(code) => json!({ "reportable": true, "code": recorded.or(code) }),
                     None => json!({ "reportable": false, "code": Value::Null }),
                 },
                 _ => return Err(StoreError::InvalidArgument),
@@ -1358,6 +1392,57 @@ mod tests {
         assert_eq!(
             failure_code(Some("E_COMPLETION_CONTEXT_UNSUPPORTED"), true),
             "E_AGENT_TRANSCRIPT",
+        );
+    }
+
+    /// A reader after a restart gets the cause the row recorded, not the
+    /// generic answer the state alone would give -- except over an
+    /// ambiguity, which no recorded cause may soften.
+    #[test]
+    fn a_recorded_cause_outranks_the_generic_answer_but_never_an_ambiguity() {
+        let answer = |kind: &str, state: &str, recorded: Value| {
+            let envelope = json!({
+                "op": "round_failure_code",
+                "kind": kind,
+                "state": state,
+                "recorded": recorded,
+            });
+            let reply: Value = serde_json::from_str(&reduce_json(&envelope.to_string()))
+                .expect("the query answers JSON");
+            assert_eq!(reply["ok"], json!(true), "{reply}");
+            reply
+        };
+        assert_eq!(
+            answer("reconciled", "failed_retryable", json!("E_AGENT_CAPABILITY"))["code"],
+            json!("E_AGENT_CAPABILITY"),
+        );
+        assert_eq!(
+            answer("ownerless", "failed_retryable", json!("E_AGENT_CAPABILITY"))["code"],
+            json!("E_AGENT_CAPABILITY"),
+        );
+        assert_eq!(
+            answer("query", "unknown", json!("E_AGENT_CAPABILITY"))["code"],
+            json!("E_AGENT_CAPABILITY"),
+        );
+        // Nothing recorded, and the generic answers stand.
+        assert_eq!(
+            answer("reconciled", "failed_retryable", Value::Null)["code"],
+            json!("E_AGENT_PERSISTENCE"),
+        );
+        // An ambiguous round answers with its ambiguity whatever the row
+        // says: a recorded cause cannot establish that a dispatched request
+        // was not acted on.
+        for kind in ["reconciled", "query", "ownerless"] {
+            assert_eq!(
+                answer(kind, "ambiguous", json!("E_AGENT_CAPABILITY"))["code"],
+                json!("E_AGENT_ROUND_AMBIGUOUS"),
+                "{kind}",
+            );
+        }
+        // And a value outside the closed union is not read at all.
+        assert_eq!(
+            answer("reconciled", "failed_retryable", json!("nonsense"))["code"],
+            json!("E_AGENT_PERSISTENCE"),
         );
     }
 }
