@@ -55,6 +55,26 @@ internal object AndroidDshModelCatalog {
         check(requireNotNull(preferences).edit().putString("catalog", value.toString()).commit())
         return value
     }
+    /**
+     * Whether this model can be shown a picture.
+     *
+     * Read from the same catalog the model picker shows, so a model the
+     * person added by hand answers for itself. A model nobody has heard of
+     * answers no: sending an image to it would get either an opaque provider
+     * error or, worse, a confident answer about an image it never received.
+     */
+    @Synchronized fun supportsImages(model: String): Boolean {
+        val value = read()
+        for (key in listOf("models", "retired_models")) {
+            val rows = value.getJSONArray(key)
+            for (index in 0 until rows.length()) {
+                val row = rows.getJSONObject(index)
+                if (row.getString("id") == model) return row.getBoolean("supports_images")
+            }
+        }
+        return false
+    }
+
     @Synchronized fun isKnown(model: String): Boolean {
         if (AndroidProviderConfiguration.models.getValue("dsh").contains(model)) return true
         val value = read()

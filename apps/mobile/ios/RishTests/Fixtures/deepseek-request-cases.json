@@ -251,6 +251,59 @@
         "ios",
         "android"
       ]
+    },
+    {
+      "name": "picture_with_words",
+      "model": "deepseek-v4-flash",
+      "thinking_mode": "off",
+      "streaming": true,
+      "messages": [
+        {
+          "role": "user",
+          "content": [
+            {
+              "type": "text",
+              "text": "Name the colours, left then right."
+            },
+            {
+              "type": "image",
+              "mime_type": "image/png",
+              "data": "iVBORw0KGgo="
+            }
+          ]
+        }
+      ],
+      "tools": [],
+      "body": {
+        "max_tokens": 1024,
+        "messages": [
+          {
+            "content": [
+              {
+                "text": "Name the colours, left then right.",
+                "type": "text"
+              },
+              {
+                "image_url": {
+                  "url": "data:image/png;base64,iVBORw0KGgo="
+                },
+                "type": "image_url"
+              }
+            ],
+            "role": "user"
+          }
+        ],
+        "model": "deepseek-v4-flash",
+        "stream": true,
+        "thinking": {
+          "type": "disabled"
+        }
+      },
+      "body_sha256": "544bdb183962f24b08d09eb5bb1d9364d7b476fa89ff47bea02577e79a9a838c",
+      "hosts": [
+        "ios",
+        "android"
+      ]
     }
   ],
   "host_gaps": [

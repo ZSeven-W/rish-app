@@ -12,7 +12,15 @@ import java.util.UUID
 import java.util.concurrent.TimeUnit
 
 internal class RuntimeFailure(val code: String, val httpStatus: Int? = null) : Exception(code)
-internal class AndroidModelTransport(private val credentials: AndroidCredentialStore, val configurations: AndroidProviderConfiguration) {
+internal class AndroidModelTransport(
+    private val credentials: AndroidCredentialStore,
+    val configurations: AndroidProviderConfiguration,
+    // The bytes behind an attachment reference. Absent in a test that only
+    // builds request bodies; a request that carries an attachment is then
+    // refused rather than sent without it.
+    attachments: AndroidAttachmentStore? = null,
+) {
+    private val content = AndroidAttachmentContent(attachments)
     private val lock = Any()
     private var revision = 0L
     private val active = mutableMapOf<String, Prepared>()
@@ -29,6 +37,16 @@ internal class AndroidModelTransport(private val credentials: AndroidCredentialS
         val configuration: JSONObject, val account: String, val revision: Long) {
         var call: Call? = null
         var cancelled = false
+        /**
+         * The messages this request will be sent as, built once.
+         *
+         * `validate` builds them before the round is marked dispatched and
+         * `execute` sends them after, and an attachment is megabytes of
+         * base64: reading and encoding the same files twice would be slow,
+         * and worse, it would let the two disagree if a file changed in
+         * between. What was validated is what is sent.
+         */
+        var composed: JSONArray? = null
     }
     private fun fail(code: String): Nothing = throw RuntimeFailure(code)
     fun prepare(text: String): Prepared = synchronized(lock) {
@@ -112,6 +130,9 @@ internal class AndroidModelTransport(private val credentials: AndroidCredentialS
      * directly rather than only through a network call.
      */
     internal fun functionToolsForTest(declared: JSONArray): JSONArray = functionTools(declared)
+
+    /** The messages a validated request will be sent as, for tests. */
+    internal fun composedForTest(request: Prepared): JSONArray = composeMessages(request)
 
     /**
      * One round-transcript entry as a provider message.
@@ -337,6 +358,7 @@ internal class AndroidModelTransport(private val credentials: AndroidCredentialS
      * one rule rather than two that can drift.
      */
     private fun composeMessages(request: Prepared): JSONArray {
+        request.composed?.let { return it }
         val input = request.input
         val history = input.getJSONArray(if(input.getInt("schema_version") == 2) "visible_history" else "history")
         if (history.length() !in 1..512) fail("E_COMPLETION_HISTORY")
@@ -350,21 +372,49 @@ internal class AndroidModelTransport(private val credentials: AndroidCredentialS
                 messages.put(JSONObject().put("role", "system").put("content", message.getString("content")))
             }
         }
+        // Whether the model this request will actually reach can read an
+        // image. It is the *wire* model that is asked about, not the logical
+        // slot: a custom provider maps a slot to whatever it serves, and the
+        // capability belongs to what is really being addressed. A relay that
+        // maps a slot to the same model id is believed; one that maps it to
+        // an id nothing knows answers no, and the picture is refused rather
+        // than sent to a model that may confidently describe what it never
+        // received. JavaScript makes the same call against the logical model,
+        // which is the same answer whenever the mapping is the identity.
+        val configuration = request.configuration
+        val wire = configuration.getJSONObject("model_mappings")
+            .optString(request.model, request.model)
+        val supportsImages = AndroidDshModelCatalog.supportsImages(wire)
+        val budget = AndroidAttachmentContent.Budget()
         for (index in 0 until history.length()) {
             val item = history.getJSONObject(index)
             if (item.getString("role") !in setOf("user", "assistant")) fail("E_COMPLETION_CONTEXT_UNSUPPORTED")
-            // Android cannot yet put an attachment's content in front of a
-            // model, on either path. Refusing is the honest answer: sending
-            // the text alone would answer a question about an image the model
-            // was never shown. This is the backstop, not the message the
-            // person reads -- the composer refuses an undeliverable attachment
-            // before a turn is ever started, because only there can the draft
-            // and the attachment be kept and the reason be said plainly. The
-            // code stays inside the core's closed failure set.
-            if ((item.optJSONArray("attachments")?.length() ?: 0) != 0) fail("E_COMPLETION_CONTEXT_UNSUPPORTED")
-            val text = item.getString("content")
-            if (text.toByteArray().size > 1024 * 1024) fail("E_COMPLETION_BODY_TOO_LARGE")
-            messages.put(JSONObject().put("role", item.getString("role")).put("content", text))
+            // Only the person's turn may carry attachments, and only their
+            // turn is ever projected: an assistant turn with one is a
+            // transcript nothing here wrote.
+            val carried = item.optJSONArray("attachments")?.length() ?: 0
+            if (carried != 0 && item.getString("role") != "user") {
+                fail("E_COMPLETION_CONTEXT_UNSUPPORTED")
+            }
+            val projected = try {
+                content.project(item, supportsImages, budget)
+            } catch (refused: AndroidAttachmentContent.Refused) {
+                fail(refused.code)
+            }
+            if (projected.words.toByteArray().size > 1024 * 1024) fail("E_COMPLETION_BODY_TOO_LARGE")
+            // A turn with no picture keeps a plain string, which is what
+            // every frozen request body records.
+            val body = if (projected.pictures.length() == 0) {
+                projected.words as Any
+            } else {
+                val parts = JSONArray()
+                if (projected.words.isNotEmpty()) {
+                    parts.put(JSONObject().put("type", "text").put("text", projected.words))
+                }
+                for (at in 0 until projected.pictures.length()) parts.put(projected.pictures.get(at))
+                parts as Any
+            }
+            messages.put(JSONObject().put("role", item.getString("role")).put("content", body))
         }
         // What this round already did: the assistant turn that asked for a
         // tool, and the results that came back. Without it the model is
@@ -377,6 +427,7 @@ internal class AndroidModelTransport(private val credentials: AndroidCredentialS
                 messages.put(roundMessage(round.getJSONObject(index)))
             }
         }
+        request.composed = messages
         return messages
     }
 

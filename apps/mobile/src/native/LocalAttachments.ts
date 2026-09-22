@@ -76,22 +76,24 @@ function required(): NativeLocalAttachments {
 }
 
 /**
- * Whether an attachment can actually reach a model on this platform.
+ * Whether an attachment of this kind can actually reach a model here.
  *
- * Android's transport carries no attachment content, so a turn carrying one
- * is refused there; the composer asks this before it starts a turn so the
- * person is told plainly, with the draft kept, instead of watching a round
- * fail. A platform that exports no such constant means yes, which is what
- * iOS does.
+ * Android delivers images and text but has no PDF text extractor, so a PDF
+ * there would reach the model as nothing at all. The composer asks this
+ * before it starts a turn, so the person is told plainly with the draft kept
+ * instead of watching a round fail for a reason nothing explains. A platform
+ * that exports no such constant delivers every kind, which is what iOS does.
  */
-function modelDeliverySupported(): boolean {
+function kindDeliverable(kind: AttachmentKind): boolean {
   if (typeof native !== 'object' || native === null) return true;
-  return Reflect.get(native, 'model_delivery') !== false;
+  const declared = Reflect.get(native, 'model_delivery');
+  if (!Array.isArray(declared)) return true;
+  return declared.includes(kind);
 }
 
 export const LocalAttachments = {
   isAvailable: () => hasNativeCapabilities(native),
-  isModelDeliverySupported: modelDeliverySupported,
+  isKindDeliverable: kindDeliverable,
   present: (source: AttachmentSource) => required().present(source),
   discard: (ids: string[]) => required().discard(ids),
   prune: (referencedIds: string[]) => required().prune(referencedIds),

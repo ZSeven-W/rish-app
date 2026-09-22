@@ -32,6 +32,7 @@ const RESPONSES_THINKING: i64 = 16384;
 const BODY_INVALID: &str = "E_COMPLETION_BODY_INVALID";
 const TRANSCRIPT: &str = "E_COMPLETION_TRANSCRIPT";
 const TOOLS: &str = "E_COMPLETION_TOOLS";
+const CONTEXT_UNSUPPORTED: &str = "E_COMPLETION_CONTEXT_UNSUPPORTED";
 
 /// `{"op":"request_body","dialect":"...","model":"...","thinking_mode":"...",
 /// "streaming":true,"messages":[...],"tools":[...]}`
@@ -91,7 +92,23 @@ fn chat_body(
             (false, false) => CHAT_PLAIN,
         }),
     );
-    body.insert("messages".into(), json!(messages));
+    // Every turn goes as it is, except one that carries parts: the host
+    // hands those over in the app's own shape, and this is where they become
+    // OpenAI's. A turn of plain words is passed through untouched, so the
+    // frozen bodies do not move.
+    let mut wire = Vec::with_capacity(messages.len());
+    for message in messages {
+        let role = message.get("role").and_then(Value::as_str);
+        match parts_of(message, role)? {
+            None => wire.push(message.clone()),
+            Some(parts) => {
+                let mut turn = message.as_object().cloned().ok_or(TRANSCRIPT)?;
+                turn.insert("content".into(), chat_parts(&parts));
+                wire.push(Value::Object(turn));
+            }
+        }
+    }
+    body.insert("messages".into(), json!(wire));
     if thinking {
         body.insert("reasoning_effort".into(), json!(mode));
     }
@@ -206,11 +223,16 @@ fn messages_body(
 }
 
 /// One turn as the content blocks this dialect takes.
+/// A turn that is not the person's may not carry parts. `parts_of` says so,
+/// and both dialect writers ask it before they read a turn's content as a
+/// string, so an array there fails the round rather than being read as an
+/// empty answer.
 fn append_block(
     turns: &mut Vec<Value>,
     message: &Value,
     role: Option<&str>,
 ) -> Result<(), &'static str> {
+    let parts = parts_of(message, role)?;
     match role {
         Some("assistant") => {
             let mut blocks: Vec<Value> = Vec::new();
@@ -283,13 +305,14 @@ fn append_block(
             Ok(())
         }
         Some("user") => {
-            turns.push(json!({
-                "role": "user",
-                "content": [{
+            let blocks = match parts {
+                Some(parts) => anthropic_parts(&parts),
+                None => vec![json!({
                     "type": "text",
                     "text": text(message.get("content")).unwrap_or_default(),
-                }],
-            }));
+                })],
+            };
+            turns.push(json!({ "role": "user", "content": blocks }));
             Ok(())
         }
         _ => Err(TRANSCRIPT),
@@ -394,6 +417,7 @@ fn append_input(
     message: &Value,
     role: Option<&str>,
 ) -> Result<(), &'static str> {
+    let parts = parts_of(message, role)?;
     match role {
         Some("assistant") => {
             if let Some(content) = text(message.get("content")) {
@@ -441,14 +465,14 @@ fn append_input(
             Ok(())
         }
         Some("user") => {
-            input.push(json!({
-                "type": "message",
-                "role": "user",
-                "content": [{
+            let blocks = match parts {
+                Some(parts) => responses_parts(&parts),
+                None => vec![json!({
                     "type": "input_text",
                     "text": text(message.get("content")).unwrap_or_default(),
-                }],
-            }));
+                })],
+            };
+            input.push(json!({ "type": "message", "role": "user", "content": blocks }));
             Ok(())
         }
         _ => Err(TRANSCRIPT),
@@ -479,6 +503,157 @@ fn responses_tools(tools: &[Value]) -> Result<Vec<Value>, &'static str> {
                 entry.insert("description".into(), json!(description));
             }
             Ok(Value::Object(entry))
+        })
+        .collect()
+}
+
+/// One piece of what a person said: words, or a picture.
+///
+/// A message's `content` is a string when it is only words, which is nearly
+/// always, and an array of these when it also carries a picture. The shape
+/// here is the app's own, not any provider's: each dialect spells a picture
+/// differently, and choosing one provider's spelling upstream would make the
+/// other two parse a foreign shape. The host produces this; the three
+/// functions below are the only places that know what a wire calls it.
+enum Part {
+    Words(String),
+    Picture { mime: String, data: String },
+}
+
+/// The picture formats every provider in the catalog accepts. A format
+/// outside this list is refused rather than sent: a provider that rejects the
+/// body answers with an opaque HTTP failure, and the person is left with a
+/// turn that failed for no stated reason.
+const PICTURE_MIMES: [&str; 4] = ["image/png", "image/jpeg", "image/gif", "image/webp"];
+
+/// The parts of a message, or `None` when its content is plain words.
+///
+/// Only a user turn may carry parts. An assistant turn's content is its
+/// answer and a tool turn's is a result; an array there is a transcript this
+/// code does not understand, and guessing at it would put something in front
+/// of a model that nobody wrote.
+fn parts_of(message: &Value, role: Option<&str>) -> Result<Option<Vec<Part>>, &'static str> {
+    let Some(raw) = message.get("content").and_then(Value::as_array) else {
+        return Ok(None);
+    };
+    if role != Some("user") {
+        return Err(TRANSCRIPT);
+    }
+    let mut parts = Vec::with_capacity(raw.len());
+    for part in raw {
+        match part.get("type").and_then(Value::as_str) {
+            Some("text") => {
+                // Empty words are not a part. They would become an empty
+                // block, which some providers refuse outright.
+                let Some(words) = text(part.get("text")) else {
+                    return Err(TRANSCRIPT);
+                };
+                parts.push(Part::Words(words));
+            }
+            Some("image") => {
+                let (Some(mime), Some(data)) =
+                    (text(part.get("mime_type")), text(part.get("data")))
+                else {
+                    return Err(TRANSCRIPT);
+                };
+                if !PICTURE_MIMES.contains(&mime.as_str()) {
+                    return Err(CONTEXT_UNSUPPORTED);
+                }
+                parts.push(Part::Picture { mime, data });
+            }
+            // The shape iOS has shipped since before this file spelled
+            // pictures at all: OpenAI's own, inlined as a data URL. It is
+            // read back into the neutral form rather than refused, because
+            // refusing it would break a path people are using today, and
+            // rather than passed through, because only one of the three
+            // dialects understands it. A host writing new code should send
+            // `image`; this is the older spelling, not a second contract.
+            Some("image_url") => {
+                let Some(url) = part
+                    .get("image_url")
+                    .and_then(|value| value.get("url"))
+                    .and_then(Value::as_str)
+                else {
+                    return Err(TRANSCRIPT);
+                };
+                let (mime, data) = data_url_parts(url)?;
+                parts.push(Part::Picture { mime, data });
+            }
+            _ => return Err(TRANSCRIPT),
+        }
+    }
+    if parts.is_empty() {
+        return Err(TRANSCRIPT);
+    }
+    Ok(Some(parts))
+}
+
+/// `data:image/png;base64,...`, which is how two of the three dialects carry
+/// a picture that has no URL of its own.
+fn data_url(mime: &str, data: &str) -> String {
+    format!("data:{mime};base64,{data}")
+}
+
+/// The format and the bytes back out of a data URL.
+///
+/// Strict on purpose: a remote URL is not a picture this app can vouch for,
+/// and a format outside the catalog is refused here exactly as it is on the
+/// neutral path, so the two spellings cannot disagree about what is allowed.
+fn data_url_parts(url: &str) -> Result<(String, String), &'static str> {
+    let Some(rest) = url.strip_prefix("data:") else {
+        return Err(CONTEXT_UNSUPPORTED);
+    };
+    let Some((mime, data)) = rest.split_once(";base64,") else {
+        return Err(CONTEXT_UNSUPPORTED);
+    };
+    if !PICTURE_MIMES.contains(&mime) {
+        return Err(CONTEXT_UNSUPPORTED);
+    }
+    if data.is_empty() {
+        return Err(TRANSCRIPT);
+    }
+    Ok((mime.to_owned(), data.to_owned()))
+}
+
+/// OpenAI chat completions.
+fn chat_parts(parts: &[Part]) -> Value {
+    json!(parts
+        .iter()
+        .map(|part| match part {
+            Part::Words(words) => json!({ "type": "text", "text": words }),
+            Part::Picture { mime, data } => json!({
+                "type": "image_url",
+                "image_url": { "url": data_url(mime, data) },
+            }),
+        })
+        .collect::<Vec<Value>>())
+}
+
+/// Anthropic messages, which names the format rather than inlining a URL.
+fn anthropic_parts(parts: &[Part]) -> Vec<Value> {
+    parts
+        .iter()
+        .map(|part| match part {
+            Part::Words(words) => json!({ "type": "text", "text": words }),
+            Part::Picture { mime, data } => json!({
+                "type": "image",
+                "source": { "type": "base64", "media_type": mime, "data": data },
+            }),
+        })
+        .collect()
+}
+
+/// OpenAI responses, whose input blocks are spelled apart from its output
+/// ones and whose picture block takes the URL unwrapped.
+fn responses_parts(parts: &[Part]) -> Vec<Value> {
+    parts
+        .iter()
+        .map(|part| match part {
+            Part::Words(words) => json!({ "type": "input_text", "text": words }),
+            Part::Picture { mime, data } => json!({
+                "type": "input_image",
+                "image_url": data_url(mime, data),
+            }),
         })
         .collect()
 }

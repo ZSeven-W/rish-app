@@ -554,6 +554,66 @@
         ]
       },
       "body_sha256": "ca2c35bc98b0feb9515ecb04023cae3fb44ff9dbdb1068229439663f8e07e49b"
+    },
+    {
+      "name": "picture_with_words",
+      "transport": "claude-code",
+      "model": "claude-sonnet-5",
+      "thinking_mode": "high",
+      "streaming": false,
+      "messages": [
+        {
+          "role": "user",
+          "content": [
+            {
+              "type": "text",
+              "text": "Name the colours, left then right."
+            },
+            {
+              "type": "image",
+              "mime_type": "image/png",
+              "data": "iVBORw0KGgo="
+            }
+          ]
+        }
+      ],
+      "tools": [],
+      "body": {
+        "max_tokens": 16384,
+        "messages": [
+          {
+            "content": [
+              {
+                "text": "Name the colours, left then right.",
+                "type": "text"
+              },
+              {
+                "source": {
+                  "data": "iVBORw0KGgo=",
+                  "media_type": "image/png",
+                  "type": "base64"
+                },
+                "type": "image"
+              }
+            ],
+            "role": "user"
+          }
+        ],
+        "model": "claude-sonnet-5",
+        "output_config": {
+          "effort": "high"
+        },
+        "stream": false,
+        "thinking": {
+          "display": "summarized",
+          "type": "adaptive"
+        }
+      },
+      "body_sha256": "a11540707329eedb2ed64445e31e289cd5572d752d1e82be24f497a0b1389fb0",
+      "hosts": [
+        "ios",
+        "android"
+      ]
     }
   ],
   "host_gaps": [

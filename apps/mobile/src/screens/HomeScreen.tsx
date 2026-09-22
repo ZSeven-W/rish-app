@@ -3263,18 +3263,23 @@ export function HomeScreen({
       store.getState(),
       conversationId,
     );
-    // Whether anything in this turn carries an attachment at all, of any
-    // kind. Android's transport refuses a request whose history carries one,
-    // because it has no way to put the content in front of the model; sending
-    // the text alone would answer a question about a file the model was never
-    // shown. Refusing here keeps the draft and the attachment and says why,
-    // instead of starting a round that fails for a reason nothing explains.
-    const carriesAttachment =
-      beforeAppend?.messages.some(
-        message => (message.attachments?.length ?? 0) > 0,
-      ) === true || outgoingAttachments.length > 0;
-    if (carriesAttachment && !LocalAttachments.isModelDeliverySupported()) {
-      setRequestFailure(t('messages.attachment.platformUnsupported'));
+    // An attachment of a kind this platform cannot put in front of a model.
+    // Android delivers images and text but cannot read a PDF, and sending the
+    // words around one while dropping the document itself would answer a
+    // question about something the model never saw. Refusing here keeps the
+    // draft and the attachment and says why, instead of starting a round that
+    // fails for a reason nothing explains. The history is checked too,
+    // because every round sends it again.
+    const undeliverable = [
+      ...(beforeAppend?.messages ?? []).flatMap(
+        message => message.attachments ?? [],
+      ),
+      ...outgoingAttachments,
+    ].find(attachment => !LocalAttachments.isKindDeliverable(attachment.kind));
+    if (undeliverable !== undefined) {
+      setRequestFailure(
+        t('messages.attachment.kindUnsupported', { name: undeliverable.name }),
+      );
       return;
     }
     const historyNeedsVision =

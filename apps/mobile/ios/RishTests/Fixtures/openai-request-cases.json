@@ -369,6 +369,61 @@
         }
       },
       "body_sha256": "be4ad8d96e984a11b22cb3df583703de5054263c9c100e97ff9942b3d74ee1d1"
+    },
+    {
+      "name": "picture_with_words",
+      "transport": "codex",
+      "model": "gpt-5.6",
+      "thinking_mode": "high",
+      "streaming": true,
+      "messages": [
+        {
+          "role": "user",
+          "content": [
+            {
+              "type": "text",
+              "text": "Name the colours, left then right."
+            },
+            {
+              "type": "image",
+              "mime_type": "image/png",
+              "data": "iVBORw0KGgo="
+            }
+          ]
+        }
+      ],
+      "tools": [],
+      "body": {
+        "input": [
+          {
+            "content": [
+              {
+                "text": "Name the colours, left then right.",
+                "type": "input_text"
+              },
+              {
+                "image_url": "data:image/png;base64,iVBORw0KGgo=",
+                "type": "input_image"
+              }
+            ],
+            "role": "user",
+            "type": "message"
+          }
+        ],
+        "max_output_tokens": 16384,
+        "model": "gpt-5.6",
+        "reasoning": {
+          "effort": "high",
+          "summary": "auto"
+        },
+        "store": false,
+        "stream": true
+      },
+      "body_sha256": "779b5e149af07a2ce11225505069427a523df08bf49d3d09d36d980c60e85175",
+      "hosts": [
+        "ios",
+        "android"
+      ]
     }
   ]
 }

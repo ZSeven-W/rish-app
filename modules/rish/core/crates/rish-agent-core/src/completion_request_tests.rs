@@ -93,7 +93,7 @@ fn every_frozen_request_is_rebuilt_byte_for_byte() {
             total += 1;
         }
     }
-    assert_eq!(total, 22, "every recorded case is rebuilt");
+    assert_eq!(total, 25, "every recorded case is rebuilt");
 }
 
 /// The four ceilings of a chat round, stated rather than inferred from the
@@ -337,4 +337,247 @@ fn anthropic_refuses_arguments_that_are_not_an_object() {
             "{arguments}",
         );
     }
+}
+
+/// A picture reaches every dialect, each in its own spelling.
+///
+/// Two of the three used to read a turn's content with `text()`, which
+/// answers `None` for an array, so a message carrying a picture arrived at
+/// the provider as an empty string. The model then answered a question about
+/// an image it had never been shown, which is worse than a refusal.
+#[test]
+fn a_picture_reaches_every_dialect_in_its_own_spelling() {
+    let turn = json!({
+        "role": "user",
+        "content": [
+            { "type": "text", "text": "what is this" },
+            { "type": "image", "mime_type": "image/png", "data": "QUJD" },
+        ],
+    });
+    let body = |dialect: &str, model: &str| {
+        let answer = request_body(&json!({
+            "dialect": dialect,
+            "model": model,
+            "thinking_mode": "off",
+            "streaming": false,
+            "messages": [turn.clone()],
+            "tools": [],
+        }));
+        assert_eq!(answer["ok"], json!(true), "{dialect}: {answer}");
+        answer["body"].clone()
+    };
+
+    assert_eq!(
+        body("chat-completions", "deepseek-v4-flash")["messages"][0]["content"],
+        json!([
+            { "type": "text", "text": "what is this" },
+            { "type": "image_url", "image_url": { "url": "data:image/png;base64,QUJD" } },
+        ]),
+    );
+    assert_eq!(
+        body("messages", "claude-sonnet-5")["messages"][0]["content"],
+        json!([
+            { "type": "text", "text": "what is this" },
+            {
+                "type": "image",
+                "source": { "type": "base64", "media_type": "image/png", "data": "QUJD" },
+            },
+        ]),
+    );
+    assert_eq!(
+        body("responses", "gpt-5")["input"][0]["content"],
+        json!([
+            { "type": "input_text", "text": "what is this" },
+            { "type": "input_image", "image_url": "data:image/png;base64,QUJD" },
+        ]),
+    );
+}
+
+/// A turn of plain words keeps the shape it has always had, in every
+/// dialect, so the frozen bodies cannot move underneath the new path.
+#[test]
+fn plain_words_are_untouched_by_the_parts_path() {
+    for (dialect, model) in [
+        ("chat-completions", "deepseek-v4-flash"),
+        ("messages", "claude-sonnet-5"),
+        ("responses", "gpt-5"),
+    ] {
+        let answer = request_body(&json!({
+            "dialect": dialect,
+            "model": model,
+            "thinking_mode": "off",
+            "streaming": false,
+            "messages": [{ "role": "user", "content": "hello" }],
+            "tools": [],
+        }));
+        assert_eq!(answer["ok"], json!(true), "{dialect}");
+        let content = if dialect == "chat-completions" {
+            answer["body"]["messages"][0]["content"].clone()
+        } else if dialect == "messages" {
+            answer["body"]["messages"][0]["content"].clone()
+        } else {
+            answer["body"]["input"][0]["content"].clone()
+        };
+        let expected = match dialect {
+            "chat-completions" => json!("hello"),
+            "messages" => json!([{ "type": "text", "text": "hello" }]),
+            _ => json!([{ "type": "input_text", "text": "hello" }]),
+        };
+        assert_eq!(content, expected, "{dialect}");
+    }
+}
+
+/// What a request carrying parts is refused for. Each of these used to be
+/// either dropped silently or sent on to the provider to reject opaquely.
+#[test]
+fn a_malformed_or_misplaced_part_fails_the_round() {
+    let refusal = |dialect: &str, messages: Value| {
+        let answer = request_body(&json!({
+            "dialect": dialect,
+            "model": if dialect == "messages" { "claude-sonnet-5" } else { "deepseek-v4-flash" },
+            "thinking_mode": "off",
+            "streaming": false,
+            "messages": messages,
+            "tools": [],
+        }));
+        assert_eq!(answer["ok"], json!(false), "{dialect}: {answer}");
+        answer["failure_code"].as_str().unwrap_or_default().to_owned()
+    };
+    let picture = json!({ "type": "image", "mime_type": "image/png", "data": "QUJD" });
+
+    for dialect in ["chat-completions", "messages", "responses"] {
+        // A format no provider in the catalog takes.
+        assert_eq!(
+            refusal(
+                dialect,
+                json!([{
+                    "role": "user",
+                    "content": [{ "type": "image", "mime_type": "image/tiff", "data": "QUJD" }],
+                }]),
+            ),
+            "E_COMPLETION_CONTEXT_UNSUPPORTED",
+            "{dialect} tiff",
+        );
+        // A picture with no bytes, and a part of an unknown kind.
+        assert_eq!(
+            refusal(
+                dialect,
+                json!([{
+                    "role": "user",
+                    "content": [{ "type": "image", "mime_type": "image/png", "data": "" }],
+                }]),
+            ),
+            "E_COMPLETION_TRANSCRIPT",
+            "{dialect} empty picture",
+        );
+        assert_eq!(
+            refusal(
+                dialect,
+                json!([{ "role": "user", "content": [{ "type": "audio", "data": "QUJD" }] }]),
+            ),
+            "E_COMPLETION_TRANSCRIPT",
+            "{dialect} unknown part",
+        );
+        // An empty array is not a message; it would reach the provider as a
+        // turn with nothing in it.
+        assert_eq!(
+            refusal(dialect, json!([{ "role": "user", "content": [] }])),
+            "E_COMPLETION_TRANSCRIPT",
+            "{dialect} empty parts",
+        );
+        // Only the person's turn may carry parts. An assistant turn whose
+        // content is an array is a transcript this code cannot read, and
+        // reading it as an empty answer is how a reply disappears.
+        assert_eq!(
+            refusal(
+                dialect,
+                json!([
+                    { "role": "user", "content": "hi" },
+                    { "role": "assistant", "content": [picture.clone()] },
+                    { "role": "user", "content": "and now" },
+                ]),
+            ),
+            "E_COMPLETION_TRANSCRIPT",
+            "{dialect} assistant parts",
+        );
+    }
+}
+
+
+
+/// The older spelling iOS still sends reaches every dialect the same way.
+///
+/// iOS has built `image_url` parts with an inlined data URL since before this
+/// file knew what a picture was. Under the first version of the parts path it
+/// was an unknown part and failed the round, which broke a shipped iOS
+/// feature; the full iOS suite is what said so. Reading it back into the
+/// neutral form has to give byte-for-byte what the neutral form gives, or
+/// there are two contracts instead of one.
+#[test]
+fn the_older_image_url_spelling_gives_the_same_body() {
+    let neutral = json!({
+        "role": "user",
+        "content": [
+            { "type": "text", "text": "what is this" },
+            { "type": "image", "mime_type": "image/png", "data": "QUJD" },
+        ],
+    });
+    let legacy = json!({
+        "role": "user",
+        "content": [
+            { "type": "text", "text": "what is this" },
+            { "type": "image_url", "image_url": { "url": "data:image/png;base64,QUJD" } },
+        ],
+    });
+    for (dialect, model) in [
+        ("chat-completions", "deepseek-v4-flash"),
+        ("messages", "claude-sonnet-5"),
+        ("responses", "gpt-5.6"),
+    ] {
+        let body = |turn: &Value| {
+            let answer = request_body(&json!({
+                "dialect": dialect,
+                "model": model,
+                "thinking_mode": "off",
+                "streaming": false,
+                "messages": [turn],
+                "tools": [],
+            }));
+            assert_eq!(answer["ok"], json!(true), "{dialect}: {answer}");
+            answer["body"].clone()
+        };
+        assert_eq!(body(&neutral), body(&legacy), "{dialect}");
+    }
+}
+
+/// What an older-spelling picture is refused for. A remote URL is not
+/// something this app can vouch for, and a format outside the catalog is
+/// refused on both spellings alike.
+#[test]
+fn an_image_url_that_is_not_an_inlined_picture_is_refused() {
+    let refusal = |url: Value| {
+        let answer = request_body(&json!({
+            "dialect": "chat-completions",
+            "model": "deepseek-v4-flash",
+            "thinking_mode": "off",
+            "streaming": false,
+            "messages": [{
+                "role": "user",
+                "content": [{ "type": "image_url", "image_url": { "url": url } }],
+            }],
+            "tools": [],
+        }));
+        assert_eq!(answer["ok"], json!(false), "{answer}");
+        answer["failure_code"].as_str().unwrap_or_default().to_owned()
+    };
+    assert_eq!(
+        refusal(json!("https://example.com/cat.png")),
+        "E_COMPLETION_CONTEXT_UNSUPPORTED",
+    );
+    assert_eq!(
+        refusal(json!("data:image/tiff;base64,QUJD")),
+        "E_COMPLETION_CONTEXT_UNSUPPORTED",
+    );
+    assert_eq!(refusal(json!("data:image/png;base64,")), "E_COMPLETION_TRANSCRIPT");
+    assert_eq!(refusal(json!("data:image/png,QUJD")), "E_COMPLETION_CONTEXT_UNSUPPORTED");
 }

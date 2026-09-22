@@ -59,16 +59,22 @@ class LocalAttachmentsModule(reactContext: ReactApplicationContext) :
     }
 
     /**
-     * `model_delivery` says whether an attachment this module produced can be
-     * put in front of a model on this platform. Android cannot yet: the
-     * transport carries no attachment content on either the chat or the agent
-     * path, so a turn carrying one is refused. JavaScript reads this to stop
-     * the send before a turn starts, with the draft and the attachment kept,
-     * rather than letting the person watch a round fail for a reason nothing
-     * explains. iOS exports no such key, and an absent key means yes.
+     * `model_delivery` lists the attachment kinds this platform can actually
+     * put in front of a model. An image becomes a content part and text is
+     * folded into the message, both in `AndroidAttachmentContent`; a PDF is
+     * not here because Android has no text extractor in this app and sending
+     * the words around a PDF while dropping the PDF would answer a question
+     * about a document the model never saw.
+     *
+     * JavaScript reads this to stop a send before a turn starts, with the
+     * draft and the attachment kept, rather than letting the person watch a
+     * round fail for a reason nothing explains. iOS exports no such key, and
+     * an absent key means every kind.
      */
-    override fun getConstants(): MutableMap<String, Any> =
-        mutableMapOf("implemented" to true, "model_delivery" to false)
+    override fun getConstants(): MutableMap<String, Any> = mutableMapOf(
+        "implemented" to true,
+        "model_delivery" to listOf("image", "text"),
+    )
 
     override fun getName(): String = "LocalAttachments"
 

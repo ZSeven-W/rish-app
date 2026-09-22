@@ -112,7 +112,7 @@ jest.mock('../src/agent/runAgentTurn', () => ({
 jest.mock('../src/native/LocalAttachments', () => ({
   LocalAttachments: {
     isAvailable: jest.fn(),
-    isModelDeliverySupported: jest.fn(() => true),
+    isKindDeliverable: jest.fn(() => true),
     present: jest.fn(),
     discard: jest.fn(),
     prune: jest.fn(),
@@ -1639,7 +1639,7 @@ beforeEach(() => {
   });
   mockLocalRuntime.clearCredential.mockResolvedValue({ status: 'cleared' });
   mockLocalAttachments.isAvailable.mockReturnValue(true);
-  mockLocalAttachments.isModelDeliverySupported.mockReturnValue(true);
+  mockLocalAttachments.isKindDeliverable.mockReturnValue(true);
   mockLocalAttachments.present.mockResolvedValue({
     schema_version: 1,
     status: 'cancelled',
@@ -6204,24 +6204,23 @@ test('adds an image attachment, keeps V4 Flash, and sends without text', async (
   expect(mockLocalRuntime.recordModelTransition).not.toHaveBeenCalled();
 });
 
-test('refuses to send an attachment a platform cannot deliver, keeping the draft', async () => {
-  // Android carries no attachment content to a model on either path, so the
-  // transport refuses the request. Before this guard the turn was started
-  // anyway and the round came back as E_AGENT_EXECUTION_AMBIGUOUS, over a
-  // request that provably never left the device, with only retries offered.
-  mockLocalAttachments.isModelDeliverySupported.mockReturnValue(false);
+test('refuses to send an attachment of a kind the platform cannot deliver, keeping the draft', async () => {
+  // Android delivers images and text but cannot read a PDF. Before this
+  // guard every attachment started a turn anyway and the round came back as
+  // E_AGENT_EXECUTION_AMBIGUOUS, over a request that provably never left the
+  // device, with only retries that could not succeed.
+  mockLocalAttachments.isKindDeliverable.mockImplementation(kind => kind !== 'pdf');
   mockLocalAttachments.present.mockResolvedValueOnce({
     schema_version: 1,
     status: 'selected',
     attachments: [
       {
         schema_version: 1,
-        id: 'image-1',
-        kind: 'image',
-        name: 'camera.jpg',
-        mime_type: 'image/jpeg',
+        id: 'pdf-1',
+        kind: 'pdf',
+        name: 'contract.pdf',
+        mime_type: 'application/pdf',
         size: 2048,
-        thumbnail_data_url: 'data:image/jpeg;base64,dGh1bWI=',
       },
     ],
   });
@@ -6232,12 +6231,12 @@ test('refuses to send an attachment a platform cannot deliver, keeping the draft
   const attachmentModal = root.findByProps({
     testID: 'attachment-menu-modal',
   });
-  await act(async () => actionByLabel(root, 'Photos').props.onPress());
+  await act(async () => actionByLabel(root, 'Files').props.onPress());
   await act(async () => {
     attachmentModal.props.onDismiss();
     await settle();
   });
-  expect(actionByLabel(root, 'Remove camera.jpg')).toBeDefined();
+  expect(actionByLabel(root, 'Remove contract.pdf')).toBeDefined();
 
   await act(async () => {
     actionByLabel(root, 'Send message').props.onPress();
@@ -6245,12 +6244,12 @@ test('refuses to send an attachment a platform cannot deliver, keeping the draft
   });
 
   expect(mockLocalRuntime.completeV2).not.toHaveBeenCalled();
-  // The draft and its attachment survive, so the person can remove the image
+  // The draft and its attachment survive, so the person can remove the file
   // and send the same words.
-  expect(actionByLabel(root, 'Remove camera.jpg')).toBeDefined();
+  expect(actionByLabel(root, 'Remove contract.pdf')).toBeDefined();
   expect(
     JSON.stringify(renderer.toJSON()).includes(
-      'cannot send attachments to a model',
+      'a kind this build cannot show a model',
     ),
   ).toBe(true);
 });

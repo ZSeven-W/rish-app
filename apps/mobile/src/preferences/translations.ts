@@ -365,8 +365,8 @@ const enUS = {
     'Flash Exp selected for image understanding.',
   'messages.attachment.harnessUnsupported':
     'Images are not supported by {harness}. Choose a harness with image input before sending.',
-  'messages.attachment.platformUnsupported':
-    'This Android build cannot send attachments to a model. Remove the attachment to send, or start a new chat if it is already in this conversation.',
+  'messages.attachment.kindUnsupported':
+    '{name} is a kind this build cannot show a model. Remove it to send, or start a new chat if it is already in this conversation.',
   'messages.stopResponse': 'Stop response',
   'messages.sendMessage': 'Send message',
   'messages.respondingLabel': '{provider} is responding',
@@ -1396,7 +1396,7 @@ const zhCN: Readonly<Record<TranslationKey, string>> = {
   'messages.attachment.timeout': '附件选择未完成，请重试。',
   'messages.attachment.visionEnabled': '已切换到 Flash Exp 进行图片理解。',
   'messages.attachment.harnessUnsupported': '{harness} 不支持图片输入。请先选择支持图片的 Harness 再发送。',
-  'messages.attachment.platformUnsupported': '当前安卓版本还不能把附件发给模型。请移除附件后再发送；若附件已在本次对话中，请新开一个对话。',
+  'messages.attachment.kindUnsupported': '{name} 这种附件当前版本还不能展示给模型。请移除后再发送；若它已在本次对话中，请新开一个对话。',
   'messages.stopResponse': '停止回答',
   'messages.sendMessage': '发送消息',
   'messages.respondingLabel': '{provider} 正在回答',
