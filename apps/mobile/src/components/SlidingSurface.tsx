@@ -3,13 +3,12 @@ import {
   Animated,
   BackHandler,
   Easing,
-  Keyboard,
-  Platform,
   Pressable,
   StyleSheet,
   useWindowDimensions,
   View,
 } from 'react-native';
+import { useKeyboardHeight } from '../layout/keyboard';
 
 type Props = React.PropsWithChildren<{
   accessibilityLabel?: string;
@@ -27,29 +26,6 @@ type Props = React.PropsWithChildren<{
 }>;
 
 const disableAnimations = process.env.NODE_ENV === 'test';
-
-/**
- * The keyboard's height on Android, and 0 elsewhere. The Android window
- * does not shrink for the keyboard here (edge-to-edge), so a surface that
- * fills the window keeps its full height and whatever sits under the
- * keyboard cannot be scrolled to. On iOS the screen's KeyboardAvoidingView
- * already pads the root the surface is laid over.
- */
-function useKeyboardHeight(): number {
-  const [height, setHeight] = useState(0);
-  useEffect(() => {
-    if (Platform.OS !== 'android') return;
-    const show = Keyboard.addListener('keyboardDidShow', event => {
-      setHeight(Math.max(0, event.endCoordinates?.height ?? 0));
-    });
-    const hide = Keyboard.addListener('keyboardDidHide', () => setHeight(0));
-    return () => {
-      show.remove();
-      hide.remove();
-    };
-  }, []);
-  return height;
-}
 
 export function SlidingSurface({
   accessibilityLabel,

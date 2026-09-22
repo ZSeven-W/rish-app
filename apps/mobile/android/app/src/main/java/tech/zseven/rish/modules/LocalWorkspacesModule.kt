@@ -47,6 +47,13 @@ class LocalWorkspacesModule(private val react: ReactApplicationContext) :
             // on this rather than finding out after it has already cleared
             // the workspace from the session.
             "removal" to RishAgentCoreNative.available,
+            // Choosing a folder outside the app is not. The picker methods
+            // below refuse, so the buttons that call them must not be
+            // offered: a beta user tapped "Open folder" and "Import folder"
+            // and got E_WORKSPACE_UNAVAILABLE twice (2026-09-22). A host
+            // that exports nothing here is assumed to have the picker, which
+            // is what iOS does.
+            "folder_picker" to false,
         )
 
     override fun getName(): String = "LocalWorkspaces"

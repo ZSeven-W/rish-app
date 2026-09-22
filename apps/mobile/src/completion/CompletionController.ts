@@ -461,6 +461,35 @@ function errorCode(error: unknown): AttemptFailureCode {
   return 'E_COMPLETION_NATIVE';
 }
 
+/**
+ * Says out loud that a native agent result failed the store's validation.
+ *
+ * The validator answers only yes or no, and every caller that gets a `null`
+ * turns it into the same opaque failure -- twice now a beta report has been a
+ * contract mismatch that left no trace anywhere to read. What gets written is
+ * the shape, never the content: the operation, the status, and each key with
+ * the type of its value. A missing key, a boolean arriving as a number, a
+ * status nothing expects -- the whole class of mismatch this keeps hitting --
+ * is visible in that, and no message text, path or secret can be.
+ */
+function rejectedTransition(operation: string, result: unknown, error?: unknown): void {
+  let shape: string = typeof result;
+  try {
+    if (typeof result === 'object' && result !== null) {
+      const status = Reflect.get(result, 'status');
+      const keys = Object.keys(result)
+        .slice(0, 64)
+        .map(key => `${key}:${typeof Reflect.get(result, key)}`)
+        .join(',');
+      shape = `status=${typeof status === 'string' ? status : typeof status} {${keys}}`;
+    }
+  } catch {
+    // A hostile result still deserves the operation name.
+  }
+  const reason = error === undefined ? '' : ` threw=${String(error).slice(0, 200)}`;
+  console.warn(`[rish] agent transition rejected op=${operation}${reason} ${shape}`);
+}
+
 function visibleHistory(
   chat: ChatStore,
   conversationId: string,
@@ -981,8 +1010,10 @@ export function createCompletionController(
   ): AgentStoreTransitionEvidence | null => {
     try {
       const evidence = validateAgentStoreTransition({ operation, request, result });
+      if (evidence === null) rejectedTransition(operation, result);
       return evidence;
-    } catch {
+    } catch (error) {
+      rejectedTransition(operation, result, error);
       return null;
     }
   };

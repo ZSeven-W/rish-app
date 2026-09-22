@@ -92,6 +92,13 @@ export function WorkspacePickerSheet({
   onRemove,
 }: WorkspacePickerSheetProps) {
   const { colors, t } = useAppPresentation();
+  // Choosing a folder outside the app is not something every platform can
+  // do; where it cannot, the two actions are not offered at all rather than
+  // refusing when tapped.
+  const folderPickerAvailable = useMemo(
+    () => LocalWorkspaces.isFolderPickerAvailable(),
+    [],
+  );
   const { height: windowHeight } = useWindowDimensions();
   const insets = useSafeAreaInsets();
   const styles = useMemo(() => createWorkspacePickerStyles(colors), [colors]);
@@ -773,44 +780,46 @@ export function WorkspacePickerSheet({
                   )}
                 </Pressable>
               </View>
-              <View style={styles.footerRow}>
-                <Pressable
-                  accessibilityLabel={t('workspaces.openFolder')}
-                  accessibilityRole="button"
-                  disabled={busy || pendingSelection !== null}
-                  onPress={() => {
-                    presentFolderPicker('grant_or_import').catch(
-                      () => undefined,
-                    );
-                  }}
-                  style={({ pressed }) => [
-                    styles.footerAction,
-                    pressed && styles.pressed,
-                  ]}
-                >
-                  <AppIcon color={colors.accent} icon={FolderOpen} size={17} />
-                  <Text style={styles.footerActionText}>
-                    {t('workspaces.openFolder')}
-                  </Text>
-                </Pressable>
-                <Pressable
-                  accessibilityLabel={t('workspaces.importFolder')}
-                  accessibilityRole="button"
-                  disabled={busy || pendingSelection !== null}
-                  onPress={() => {
-                    presentFolderPicker('import_only').catch(() => undefined);
-                  }}
-                  style={({ pressed }) => [
-                    styles.footerAction,
-                    pressed && styles.pressed,
-                  ]}
-                >
-                  <AppIcon color={colors.accent} icon={FolderInput} size={17} />
-                  <Text style={styles.footerActionText}>
-                    {t('workspaces.importFolder')}
-                  </Text>
-                </Pressable>
-              </View>
+              {folderPickerAvailable && (
+                <View style={styles.footerRow}>
+                  <Pressable
+                    accessibilityLabel={t('workspaces.openFolder')}
+                    accessibilityRole="button"
+                    disabled={busy || pendingSelection !== null}
+                    onPress={() => {
+                      presentFolderPicker('grant_or_import').catch(
+                        () => undefined,
+                      );
+                    }}
+                    style={({ pressed }) => [
+                      styles.footerAction,
+                      pressed && styles.pressed,
+                    ]}
+                  >
+                    <AppIcon color={colors.accent} icon={FolderOpen} size={17} />
+                    <Text style={styles.footerActionText}>
+                      {t('workspaces.openFolder')}
+                    </Text>
+                  </Pressable>
+                  <Pressable
+                    accessibilityLabel={t('workspaces.importFolder')}
+                    accessibilityRole="button"
+                    disabled={busy || pendingSelection !== null}
+                    onPress={() => {
+                      presentFolderPicker('import_only').catch(() => undefined);
+                    }}
+                    style={({ pressed }) => [
+                      styles.footerAction,
+                      pressed && styles.pressed,
+                    ]}
+                  >
+                    <AppIcon color={colors.accent} icon={FolderInput} size={17} />
+                    <Text style={styles.footerActionText}>
+                      {t('workspaces.importFolder')}
+                    </Text>
+                  </Pressable>
+                </View>
+              )}
             </ScrollView>
           </Animated.View>
         </KeyboardAvoidingView>

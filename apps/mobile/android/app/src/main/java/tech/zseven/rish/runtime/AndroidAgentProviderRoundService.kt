@@ -170,11 +170,7 @@ internal class AndroidAgentProviderRoundService(
             ).optJSONObject("cas") ?: throw Refused(CONFLICT)
             rounds.claim(cas, owner) ?: throw Refused(CONFLICT)
         }
-        val claimed = rowFor(wal.snapshot(), locator) ?: throw Refused(PERSISTENCE)
-        val dispatchCas = decide(
-            JSONObject().put("op", "round_cas").put("row", claimed),
-        ).optJSONObject("cas") ?: throw Refused(CONFLICT)
-        rounds.markDispatched(dispatchCas) ?: throw Refused(CONFLICT)
+        rowFor(wal.snapshot(), locator) ?: throw Refused(PERSISTENCE)
 
         // What the model is shown of the conversation so far. The messages are
         // the transcript's own -- the store reads them out of the WAL under
@@ -241,8 +237,23 @@ internal class AndroidAgentProviderRoundService(
             Pair(null, null)
         }
 
+        // Everything above and below this point runs while the round is still
+        // `not_dispatched`, and the marker is only set once the request has
+        // been built and the transport has accepted it. iOS does the same: it
+        // assembles messages, tools and the provider body, and marks dispatched
+        // only after all of that succeeded.
+        //
+        // **Why the order matters.** A refusal raised while the request is
+        // being built -- an attachment this transport cannot carry, a protocol
+        // that cannot express a round transcript, a body over the limit -- is
+        // proof that nothing was sent. Marking first made the core reconcile
+        // such a round as `ambiguous`, and the person was shown
+        // `E_AGENT_EXECUTION_AMBIGUOUS` over a turn that provably never left
+        // the device, with only retries that could not succeed. The marker
+        // still commits *before* the network call, because a crash during the
+        // call must leave a round that may have happened.
         var providerError: String? = null
-        val reply = try {
+        val prepared = try {
             val envelope = JSONObject()
                 .put("schema_version", 2)
                 .put("harness_id", request.optString("harness_id"))
@@ -259,7 +270,34 @@ internal class AndroidAgentProviderRoundService(
                 .put("round_transcript", body)
                 .put("project_context", contextMessages ?: JSONObject.NULL)
                 .put("tools", declared)
-            val prepared = transport.prepare(envelope.toString())
+            transport.prepare(envelope.toString()).also { transport.validate(it) }
+        } catch (failure: Exception) {
+            // What the transport said is what decides the round's failure
+            // code, so its own vocabulary is kept rather than discarded.
+            providerError = (failure as? RuntimeFailure)?.code
+            android.util.Log.w("RishAgent", "round preparation refused: $providerError", failure)
+            null
+        }
+
+        // The request exists and the transport has accepted it, so from here
+        // on a silence really could mean the provider saw it.
+        if (prepared != null) {
+            try {
+                val claimed = rowFor(wal.snapshot(), locator) ?: throw Refused(PERSISTENCE)
+                val dispatchCas = decide(
+                    JSONObject().put("op", "round_cas").put("row", claimed),
+                ).optJSONObject("cas") ?: throw Refused(CONFLICT)
+                rounds.markDispatched(dispatchCas) ?: throw Refused(CONFLICT)
+            } catch (failure: Throwable) {
+                // The request holds a transport slot that only a run gives
+                // back. Leaving it there would refuse the next round as busy
+                // over a request nobody ever sent.
+                transport.discard(prepared)
+                throw failure
+            }
+        }
+
+        val reply = if (prepared == null) null else try {
             // Correlation first: a preview event that cannot be tied to the
             // round it belongs to is not display material, it is noise.
             val preview = previewSink(request, locator)
@@ -278,8 +316,6 @@ internal class AndroidAgentProviderRoundService(
                 throw failure
             }
         } catch (failure: Exception) {
-            // What the provider said is what decides the round's failure code,
-            // so the transport's own vocabulary is kept rather than discarded.
             providerError = (failure as? RuntimeFailure)?.code
             android.util.Log.w("RishAgent", "round transport failed: $providerError", failure)
             null

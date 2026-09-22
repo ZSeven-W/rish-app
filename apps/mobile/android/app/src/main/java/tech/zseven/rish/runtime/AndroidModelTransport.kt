@@ -324,42 +324,95 @@ internal class AndroidModelTransport(private val credentials: AndroidCredentialS
      * code reading the same object. A preview that disagreed with the settled
      * round would be worse than no preview.
      */
+    /**
+     * The messages this request will be sent as, and every refusal that can
+     * be decided without touching the network.
+     *
+     * Pulled out of `execute` so a caller can learn *before* it commits to
+     * having dispatched anything that the request is one this transport
+     * cannot carry. An attachment it cannot deliver, a round transcript in a
+     * dialect that cannot express one, a message over the size limit: none of
+     * those depend on the provider, and a round stopped by one of them
+     * provably never left the device. `execute` calls this too, so there is
+     * one rule rather than two that can drift.
+     */
+    private fun composeMessages(request: Prepared): JSONArray {
+        val input = request.input
+        val history = input.getJSONArray(if(input.getInt("schema_version") == 2) "visible_history" else "history")
+        if (history.length() !in 1..512) fail("E_COMPLETION_HISTORY")
+        val messages = JSONArray()
+        // The project context comes first, as iOS prepends it: what the
+        // model is told about the project precedes what was said in it.
+        val context = if (input.isNull("project_context")) null else input.optJSONArray("project_context")
+        if (context != null) {
+            for (index in 0 until context.length()) {
+                val message = context.getJSONObject(index)
+                messages.put(JSONObject().put("role", "system").put("content", message.getString("content")))
+            }
+        }
+        for (index in 0 until history.length()) {
+            val item = history.getJSONObject(index)
+            if (item.getString("role") !in setOf("user", "assistant")) fail("E_COMPLETION_CONTEXT_UNSUPPORTED")
+            // Android cannot yet put an attachment's content in front of a
+            // model, on either path. Refusing is the honest answer: sending
+            // the text alone would answer a question about an image the model
+            // was never shown. This is the backstop, not the message the
+            // person reads -- the composer refuses an undeliverable attachment
+            // before a turn is ever started, because only there can the draft
+            // and the attachment be kept and the reason be said plainly. The
+            // code stays inside the core's closed failure set.
+            if ((item.optJSONArray("attachments")?.length() ?: 0) != 0) fail("E_COMPLETION_CONTEXT_UNSUPPORTED")
+            val text = item.getString("content")
+            if (text.toByteArray().size > 1024 * 1024) fail("E_COMPLETION_BODY_TOO_LARGE")
+            messages.put(JSONObject().put("role", item.getString("role")).put("content", text))
+        }
+        // What this round already did: the assistant turn that asked for a
+        // tool, and the results that came back. Without it the model is
+        // told nothing of the call it just made and asks for it again, so
+        // a turn with a tool in it could never finish.
+        val round = input.optJSONArray("round_transcript") ?: JSONArray()
+        if (round.length() != 0) {
+            if (request.configuration.getString("protocol") != "chat-completions") fail("E_COMPLETION_CONTEXT_UNSUPPORTED")
+            for (index in 0 until round.length()) {
+                messages.put(roundMessage(round.getJSONObject(index)))
+            }
+        }
+        return messages
+    }
+
+    /**
+     * Raises now whatever `execute` would raise before it sends anything.
+     *
+     * A prepared request holds a slot in `active` that only `execute` frees,
+     * so a refusal here has to give the slot back; otherwise the next round
+     * is refused as busy over a request that was never run.
+     */
+    fun validate(request: Prepared) {
+        try {
+            composeMessages(request)
+        } catch (failure: Throwable) {
+            discard(request)
+            throw failure
+        }
+    }
+
+    /**
+     * Gives a prepared request's slot back without running it, for a caller
+     * that prepared one and then could not go through with it.
+     */
+    fun discard(request: Prepared) = synchronized(lock) {
+        if (active[request.id] === request) active.remove(request.id)
+        Unit
+    }
+
     fun execute(request: Prepared, sink: ((JSONObject) -> Unit)? = null): JSONObject {
         val started = android.os.SystemClock.elapsedRealtime()
         try {
             val input = request.input
             val history = input.getJSONArray(if(input.getInt("schema_version") == 2) "visible_history" else "history")
-            if (history.length() !in 1..512) fail("E_COMPLETION_HISTORY")
-            val messages = JSONArray()
-            // The project context comes first, as iOS prepends it: what the
-            // model is told about the project precedes what was said in it.
-            val context = if (input.isNull("project_context")) null else input.optJSONArray("project_context")
-            if (context != null) {
-                for (index in 0 until context.length()) {
-                    val message = context.getJSONObject(index)
-                    messages.put(JSONObject().put("role", "system").put("content", message.getString("content")))
-                }
-            }
-            for (index in 0 until history.length()) {
-                val item = history.getJSONObject(index)
-                if (item.getString("role") !in setOf("user", "assistant") || (item.optJSONArray("attachments")?.length() ?: 0) != 0) fail("E_COMPLETION_CONTEXT_UNSUPPORTED")
-                val text = item.getString("content")
-                if (text.toByteArray().size > 1024 * 1024) fail("E_COMPLETION_BODY_TOO_LARGE")
-                messages.put(JSONObject().put("role", item.getString("role")).put("content", text))
-            }
             val config = request.configuration
             val protocol = config.getString("protocol")
-            // What this round already did: the assistant turn that asked for a
-            // tool, and the results that came back. Without it the model is
-            // told nothing of the call it just made and asks for it again, so
-            // a turn with a tool in it could never finish.
-            val round = input.optJSONArray("round_transcript") ?: JSONArray()
-            if (round.length() != 0) {
-                if (protocol != "chat-completions") fail("E_COMPLETION_CONTEXT_UNSUPPORTED")
-                for (index in 0 until round.length()) {
-                    messages.put(roundMessage(round.getJSONObject(index)))
-                }
-            }
+            val messages = composeMessages(request)
             val declared = input.optJSONArray("tools") ?: JSONArray()
             val wireModel = config.getJSONObject("model_mappings").optString(request.model, request.model)
             val streaming = sink != null && protocol == "chat-completions"

@@ -1,4 +1,6 @@
 const mockNativeLocalWorkspaces = {
+  implemented: true,
+  folder_picker: true,
   list: jest.fn(),
   resolve: jest.fn(),
   queryOperation: jest.fn(),
@@ -802,4 +804,23 @@ test('a blocked or retired removal is shown, a cancelled one is not', async () =
     await Promise.resolve();
   });
   expect(cancelled.root.findAllByProps({ accessibilityRole: 'alert' })).toHaveLength(0);
+});
+
+test('does not offer the folder actions where the platform has no picker', async () => {
+  mockNativeLocalWorkspaces.list.mockResolvedValue({ schema_version: 1, workspaces: [] });
+  const withPicker = await renderSheet();
+  expect(actionByLabel(withPicker.root, 'Open folder…')).toBeDefined();
+  expect(actionByLabel(withPicker.root, 'Import folder…')).toBeDefined();
+
+  // A host that says it has none offers neither, instead of refusing on tap.
+  (mockNativeLocalWorkspaces as { folder_picker: boolean }).folder_picker = false;
+  try {
+    const without = await renderSheet();
+    expect(() => actionByLabel(without.root, 'Open folder…')).toThrow();
+    expect(() => actionByLabel(without.root, 'Import folder…')).toThrow();
+    // The workspace the person can still make is offered.
+    expect(actionByLabel(without.root, 'New workspace')).toBeDefined();
+  } finally {
+    (mockNativeLocalWorkspaces as { folder_picker: boolean }).folder_picker = true;
+  }
 });

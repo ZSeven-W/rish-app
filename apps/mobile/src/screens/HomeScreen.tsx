@@ -189,6 +189,7 @@ import {
   type ProjectContextLifecycleControllerState,
 } from '../project-context';
 import { useAppPresentation } from '../presentation/AppPresentation';
+import { useKeyboardHeight } from '../layout/keyboard';
 import {
   resolveAdaptiveLayout,
   WIDE_CONTENT_MAX_WIDTH,
@@ -679,6 +680,7 @@ export function HomeScreen({
   seedMarkdownDemo?: boolean;
 }) {
   const insets = useSafeAreaInsets();
+  const keyboardHeight = useKeyboardHeight();
   const { width: windowWidth } = useWindowDimensions();
   const { isWide: wideLayout } = resolveAdaptiveLayout(windowWidth);
   const {
@@ -1659,10 +1661,11 @@ export function HomeScreen({
       }
       const outcome = await workspaceRemoval.remove(workspace, action);
       if (outcome.status === 'forgotten' || outcome.status === 'deleted') {
-        setWorkspaceDescriptors(previous => {
-          const { [workspace.workspace_id]: _removed, ...rest } = previous;
-          return rest;
-        });
+        setWorkspaceDescriptors(previous =>
+          Object.fromEntries(
+            Object.entries(previous).filter(([id]) => id !== workspace.workspace_id),
+          ),
+        );
         setWorkspaceRefreshToken(token => token + 1);
       }
       return outcome;
@@ -3260,6 +3263,20 @@ export function HomeScreen({
       store.getState(),
       conversationId,
     );
+    // Whether anything in this turn carries an attachment at all, of any
+    // kind. Android's transport refuses a request whose history carries one,
+    // because it has no way to put the content in front of the model; sending
+    // the text alone would answer a question about a file the model was never
+    // shown. Refusing here keeps the draft and the attachment and says why,
+    // instead of starting a round that fails for a reason nothing explains.
+    const carriesAttachment =
+      beforeAppend?.messages.some(
+        message => (message.attachments?.length ?? 0) > 0,
+      ) === true || outgoingAttachments.length > 0;
+    if (carriesAttachment && !LocalAttachments.isModelDeliverySupported()) {
+      setRequestFailure(t('messages.attachment.platformUnsupported'));
+      return;
+    }
     const historyNeedsVision =
       beforeAppend?.messages.some(message =>
         message.attachments?.some(attachment => attachment.kind === 'image'),
@@ -6348,7 +6365,13 @@ export function HomeScreen({
         <View
           style={[
             styles.bottomArea,
-            { paddingBottom: Math.max(insets.bottom, 11) },
+            // Android draws edge to edge since RN 0.87, so the window no
+            // longer shrinks for the keyboard and the composer was simply
+            // covered by it. The height the keyboard reports is measured
+            // from the top of the navigation bar, so the bottom inset is
+            // still needed underneath it. iOS reports zero here and keeps
+            // the screen's KeyboardAvoidingView.
+            { paddingBottom: Math.max(insets.bottom, 11) + keyboardHeight },
           ]}
         >
           {(visibleRequestFailure !== null || storageWarning !== null) && (

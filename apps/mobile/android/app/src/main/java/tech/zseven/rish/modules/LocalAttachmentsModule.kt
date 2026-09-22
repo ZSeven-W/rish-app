@@ -58,7 +58,17 @@ class LocalAttachmentsModule(reactContext: ReactApplicationContext) :
         reactContext.addActivityEventListener(this)
     }
 
-    override fun getConstants(): MutableMap<String, Any> = mutableMapOf("implemented" to true)
+    /**
+     * `model_delivery` says whether an attachment this module produced can be
+     * put in front of a model on this platform. Android cannot yet: the
+     * transport carries no attachment content on either the chat or the agent
+     * path, so a turn carrying one is refused. JavaScript reads this to stop
+     * the send before a turn starts, with the draft and the attachment kept,
+     * rather than letting the person watch a round fail for a reason nothing
+     * explains. iOS exports no such key, and an absent key means yes.
+     */
+    override fun getConstants(): MutableMap<String, Any> =
+        mutableMapOf("implemented" to true, "model_delivery" to false)
 
     override fun getName(): String = "LocalAttachments"
 
