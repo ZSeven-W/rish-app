@@ -3191,7 +3191,9 @@ RCT_REMAP_METHOD(fetch,
   if (staging == nil) return nil;
   NSURL *repoURL = [staging URLByAppendingPathComponent:@"repo" isDirectory:YES];
   git_clone_options options = GIT_CLONE_OPTIONS_INIT;
-  options.checkout_opts.checkout_strategy = GIT_CHECKOUT_SAFE;
+  // Never over a file the person keeps out of Git; see the fast-forward.
+  options.checkout_opts.checkout_strategy =
+      GIT_CHECKOUT_SAFE | GIT_CHECKOUT_DONT_OVERWRITE_IGNORED;
   options.fetch_opts.follow_redirects = GIT_REMOTE_REDIRECT_NONE;
   options.fetch_opts.proxy_opts.type = proxyURL.length > 0
     ? GIT_PROXY_SPECIFIED : GIT_PROXY_NONE;
@@ -5844,7 +5846,13 @@ RCT_REMAP_METHOD(pullFastForwardV2,
       if (dirty) { failure = LPError(3110, @"Working tree has changes"); break; }
       if (git_commit_lookup(&commit, repository, remoteTarget) != 0) { failure = LPError(3199, @"Git pull failed"); break; }
       git_checkout_options checkout = GIT_CHECKOUT_OPTIONS_INIT;
-      checkout.checkout_strategy = GIT_CHECKOUT_SAFE;
+      // SAFE protects tracked changes and untracked files but not ignored
+      // ones: an incoming commit that starts tracking a path ignored here --
+      // a local config, a secrets file -- was written straight over it, and
+      // the cleanliness check never saw it because status does not list
+      // ignored files. DONT_OVERWRITE_IGNORED makes that a checkout conflict.
+      checkout.checkout_strategy =
+          GIT_CHECKOUT_SAFE | GIT_CHECKOUT_DONT_OVERWRITE_IGNORED;
       const int checkedOut = git_checkout_tree(repository, reinterpret_cast<const git_object *>(commit), &checkout);
       if (checkedOut == GIT_ECONFLICT) { failure = LPError(3110, @"Working tree has changes"); break; }
       if (checkedOut != 0) { failure = LPError(3199, @"Git pull failed"); break; }

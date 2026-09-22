@@ -395,6 +395,41 @@ class AndroidProjectRemoteTest {
         f.scratch.deleteRecursively()
     }
 
+    /**
+     * A fast-forward never overwrites a file the person keeps out of Git.
+     *
+     * `GIT_CHECKOUT_SAFE` protects tracked changes and untracked files, but
+     * not ignored ones: if the incoming commit starts tracking a path that is
+     * ignored here -- a local config, a secrets file, a build artefact the
+     * person keeps -- the checkout writes straight over it. Nothing in the
+     * cleanliness check sees it either, because ignored files are not listed
+     * by status. So the local file was lost with no refusal at all.
+     */
+    @Test
+    fun aFastForwardNeverOverwritesAnIgnoredLocalFile() {
+        val f = fixture()
+        val bare = File(f.scratch, "ignored.git")
+        assertEquals("ok", RishLibgit2Native.initSplitRepository(bare.absolutePath, File(f.scratch, "unused-ignored").apply { mkdirs() }.absolutePath))
+        val a = Peer(f.scratch, "ia")
+        assertEquals("ok", RishLibgit2Native.setRemote(a.gitDir.absolutePath, a.workDir.absolutePath, "file://" + bare.absolutePath))
+        val ignoring = a.commit(".gitignore", "local.cfg\n", "ignore local.cfg")
+        assertEquals("success", a.push(ignoring).getString("outcome"))
+        // E is a copy of A at that commit, and keeps its own ignored file.
+        val e = Peer.copyOf(a, f.scratch, "ie")
+        File(e.workDir, "local.cfg").writeText("mine\n")
+        // A starts tracking the very path E ignores.
+        val tracking = a.commit("local.cfg", "theirs\n", "track local.cfg")
+        assertEquals("success", a.push(tracking).getString("outcome"))
+        val fetched = e.fetch()
+        assertEquals(fetched.toString(), 1, fetched.getInt("behind"))
+        val answer = e.fastForward(ignoring)
+        // Refused, and the person's file is exactly as they left it.
+        assertEquals(answer.toString(), "dirty", answer.optString("outcome"))
+        assertEquals("mine\n", File(e.workDir, "local.cfg").readText())
+        assertEquals(ignoring, e.head())
+        f.scratch.deleteRecursively()
+    }
+
     @Test
     fun theV2FetchAndPullTalkToTheTestRemote() {
         val remote = testRemote()

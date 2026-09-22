@@ -727,7 +727,13 @@ Java_tech_zseven_rish_runtime_RishLibgit2Native_fastForward(JNIEnv *env, jclass,
     if (dirty) { answer = encode("dirty", previous); break; }
     if (git_commit_lookup(&commit, repository, remote_target) != 0) { answer = Failure(3199, "commit"); break; }
     git_checkout_options checkout = GIT_CHECKOUT_OPTIONS_INIT;
-    checkout.checkout_strategy = GIT_CHECKOUT_SAFE;
+    // SAFE protects tracked changes and untracked files but not ignored
+    // ones: an incoming commit that starts tracking a path ignored here --
+    // a local config, a secrets file -- was written straight over it, and
+    // the cleanliness check above never saw it because status does not list
+    // ignored files. DONT_OVERWRITE_IGNORED turns that into a conflict,
+    // which is refused as `dirty` with the person's file untouched.
+    checkout.checkout_strategy = GIT_CHECKOUT_SAFE | GIT_CHECKOUT_DONT_OVERWRITE_IGNORED;
     const int checked_out = git_checkout_tree(repository, reinterpret_cast<const git_object *>(commit), &checkout);
     if (checked_out == GIT_ECONFLICT) { answer = encode("dirty", previous); break; }
     if (checked_out != 0) { answer = Failure(3199, "checkout"); break; }
@@ -843,7 +849,10 @@ Java_tech_zseven_rish_runtime_RishLibgit2Native_cloneCheckout(JNIEnv *env, jclas
     if (git_branch_create(&local, repository, branch.c_str(), commit, 0) != 0) { answer = Failure(3199, "branch"); break; }
     if (git_repository_set_head(repository, ("refs/heads/" + branch).c_str()) != 0) { answer = Failure(3199, "head"); break; }
     git_checkout_options checkout = GIT_CHECKOUT_OPTIONS_INIT;
-    checkout.checkout_strategy = GIT_CHECKOUT_SAFE | GIT_CHECKOUT_RECREATE_MISSING;
+    // The working tree is empty by construction, but the same protection
+    // costs nothing and keeps every checkout here under one rule.
+    checkout.checkout_strategy = GIT_CHECKOUT_SAFE | GIT_CHECKOUT_RECREATE_MISSING |
+                                 GIT_CHECKOUT_DONT_OVERWRITE_IGNORED;
     if (git_checkout_tree(repository, reinterpret_cast<const git_object *>(commit), &checkout) != 0) {
       answer = Failure(3199, "checkout");
       break;

@@ -455,6 +455,68 @@ static BOOL RV2PushMain(git_repository *repository) {
 }
 
 
+// A fast-forward never overwrites a file the person keeps out of Git.
+//
+// GIT_CHECKOUT_SAFE protects tracked changes and untracked files but not
+// ignored ones: if the incoming commit starts tracking a path ignored here,
+// the checkout wrote straight over it, and nothing in the cleanliness check
+// saw it because status does not list ignored files. Reproduced on Android
+// first, where the pull answered `updated` over the person's own file.
+- (void)testAFastForwardNeverOverwritesAnIgnoredLocalFile {
+  NSError *error = nil;
+  NSString *code = nil;
+  NSString *scratch = [NSTemporaryDirectory() stringByAppendingPathComponent:
+      [NSString stringWithFormat:@"rish-ffi-%@", NSUUID.UUID.UUIDString.lowercaseString]];
+  NSString *barePath = [scratch stringByAppendingPathComponent:@"origin.git"];
+  NSString *peerPath = [scratch stringByAppendingPathComponent:@"peer"];
+  git_repository *bare = nullptr;
+  git_repository_init_options bareOptions = GIT_REPOSITORY_INIT_OPTIONS_INIT;
+  bareOptions.flags = GIT_REPOSITORY_INIT_BARE | GIT_REPOSITORY_INIT_MKPATH;
+  bareOptions.initial_head = "main";
+  XCTAssertEqual(git_repository_init_ext(&bare, barePath.UTF8String, &bareOptions), 0);
+  git_repository_free(bare);
+
+  // The project ignores local.cfg, and keeps one of its own.
+  NSString *ignoring = nil;
+  NSString *localFile = nil;
+  @autoreleasepool {
+    __attribute__((objc_precise_lifetime)) DSHLocalProjectLease *lease = [self.projectAccess
+        leaseWorkspaceRootRef:self.projectRoot mode:DSHLocalProjectAccessModeWrite includeMetadata:NO timeout:1 error:&error];
+    XCTAssertNotNil(lease, @"%@", error);
+    git_remote *remote = nullptr;
+    XCTAssertEqual(git_remote_create(&remote, lease.repository, "origin", barePath.UTF8String), 0);
+    git_remote_free(remote);
+    ignoring = RV2Commit(lease.repository, @".gitignore", @"local.cfg\n", @"ignore local.cfg");
+    XCTAssertNotNil(ignoring);
+    XCTAssertTrue(RV2PushMain(lease.repository));
+    localFile = [[NSString stringWithUTF8String:git_repository_workdir(lease.repository)]
+        stringByAppendingPathComponent:@"local.cfg"];
+  }
+  [[@"mine\n" dataUsingEncoding:NSUTF8StringEncoding] writeToFile:localFile atomically:YES];
+
+  // A peer starts tracking the very path the project ignores.
+  git_repository *peer = nullptr;
+  XCTAssertEqual(git_clone(&peer, barePath.UTF8String, peerPath.UTF8String, nullptr), 0);
+  XCTAssertNotNil(RV2Commit(peer, @"local.cfg", @"theirs\n", @"track local.cfg"));
+  XCTAssertTrue(RV2PushMain(peer));
+  git_repository_free(peer);
+
+  NSDictionary *fetched = [self bridge:^(RV2Resolve resolve, RV2Reject reject) {
+    [self.module fetchV2Request:[self requestWith:@{
+      @"operation_id" : @"66666666-6666-4666-8666-666666666666", @"remote" : @"origin" }] resolver:resolve rejecter:reject];
+  } code:&code];
+  XCTAssertEqualObjects(fetched[@"behind"], @1, @"%@", code);
+
+  id pulled = [self bridge:^(RV2Resolve resolve, RV2Reject reject) {
+    [self.module pullFastForwardV2Request:[self requestWith:@{ @"expected_head_oid" : ignoring }] resolver:resolve rejecter:reject];
+  } code:&code];
+  // Refused, and the person's file is exactly as they left it.
+  XCTAssertNil(pulled);
+  XCTAssertEqualObjects(code, @"E_PROJECT_CONFLICT");
+  XCTAssertEqualObjects([NSString stringWithContentsOfFile:localFile encoding:NSUTF8StringEncoding error:nil], @"mine\n");
+  [NSFileManager.defaultManager removeItemAtPath:scratch error:nil];
+}
+
 - (void)testPushReceiptsAreReadByRootAndSanitized {
   NSString *code = nil;
   NSDictionary *none = [self bridge:^(RV2Resolve resolve, RV2Reject reject) {
