@@ -414,9 +414,20 @@ static NSDictionary *DSHProviderSmokeTranscript(void) {
   };
 }
 
+// The conversation the smoke fixture's round is about. A test that needs a
+// different one -- an attachment, say -- sets this before building its
+// fixture and clears it after, so the digest the request carries and the
+// history the service reads can never drift apart.
+static NSArray *DSHProviderSmokeHistoryOverride = nil;
+
+static NSArray *DSHProviderSmokeHistory(void) {
+  return DSHProviderSmokeHistoryOverride
+      ?: @[ @{ @"role" : @"user", @"content" : @"hello" } ];
+}
+
 static NSString *DSHProviderSmokeVisibleDigest(void) {
   return DSHAgentHJ(@"visible-history", @{
-    @"messages" : @[ @{ @"role" : @"user", @"content" : @"hello" } ],
+    @"messages" : DSHProviderSmokeHistory(),
   }, nil);
 }
 
@@ -665,7 +676,7 @@ static NSDictionary *DSHProviderSmokeQueryRequest(NSDictionary *root,
           (void)authority; if (error != nullptr) *error = nil;
           weakSelf.historyCalls += 1;
           if (!weakSelf.historyAvailable) return nil;
-          return @[ @{ @"role" : @"user", @"content" : @"hello" } ];
+          return DSHProviderSmokeHistory();
         }];
   }
   return self;
@@ -713,6 +724,106 @@ static NSDictionary *DSHProviderSmokeQueryRequest(NSDictionary *root,
     @{ @"type" : @"delta", @"content" : @"ne", @"finish_reason" : @"stop" },
   ];
   return transport;
+}
+
+// An image attached to an Agent turn reaches the provider as its own bytes.
+//
+// The round service used to hand the visible history straight to the
+// request builder, which reads a message's `content` and ignores its
+// `attachments`: the model was asked about a picture it was never shown. The
+// chat path has always projected attachments; the Agent path now calls the
+// same projection. What is asserted is the bytes, because a check that only
+// found an image part would pass over an empty one.
+- (void)testAnImageAttachedToAnAgentTurnReachesTheProviderAsItsOwnBytes {
+  const uint8_t bytes[] = {0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A, 0x01, 0x02};
+  NSData *png = [NSData dataWithBytes:bytes length:sizeof(bytes)];
+  NSDictionary *reference = @{
+    @"schema_version" : @1,
+    @"id" : @"aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+    @"kind" : @"image",
+    @"name" : @"probe.png",
+    @"mime_type" : @"image/png",
+    @"size" : @(png.length),
+  };
+  DSHProviderSmokeHistoryOverride = @[ @{
+    @"role" : @"user", @"content" : @"what is this", @"attachments" : @[ reference ],
+  } ];
+  @try {
+    DSHProviderSmokeFixture *fixture = [[DSHProviderSmokeFixture alloc] init];
+    fixture.service.attachmentResolver =
+        ^NSDictionary *(__unused id value, NSData **payload, NSDictionary **manifest,
+                        NSError **error) {
+          if (error != nullptr) *error = nil;
+          if (payload != nullptr) *payload = png;
+          if (manifest != nullptr) {
+            *manifest = @{ @"mime_type" : @"image/png", @"size" : @(png.length) };
+          }
+          return reference;
+        };
+    NSError *error = nil;
+    (void)[fixture.service completeAgentRoundV2WithRequest:fixture.request error:&error];
+
+    XCTAssertEqual(fixture.transport.startCount, (NSUInteger)1);
+    NSString *expectedURL = [NSString stringWithFormat:@"data:image/png;base64,%@",
+                             [png base64EncodedStringWithOptions:0]];
+    NSDictionary *userTurn = nil;
+    for (NSDictionary *message in fixture.transport.lastModelInput) {
+      if ([message[@"role"] isEqual:@"user"]) userTurn = message;
+    }
+    NSArray *parts = userTurn[@"content"];
+    XCTAssertTrue([parts isKindOfClass:NSArray.class], @"%@", userTurn);
+    NSString *url = nil;
+    for (NSDictionary *part in parts) {
+      if ([part[@"type"] isEqual:@"image_url"]) url = part[@"image_url"][@"url"];
+    }
+    XCTAssertEqualObjects(url, expectedURL);
+    // And the body the provider would receive carries it too, rather than
+    // the app's own `attachments` metadata.
+    NSString *body = [[NSString alloc] initWithData:fixture.transport.lastBodyData
+                                           encoding:NSUTF8StringEncoding];
+    XCTAssertTrue([body containsString:[png base64EncodedStringWithOptions:0]], @"%@", body);
+    XCTAssertFalse([body containsString:@"\"attachments\""], @"%@", body);
+  } @finally {
+    DSHProviderSmokeHistoryOverride = nil;
+  }
+}
+
+// An attachment this path cannot carry fails the round before anything is
+// sent, as a capability refusal the person can act on -- not an ambiguity,
+// because nothing was dispatched, and not a silent drop, because the model
+// would then answer about a file it never received.
+- (void)testAnAttachmentThatCannotBeCarriedIsRefusedBeforeDispatch {
+  NSDictionary *reference = @{
+    @"schema_version" : @1,
+    @"id" : @"bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb",
+    @"kind" : @"image",
+    @"name" : @"gone.png",
+    @"mime_type" : @"image/png",
+    @"size" : @3,
+  };
+  DSHProviderSmokeHistoryOverride = @[ @{
+    @"role" : @"user", @"content" : @"what is this", @"attachments" : @[ reference ],
+  } ];
+  @try {
+    DSHProviderSmokeFixture *fixture = [[DSHProviderSmokeFixture alloc] init];
+    fixture.service.attachmentResolver =
+        ^NSDictionary *(__unused id value, __unused NSData **payload,
+                        __unused NSDictionary **manifest, NSError **error) {
+          if (error != nullptr) {
+            *error = [NSError errorWithDomain:@"test" code:1 userInfo:nil];
+          }
+          return nil;
+        };
+    NSError *error = nil;
+    NSDictionary *result =
+        [fixture.service completeAgentRoundV2WithRequest:fixture.request error:&error];
+    XCTAssertNil(result);
+    XCTAssertEqualObjects(error.userInfo[@"code"], @"E_AGENT_CAPABILITY");
+    XCTAssertEqual(fixture.transport.startCount, (NSUInteger)0,
+                   @"nothing may be sent for a request that cannot be carried");
+  } @finally {
+    DSHProviderSmokeHistoryOverride = nil;
+  }
 }
 
 - (void)testStreamedRoundPublishesOrderedPreviewEventsAndOneValidatedEnd {

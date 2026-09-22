@@ -869,6 +869,158 @@ static BOOL DSHCanConnectToMacProxy(void) {
                       rejecter:(RCTPromiseRejectBlock)reject;
 @end
 
+// The one projection of a visible history's attachment references into what
+// a model is shown, for the plain chat path and the Agent round path alike.
+//
+// It used to be a LocalRuntimeModule method, which is why only the chat path
+// used it: the Agent round service passed the visible history straight to
+// the request builder, which reads a message's `content` and ignores its
+// `attachments`, so an image attached to an Agent turn was silently dropped
+// and the model answered about a picture it was never shown.
+NSArray<NSDictionary *> *DSHProjectHistoryAttachments(
+    NSArray *history, NSString *model, DSHAttachmentResolver _Nullable resolver,
+    NSError **error) {
+  if (resolver == nil) {
+    if (error != nil) {
+      *error = DSHLocalRuntimeError(1024, @"Message attachments are invalid");
+    }
+    return nil;
+  }
+  NSMutableArray<NSDictionary *> *messages =
+      [NSMutableArray arrayWithCapacity:history.count];
+  NSUInteger attachmentCount = 0;
+  uint64_t attachmentBytes = 0;
+  NSUInteger expandedBytes = 0;
+  for (NSDictionary *message in history) {
+    NSString *role = DSHString(message[@"role"]);
+    NSString *content = DSHString(message[@"content"]);
+    NSArray *attachmentEntries = DSHArray(message[@"attachments"]);
+    BOOL hasPrompt = [[content stringByTrimmingCharactersInSet:
+        NSCharacterSet.whitespaceAndNewlineCharacterSet] length] > 0;
+    NSMutableSet<NSString *> *messageAttachmentIDs = [NSMutableSet set];
+    NSMutableArray<NSString *> *orderedText = [NSMutableArray array];
+    NSMutableArray<NSDictionary *> *orderedParts = [NSMutableArray array];
+    BOOL hasImage = NO;
+    for (id attachmentEntry in attachmentEntries) {
+      NSData *payload = nil;
+      NSDictionary *manifest = nil;
+      NSDictionary *reference = resolver(
+          attachmentEntry, &payload, &manifest, error);
+      NSString *identifier = DSHString(reference[@"id"]);
+      if (reference == nil || [messageAttachmentIDs containsObject:identifier]) {
+        if (reference != nil && error != nil) {
+          *error = DSHLocalRuntimeError(1032,
+              @"Duplicate attachment reference");
+        }
+        return nil;
+      }
+      [messageAttachmentIDs addObject:identifier];
+      uint64_t size = [reference[@"size"] unsignedLongLongValue];
+      if (attachmentCount >= DSHMaximumAttachmentCount ||
+          size > DSHMaximumAttachmentBytes - attachmentBytes) {
+        if (error != nil) {
+          *error = DSHLocalRuntimeError(1033,
+              @"Conversation attachments exceed the request limit");
+        }
+        return nil;
+      }
+      attachmentCount += 1;
+      attachmentBytes += size;
+      NSString *kind = DSHString(reference[@"kind"]);
+      if ([kind isEqualToString:@"image"]) {
+        if (!DSHDshModelSupportsImages(model) ||
+            payload == nil ||
+            payload.length != [manifest[@"size"] unsignedLongLongValue]) {
+          if (error != nil) {
+            *error = DSHLocalRuntimeError(1035,
+                @"Image attachment cannot be read safely");
+          }
+          return nil;
+        }
+        NSString *mimeType = DSHString(manifest[@"mime_type"]);
+        NSString *encoded = [payload base64EncodedStringWithOptions:0];
+        NSString *dataURL = [NSString stringWithFormat:@"data:%@;base64,%@",
+            mimeType, encoded];
+        [orderedParts addObject:@{
+          @"type": @"image_url",
+          @"image_url": @{@"url": dataURL},
+        }];
+        hasImage = YES;
+      } else {
+        NSString *text = nil;
+        NSString *label = nil;
+        if ([kind isEqualToString:@"text"]) {
+          text = DSHReadUTF8Attachment(payload, error);
+          label = @"TEXT";
+        } else if ([kind isEqualToString:@"pdf"]) {
+          text = DSHExtractPDFAttachment(payload, error);
+          label = @"PDF";
+        }
+        if (text == nil || label == nil) {
+          if (error != nil && *error == nil) {
+            *error = DSHLocalRuntimeError(1036,
+                @"Unsupported attachment kind");
+          }
+          return nil;
+        }
+        NSString *projection = DSHDelimitedAttachment(reference, text, label);
+        [orderedText addObject:projection];
+        [orderedParts addObject:@{@"type": @"text", @"text": projection}];
+      }
+    }
+
+    id providerContent = nil;
+    if (!hasImage) {
+      NSMutableArray<NSString *> *parts = [NSMutableArray array];
+      if (hasPrompt) [parts addObject:content];
+      [parts addObjectsFromArray:orderedText];
+      providerContent = [parts componentsJoinedByString:@"\n\n"];
+      NSUInteger messageBytes =
+          [providerContent lengthOfBytesUsingEncoding:NSUTF8StringEncoding];
+      if (messageBytes > DSHMaximumExpandedHistoryBytes - expandedBytes) {
+        if (error != nil) {
+          *error = DSHLocalRuntimeError(1037,
+              @"Expanded attachment text exceeds the request limit");
+        }
+        return nil;
+      }
+      expandedBytes += messageBytes;
+    } else {
+      NSMutableArray<NSDictionary *> *parts = [NSMutableArray array];
+      if (hasPrompt) {
+        [parts addObject:@{@"type": @"text", @"text": content}];
+      }
+      [parts addObjectsFromArray:orderedParts];
+      NSUInteger messageBytes = hasPrompt
+          ? [content lengthOfBytesUsingEncoding:NSUTF8StringEncoding] : 0;
+      for (NSDictionary *part in orderedParts) {
+        if ([part[@"type"] isEqualToString:@"text"]) {
+          messageBytes += [part[@"text"]
+              lengthOfBytesUsingEncoding:NSUTF8StringEncoding];
+        }
+      }
+      if (messageBytes > DSHMaximumExpandedHistoryBytes - expandedBytes) {
+        if (error != nil) {
+          *error = DSHLocalRuntimeError(1037,
+              @"Expanded attachment text exceeds the request limit");
+        }
+        return nil;
+      }
+      expandedBytes += messageBytes;
+      providerContent = parts;
+    }
+    [messages addObject:@{@"role": role, @"content": providerContent}];
+  }
+  return messages;
+}
+
+DSHAttachmentResolver DSHDefaultAttachmentResolver(void) {
+  return [^NSDictionary *(id value, NSData **payloadData,
+                          NSDictionary **manifestOut, NSError **error) {
+    return DSHResolveAttachmentReference(value, payloadData, manifestOut, error);
+  } copy];
+}
+
 @implementation LocalRuntimeModule
 
 RCT_EXPORT_MODULE(LocalRuntime)
@@ -1494,132 +1646,8 @@ RCT_EXPORT_MODULE(LocalRuntime)
     (NSArray *)history
     model:(NSString *)model
     error:(NSError **)error {
-  NSMutableArray<NSDictionary *> *messages =
-      [NSMutableArray arrayWithCapacity:history.count];
-  NSUInteger attachmentCount = 0;
-  uint64_t attachmentBytes = 0;
-  NSUInteger expandedBytes = 0;
-  for (NSDictionary *message in history) {
-    NSString *role = DSHString(message[@"role"]);
-    NSString *content = DSHString(message[@"content"]);
-    NSArray *attachmentEntries = DSHArray(message[@"attachments"]);
-    BOOL hasPrompt = [[content stringByTrimmingCharactersInSet:
-        NSCharacterSet.whitespaceAndNewlineCharacterSet] length] > 0;
-    NSMutableSet<NSString *> *messageAttachmentIDs = [NSMutableSet set];
-    NSMutableArray<NSString *> *orderedText = [NSMutableArray array];
-    NSMutableArray<NSDictionary *> *orderedParts = [NSMutableArray array];
-    BOOL hasImage = NO;
-    for (id attachmentEntry in attachmentEntries) {
-      NSData *payload = nil;
-      NSDictionary *manifest = nil;
-      NSDictionary *reference = self.completionAttachmentResolver(
-          attachmentEntry, &payload, &manifest, error);
-      NSString *identifier = DSHString(reference[@"id"]);
-      if (reference == nil || [messageAttachmentIDs containsObject:identifier]) {
-        if (reference != nil && error != nil) {
-          *error = DSHLocalRuntimeError(1032,
-              @"Duplicate attachment reference");
-        }
-        return nil;
-      }
-      [messageAttachmentIDs addObject:identifier];
-      uint64_t size = [reference[@"size"] unsignedLongLongValue];
-      if (attachmentCount >= DSHMaximumAttachmentCount ||
-          size > DSHMaximumAttachmentBytes - attachmentBytes) {
-        if (error != nil) {
-          *error = DSHLocalRuntimeError(1033,
-              @"Conversation attachments exceed the request limit");
-        }
-        return nil;
-      }
-      attachmentCount += 1;
-      attachmentBytes += size;
-      NSString *kind = DSHString(reference[@"kind"]);
-      if ([kind isEqualToString:@"image"]) {
-        if (!DSHDshModelSupportsImages(model) ||
-            payload == nil ||
-            payload.length != [manifest[@"size"] unsignedLongLongValue]) {
-          if (error != nil) {
-            *error = DSHLocalRuntimeError(1035,
-                @"Image attachment cannot be read safely");
-          }
-          return nil;
-        }
-        NSString *mimeType = DSHString(manifest[@"mime_type"]);
-        NSString *encoded = [payload base64EncodedStringWithOptions:0];
-        NSString *dataURL = [NSString stringWithFormat:@"data:%@;base64,%@",
-            mimeType, encoded];
-        [orderedParts addObject:@{
-          @"type": @"image_url",
-          @"image_url": @{@"url": dataURL},
-        }];
-        hasImage = YES;
-      } else {
-        NSString *text = nil;
-        NSString *label = nil;
-        if ([kind isEqualToString:@"text"]) {
-          text = DSHReadUTF8Attachment(payload, error);
-          label = @"TEXT";
-        } else if ([kind isEqualToString:@"pdf"]) {
-          text = DSHExtractPDFAttachment(payload, error);
-          label = @"PDF";
-        }
-        if (text == nil || label == nil) {
-          if (error != nil && *error == nil) {
-            *error = DSHLocalRuntimeError(1036,
-                @"Unsupported attachment kind");
-          }
-          return nil;
-        }
-        NSString *projection = DSHDelimitedAttachment(reference, text, label);
-        [orderedText addObject:projection];
-        [orderedParts addObject:@{@"type": @"text", @"text": projection}];
-      }
-    }
-
-    id providerContent = nil;
-    if (!hasImage) {
-      NSMutableArray<NSString *> *parts = [NSMutableArray array];
-      if (hasPrompt) [parts addObject:content];
-      [parts addObjectsFromArray:orderedText];
-      providerContent = [parts componentsJoinedByString:@"\n\n"];
-      NSUInteger messageBytes =
-          [providerContent lengthOfBytesUsingEncoding:NSUTF8StringEncoding];
-      if (messageBytes > DSHMaximumExpandedHistoryBytes - expandedBytes) {
-        if (error != nil) {
-          *error = DSHLocalRuntimeError(1037,
-              @"Expanded attachment text exceeds the request limit");
-        }
-        return nil;
-      }
-      expandedBytes += messageBytes;
-    } else {
-      NSMutableArray<NSDictionary *> *parts = [NSMutableArray array];
-      if (hasPrompt) {
-        [parts addObject:@{@"type": @"text", @"text": content}];
-      }
-      [parts addObjectsFromArray:orderedParts];
-      NSUInteger messageBytes = hasPrompt
-          ? [content lengthOfBytesUsingEncoding:NSUTF8StringEncoding] : 0;
-      for (NSDictionary *part in orderedParts) {
-        if ([part[@"type"] isEqualToString:@"text"]) {
-          messageBytes += [part[@"text"]
-              lengthOfBytesUsingEncoding:NSUTF8StringEncoding];
-        }
-      }
-      if (messageBytes > DSHMaximumExpandedHistoryBytes - expandedBytes) {
-        if (error != nil) {
-          *error = DSHLocalRuntimeError(1037,
-              @"Expanded attachment text exceeds the request limit");
-        }
-        return nil;
-      }
-      expandedBytes += messageBytes;
-      providerContent = parts;
-    }
-    [messages addObject:@{@"role": role, @"content": providerContent}];
-  }
-  return messages;
+  return DSHProjectHistoryAttachments(
+      history, model, self.completionAttachmentResolver, error);
 }
 
 - (BOOL)importStagedCredential:(NSError **)error {

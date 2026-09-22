@@ -3,6 +3,7 @@
 #import "AgentToolRegistry.h"
 #import "DSHCompletionV2.h"
 #import "DSHWorkspaceCanonical.h"
+#import "LocalAttachmentStore.h"
 #import "RishHarnessCatalog.h"
 #import "SessionWorkspaceCoordinator.h"
 
@@ -309,6 +310,7 @@ static const int64_t DSHAgentRoundPreviewCoalesceNanoseconds = 50 * NSEC_PER_MSE
     _glmTransport = glmTransport;
     _credentialProvider = [credentialProvider copy];
     _visibleHistoryProvider = [visibleHistoryProvider copy];
+    _attachmentResolver = DSHDefaultAttachmentResolver();
     _contextReceiptProvider = [contextReceiptProvider copy];
     _contexts = [NSMutableDictionary dictionary];
     _contextTransports = [NSMutableDictionary dictionary];
@@ -712,8 +714,52 @@ static const int64_t DSHAgentRoundPreviewCoalesceNanoseconds = 50 * NSEC_PER_MSE
         DSHAgentNativeStoreErrorCorrupt);
     return nil;
   }
+  // What the model is shown of the conversation, with each attachment turned
+  // into what it actually carries. The visible history holds references only
+  // -- that is what the transcript keeps and what its digest above binds --
+  // and the request builder reads a message's `content` and ignores its
+  // `attachments`, so passing the history straight through dropped every
+  // image attached to an Agent turn and the model answered about a picture
+  // it was never shown. The chat path has always projected; this is the
+  // same projection, not a second one.
+  NSError *attachmentError = nil;
+  NSArray *projectedHistory = DSHProjectHistoryAttachments(
+      visibleHistory, request[@"model"], self.attachmentResolver,
+      &attachmentError);
+  if (projectedHistory == nil) {
+    // Nothing has been claimed or dispatched yet -- on this platform the
+    // round row is created further down -- so this is a refusal and not an
+    // ambiguity: the request never left the device, and it will not succeed
+    // unchanged. The operation record says `rejected`, which is the one
+    // honest word the log has for a request refused before it existed; the
+    // cause travels as a code the bridge reports verbatim, so the person is
+    // told what to change.
+    //
+    // Known gap, shared with every other failure above this point: the
+    // controller's round-result vocabulary has no `rejected`, so a replay of
+    // this exact operation would not validate there. The live answer below
+    // is what a person sees.
+    NSError *commitError = nil;
+    if ([self commitStartedOperationForRequest:request
+                                     requestSHA:requestSHA
+                                           row:nil
+                                         status:@"rejected"
+                                  failureCode:@"E_AGENT_CAPABILITY"
+                                         error:&commitError] == nil) {
+      if (error != nullptr) *error = commitError ?: DSHAgentNativeStoreError(
+          DSHAgentNativeStoreErrorPersistence);
+      return nil;
+    }
+    if (error != nullptr) {
+      NSError *base = DSHAgentNativeStoreError(DSHAgentNativeStoreErrorInvalidArgument);
+      NSMutableDictionary *info = [base.userInfo mutableCopy] ?: [NSMutableDictionary dictionary];
+      info[@"code"] = @"E_AGENT_CAPABILITY";
+      *error = [NSError errorWithDomain:base.domain code:base.code userInfo:info];
+    }
+    return nil;
+  }
   NSMutableArray *messages = [NSMutableArray arrayWithArray:contextMessages];
-  [messages addObjectsFromArray:visibleHistory];
+  [messages addObjectsFromArray:projectedHistory];
   [messages addObjectsFromArray:priorTranscript];
   NSError *toolsError = nil;
   NSArray *tools = ![providerTransport supportsTools] ? @[] : DSHProviderToolsForAuthority(

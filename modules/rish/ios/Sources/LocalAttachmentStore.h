@@ -24,4 +24,28 @@ RishLocalAttachmentLoadManifest(
   NSString *attachmentID,
   NSError * _Nullable * _Nullable error);
 
+// Resolves one attachment reference from a visible history into the store's
+// bytes and manifest. Returns the validated reference, or nil with `error`.
+typedef NSDictionary * _Nullable (^DSHAttachmentResolver)(
+  id value,
+  NSData * _Nullable * _Nullable payloadData,
+  NSDictionary * _Nullable * _Nullable manifestOut,
+  NSError * _Nullable * _Nullable error);
+
+// The store's own resolver, for callers that have no test double to inject.
+FOUNDATION_EXPORT DSHAttachmentResolver DSHDefaultAttachmentResolver(void);
+
+// A visible history, with every message's attachment references turned into
+// what a model is shown: images become content parts, text and PDF are read
+// and folded into the message's words. The plain chat path and the Agent
+// round path both call this, so the two cannot disagree about the same file.
+// Returns nil with `error` for anything that cannot be carried -- an image
+// for a model that cannot see one, a file that no longer matches its
+// reference -- rather than quietly sending less than the person attached.
+FOUNDATION_EXPORT NSArray<NSDictionary *> * _Nullable DSHProjectHistoryAttachments(
+  NSArray *history,
+  NSString *model,
+  DSHAttachmentResolver _Nullable resolver,
+  NSError * _Nullable * _Nullable error);
+
 NS_ASSUME_NONNULL_END

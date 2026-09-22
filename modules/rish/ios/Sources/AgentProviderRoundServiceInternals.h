@@ -1,6 +1,14 @@
 #import "AgentProviderRoundService.h"
+#import "LocalAttachmentStore.h"
 
 NS_ASSUME_NONNULL_BEGIN
+
+/// Where an attachment reference's bytes come from. Defaults to the store's
+/// own resolver; a test puts a double here to exercise the projection without
+/// a real attachment on disk.
+@interface DSHAgentProviderRoundService ()
+@property(nonatomic, copy) DSHAttachmentResolver attachmentResolver;
+@end
 
 /// Private native-only state shared by the provider coordinator and its
 /// bounded helper functions.  It is never exposed through RCT.
