@@ -142,11 +142,23 @@ internal class AndroidSessionStore(context: Context, name: String = "rish.sessio
      * verify the thing at all?*
      *
      * A conversation's `project_id` and `project_context` are the core's to
-     * judge now that a workspace can be attached to a project here; only the
-     * destructive-transition journal stays refused, since nothing on this
-     * platform issues one. `workspace_authority_outbox` is accepted now: it is
-     * filled when a workspace is forgotten or deleted, and this store is what
-     * issues the clearance receipt that drains it (`persistWithClearance`).
+     * judge now that a workspace can be attached to a project here.
+     * `workspace_authority_outbox` is accepted: it is filled when a workspace
+     * is forgotten or deleted, and this store is what issues the clearance
+     * receipt that drains it (`persistWithClearance`).
+     *
+     * **`project_context_destructive_transition` is accepted too, and the
+     * refusal it replaces was a bad bug** (2026-09-22). The journal is written
+     * by the shared lifecycle controller whenever a conversation with a
+     * confirmed project context is unbound or rebound -- switching workspaces
+     * in a Git chat does it -- so "nothing on this platform issues one" was
+     * never true. Refusing the candidate did not stop the transition; it
+     * stopped the *save*, and since the transition only clears by being
+     * persisted, the store stayed latched: every later save failed with
+     * E_ATTEMPT_PERSISTENCE, and every agent round failed with
+     * E_AGENT_CONFLICT because the committed session could no longer advance.
+     * The one native operation the transition needs -- discarding the
+     * snapshot -- is served here (`LocalProjectContext.discardProjectContext`).
      *
      * One thing this does let through that nothing here consumes:
      * `agent_transcript_cleanup_outbox` entries accumulate, because
@@ -154,12 +166,6 @@ internal class AndroidSessionStore(context: Context, name: String = "rish.sessio
      * sweep, not authority, and `discard_agent_attempt` -- which is served --
      * is what actually removes the residue they describe.
      */
-    private fun refuseUnsupportedAuthority(parsed: JSONObject) {
-        require(parsed.isNull("project_context_destructive_transition")) {
-            "Project journals are not supported on Android"
-        }
-    }
-
     /**
      * The candidate's bytes and their digest, once the core has judged them
      * acceptable. The catalogue facts come from this build, because only it
@@ -170,7 +176,6 @@ internal class AndroidSessionStore(context: Context, name: String = "rish.sessio
         val parsed = JSONObject(candidate)
         val digest = RishAgentCoreNative.session(JSONObject().put("op", "candidate")
             .put("env", AndroidSessionEnvironment.facts(parsed)), candidate).getString("digest")
-        refuseUnsupportedAuthority(parsed)
         return parsed to digest
     }
 

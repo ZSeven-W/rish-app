@@ -246,6 +246,23 @@ internal class AndroidProjectContextSnapshots(
             .put("workspace_id", root.getString("workspace_id")).put("workspace_binding_revision", root.get("binding_revision"))
     }
 
+    /**
+     * `discardProjectContext(snapshotId)`: the project-id era spelling the
+     * shared lifecycle controller still uses when it tears a confirmed
+     * context down at the end of an unbind or a rebind. The request carries
+     * no root, so the root is read from the snapshot's own manifest and then
+     * re-proved by [discard] exactly like any other request -- a snapshot
+     * naming a root this device cannot prove is refused there, not here.
+     */
+    fun discardById(snapshotId: String?): JSONObject {
+        if (snapshotId == null || !RuntimeJson.uuid(snapshotId)) throw Refused(REQUEST_INVALID, "snapshot id is invalid")
+        val root = loadSnapshot(snapshotId).manifest.optJSONObject("root")
+            ?: throw Refused(INTEGRITY, "the snapshot names no root")
+        discard(JSONObject().put("schema_version", 2).put("snapshot_id", snapshotId).put("root", root))
+        // The v1 answer is exactly two keys; the V2 record stays native.
+        return JSONObject().put("schema_version", 1).put("status", "discarded")
+    }
+
     // --- the verified envelope -------------------------------------------------
 
     /**

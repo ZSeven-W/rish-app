@@ -52,7 +52,23 @@ class LocalProjectContextModule(private val react: ReactApplicationContext) :
     fun inspectProjectContext(snapshotId: String?, promise: Promise) = RishUnavailable.reject("LocalProjectContext", "E_CONTEXT_NATIVE", promise)
 
     @ReactMethod
-    fun discardProjectContext(snapshotId: String?, promise: Promise) = RishUnavailable.reject("LocalProjectContext", "E_CONTEXT_NATIVE", promise)
+    fun discardProjectContext(snapshotId: String?, promise: Promise) {
+        if (!RishAgentCoreNative.available || !RishLibgit2Native.available) {
+            RishUnavailable.reject("LocalProjectContext", "E_CONTEXT_NATIVE", promise)
+            return
+        }
+        runtime.io.execute {
+            try {
+                promise.resolve(Arguments.makeNativeMap(RuntimeJson.map(runtime.projectSnapshots.discardById(snapshotId))))
+            } catch (refused: AndroidProjectContextSnapshots.Refused) {
+                Log.w(TAG, "discardProjectContext refused: ${refused.code}")
+                promise.reject(refused.code, refused.code)
+            } catch (failure: Throwable) {
+                Log.w(TAG, "discardProjectContext could not be answered", failure)
+                promise.reject("E_CONTEXT_NATIVE", "E_CONTEXT_NATIVE")
+            }
+        }
+    }
 
     @ReactMethod
     fun listCandidatesV2(request: ReadableMap?, promise: Promise) {

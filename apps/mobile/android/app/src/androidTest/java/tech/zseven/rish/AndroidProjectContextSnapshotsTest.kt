@@ -187,6 +187,39 @@ class AndroidProjectContextSnapshotsTest {
         assertEquals("E_CONTEXT_SNAPSHOT_MISSING", refusal { f.snapshots.inspect(f.snapshotRequest(replacementId)) })
     }
 
+    /**
+     * `discardProjectContext(snapshotId)`, the project-id era spelling. The
+     * shared lifecycle controller calls it -- and only it -- at the end of an
+     * unbind or a rebind, with no root in hand, so Android has to serve it
+     * from the snapshot's own record. It was `refuseUnbuilt` until
+     * 2026-09-22, which left every workspace switch in a Git chat unable to
+     * finish (see the session-store note about the destructive-transition
+     * journal).
+     */
+    @Test
+    fun aSnapshotIsDiscardedByItsIdAloneForTheLifecycleController() {
+        val f = fixture()
+        f.stage("README.md", "# hello\n")
+        val snapshotId = f.snapshots.prepare(f.prepareRequest("README.md")).getString("snapshot_id")
+        f.snapshots.confirm(f.snapshotRequest(snapshotId))
+        assertEquals("confirmed", f.snapshots.inspect(f.snapshotRequest(snapshotId)).getString("state"))
+
+        // The answer is the v1 shape exactly: two keys, no root, no id.
+        val discarded = f.snapshots.discardById(snapshotId)
+        assertEquals(setOf("schema_version", "status"), discarded.keys().asSequence().toSet())
+        assertEquals(1, discarded.getInt("schema_version"))
+        assertEquals("discarded", discarded.getString("status"))
+        assertEquals("E_CONTEXT_SNAPSHOT_MISSING", refusal { f.snapshots.inspect(f.snapshotRequest(snapshotId)) })
+
+        // An id that is not one, and one nothing was stored under.
+        assertEquals("E_CONTEXT_REQUEST_INVALID", refusal { f.snapshots.discardById("not-a-uuid") })
+        assertEquals("E_CONTEXT_REQUEST_INVALID", refusal { f.snapshots.discardById(null) })
+        assertEquals(
+            "E_CONTEXT_SNAPSHOT_MISSING",
+            refusal { f.snapshots.discardById(UUID.randomUUID().toString()) },
+        )
+    }
+
     @Test
     fun preparingAgainReplacesTheEarlierSnapshotForTheConversation() {
         val f = fixture()
