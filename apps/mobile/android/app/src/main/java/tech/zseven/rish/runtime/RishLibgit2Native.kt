@@ -157,6 +157,49 @@ internal object RishLibgit2Native {
      */
     @JvmStatic external fun fastForward(gitDir: String?, workDir: String, expectedHeadOid: String): ByteArray
 
+    // --- merge after divergence --------------------------------------------
+    //
+    // rish_project_merge.cpp. Only a clean merge is ever carried out; the
+    // steps are split so the caller can journal before the first write.
+
+    /**
+     * Every precondition, the merge in memory, the unreferenced merge commit
+     * and a dry-run checkout: `{"ok":true,"outcome":ready|up_to_date|
+     * fast_forward_available|conflicts|obstructed|detached_head|unborn_head|
+     * head_changed|operation_in_progress|shallow|no_upstream|
+     * upstream_changed|unrelated_histories|dirty|unsupported_submodule|
+     * unsupported_filter|unsupported_paths,…}`. Changes no ref, index or
+     * working tree.
+     */
+    @JvmStatic external fun mergePrepare(
+        gitDir: String?, workDir: String, branch: String, expectedHeadOid: String,
+        expectedTheirsOid: String, authorName: String, authorEmail: String,
+    ): ByteArray
+
+    /**
+     * Checks the merge commit's tree out over the `ours` baseline, then moves
+     * the branch with a compare-and-swap: merged | head_changed | obstructed
+     * | checkout_failed | ref_changed | ref_failed. Only head_changed and
+     * obstructed promise nothing was written.
+     */
+    @JvmStatic external fun mergeApply(
+        gitDir: String?, workDir: String, branch: String, oursOid: String, mergeOid: String,
+    ): ByteArray
+
+    /** The compare-and-swap alone: merged | ref_changed | ref_failed. */
+    @JvmStatic external fun mergeMoveRef(
+        gitDir: String?, workDir: String, branch: String, oursOid: String, mergeOid: String,
+    ): ByteArray
+
+    /**
+     * Where the branch, index and working tree stand against a journal's two
+     * trees: `{"ok":true,"head":ours|merge|other,"index":ours|merge|other,
+     * "worktree_clean":…,"conflicted":…}`.
+     */
+    @JvmStatic external fun mergeInspect(
+        gitDir: String?, workDir: String, branch: String, oursOid: String, mergeOid: String,
+    ): ByteArray
+
     /**
      * The network half of a clone into an empty split repository whose
      * origin is set: `{"ok":true,"outcome":success|auth_failure|timed_out|

@@ -31,7 +31,7 @@ import tech.zseven.rish.runtime.RuntimeJson
  * -- [statusV2], [diffV2], [stageAllV2], [commitV2] -- and its remote half
  * -- [setRemoteV2], [remoteV2], [credentialStatusV2],
  * [presentCredentialPromptV2], [clearCredentialV2], [pushV2], [cancelPushV2],
- * [fetchV2], [pullFastForwardV2]
+ * [fetchV2], [pullFastForwardV2], [mergeRemoteV2]
  * -- answer through [tech.zseven.rish.runtime.AndroidProjectGit].
  *
  * Everything else still rejects with the JS-recognized "E_PROJECT_NATIVE"; no
@@ -290,6 +290,14 @@ class LocalProjectsModule(private val react: ReactApplicationContext) :
     @ReactMethod
     fun pullFastForwardV2(request: ReadableMap?, promise: Promise) =
         answer("pullFastForwardV2", request, promise) { runtime.projectGit.pullFastForward(it) }
+
+    /**
+     * A diverged branch merged with the upstream just fetched, only when the
+     * merge is clean; a conflict is answered with its paths and nothing moves.
+     */
+    @ReactMethod
+    fun mergeRemoteV2(request: ReadableMap?, promise: Promise) =
+        answer("mergeRemoteV2", request, promise) { runtime.projectGit.mergeRemote(it) }
 
     @ReactMethod
     fun cancelPushV2(request: ReadableMap?, promise: Promise) =

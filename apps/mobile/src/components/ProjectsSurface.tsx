@@ -396,6 +396,12 @@ export function ProjectsSurface({
   const workspaceCloneRef = useRef<string | null>(null);
   const [pushBranch, setPushBranch] = useState('');
   const [receipt, setReceipt] = useState<ProjectPushReceipt | null>(null);
+  /**
+   * What the last fetch of this view saw upstream. A merge is bound to it:
+   * the person merges what they fetched, and a later fetch that moved the
+   * upstream makes the native side refuse rather than merge something unseen.
+   */
+  const [fetched, setFetched] = useState<{ projectId: string; branch: string; remoteOid: string } | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const [tasks] = useState(() => new ProjectViewTasks());
@@ -450,6 +456,7 @@ export function ProjectsSurface({
       setSelectedDiffPath(null);
       setCredential(null);
       setReceipt(null);
+      setFetched(null);
       setRemoteUrl(project?.origin_url ?? '');
       setError(null);
       setNotice(null);
@@ -1336,17 +1343,22 @@ export function ProjectsSurface({
     setError(null);
     setNotice(null);
     try {
-      const fetched = await LocalProjects.fetchV2({
+      const result = await LocalProjects.fetchV2({
         schema_version: 1,
         root: selected.root,
         operation_id: operationId,
         remote: 'origin',
       });
       if (!tasks.owns(task)) return;
+      setFetched(
+        result.remote_oid === null
+          ? null
+          : { projectId: selected.id, branch: result.branch, remoteOid: result.remote_oid },
+      );
       setNotice(
-        fetched.remote_oid === null
+        result.remote_oid === null
           ? t('projects.fetchedNothing')
-          : t('projects.fetched', { ahead: fetched.ahead, behind: fetched.behind }),
+          : t('projects.fetched', { ahead: result.ahead, behind: result.behind }),
       );
       await loadDetail(selected);
     } catch (caught) {
@@ -1393,7 +1405,8 @@ export function ProjectsSurface({
     } catch (caught) {
       if (!tasks.owns(task)) return;
       const code = errorCode(caught);
-      if (code === 'E_PROJECT_NON_FAST_FORWARD') setError(t('projects.pullDiverged'));
+      if (code === 'E_PROJECT_NON_FAST_FORWARD')
+        setError(t(LocalProjects.isMergeAvailable() ? 'projects.pullDivergedMerge' : 'projects.pullDiverged'));
       else if (code === 'E_PROJECT_CONFLICT') setError(t('projects.pullDirty'));
       else if (code === 'E_WORKSPACE_CONFIRMATION') setError(t('projects.pullNothingFetched'));
       else setError(t('projects.operationFailed', { error: errorText(caught) }));
@@ -1401,6 +1414,122 @@ export function ProjectsSurface({
       finishTask(task);
     }
   }, [beginTask, finishTask, loadDetail, selected, status, t, tasks]);
+
+  /** Whether the fetched upstream can be merged into this diverged branch from here. */
+  const mergeable =
+    selected !== null &&
+    selected.root !== null &&
+    status !== null &&
+    status.head_oid !== null &&
+    status.branch !== null &&
+    status.ahead > 0 &&
+    status.behind > 0 &&
+    fetched !== null &&
+    fetched.projectId === selected.id &&
+    fetched.branch === status.branch &&
+    LocalProjects.isMergeAvailable();
+
+  /**
+   * Merges what the person fetched into a diverged branch, only when the
+   * merge is clean: a conflict, or a file in the way, is reported and
+   * nothing is written.
+   */
+  const mergeRemote = useCallback(() => {
+    if (
+      !mergeable ||
+      selected === null ||
+      selected.root === null ||
+      status === null ||
+      status.head_oid === null ||
+      status.branch === null ||
+      fetched === null ||
+      !tasks.visible ||
+      tasks.busy
+    )
+      return;
+    if (authorName.trim().length === 0 || authorEmail.trim().length === 0) {
+      setError(t('projects.mergeNeedsAuthor'));
+      return;
+    }
+    const root = selected.root;
+    const branch = status.branch;
+    const head = status.head_oid;
+    const theirs = fetched.remoteOid;
+    const signedName = authorName.trim();
+    const signedEmail = authorEmail.trim();
+    const confirmation = tasks.begin('mutation');
+    tasks.finish(confirmation);
+    Alert.alert(
+      t('projects.mergeTitle'),
+      t('projects.mergeBody', { branch }),
+      [
+        { text: t('common.cancel'), style: 'cancel' },
+        {
+          text: t('projects.mergeConfirm'),
+          onPress: () => {
+            if (!tasks.owns(confirmation) || tasks.busy) return;
+            const task = beginTask('mutation');
+            setError(null);
+            setNotice(null);
+            LocalProjects.mergeRemoteV2({
+              schema_version: 1,
+              root,
+              operation_id: LocalRuntime.createCompletionRequestId(),
+              expected_branch: branch,
+              expected_head_oid: head,
+              expected_remote_oid: theirs,
+              author_name: signedName,
+              author_email: signedEmail,
+            })
+              .then(async merged => {
+                if (!tasks.owns(task)) return;
+                const listed = (paths: string[]) => paths.slice(0, 8).join(', ') +
+                  (paths.length > 8 ? ` +${paths.length - 8}` : '');
+                // Only a merge changed anything; the refusals leave the view
+                // as it was, so their message is not wiped by a reload.
+                if (merged.outcome === 'merged') {
+                  await loadDetail(selected);
+                  if (!tasks.owns(task)) return;
+                  setNotice(t('projects.merged', { oid: merged.oid.slice(0, 12) }));
+                } else if (merged.outcome === 'up_to_date') {
+                  setNotice(t('projects.pullUpToDate'));
+                } else if (merged.outcome === 'fast_forward_available') {
+                  setNotice(t('projects.mergeFastForward'));
+                } else if (merged.outcome === 'conflicts') {
+                  setError(t('projects.mergeConflicts', {
+                    paths: listed(merged.conflicts.map(entry => entry.ours ?? entry.theirs ?? entry.ancestor ?? '')),
+                  }));
+                } else {
+                  setError(t('projects.mergeObstructed', { paths: listed(merged.paths) }));
+                }
+              })
+              .catch(caught => {
+                if (!tasks.owns(task)) return;
+                const code = errorCode(caught);
+                if (code === 'E_PROJECT_CONFLICT') setError(t('projects.pullDirty'));
+                else if (code === 'E_WORKSPACE_CONFIRMATION') setError(t('projects.mergeStale'));
+                else if (code === 'E_PROJECT_MERGE_UNSUPPORTED') setError(t('projects.mergeUnsupported'));
+                else if (code === 'E_PROJECT_RECOVERY_REQUIRED') setError(t('projects.mergeRecovery'));
+                else setError(t('projects.operationFailed', { error: errorText(caught) }));
+              })
+              .finally(() => finishTask(task));
+          },
+        },
+      ],
+    );
+  }, [
+    authorEmail,
+    authorName,
+    beginTask,
+    fetched,
+    finishTask,
+    loadDetail,
+    mergeable,
+    selected,
+    status,
+    t,
+    tasks,
+  ]);
 
   const cancelPush = useCallback(() => {
     if (selected === null || !pushing) return;
@@ -1945,6 +2074,24 @@ export function ProjectsSurface({
                         </Text>
                       </Pressable>
                     </View>
+                  )}
+                  {mergeable && (
+                    <Pressable
+                      accessibilityLabel={t('projects.merge')}
+                      accessibilityRole="button"
+                      accessibilityState={{ disabled: busy }}
+                      disabled={busy}
+                      onPress={mergeRemote}
+                      style={({ pressed }) => [
+                        styles.secondaryButton,
+                        busy && styles.disabled,
+                        pressed && styles.pressed,
+                      ]}
+                    >
+                      <Text style={styles.secondaryButtonText}>
+                        {t('projects.merge')}
+                      </Text>
+                    </Pressable>
                   )}
                   <Pressable
                     accessibilityLabel={t('projects.push')}

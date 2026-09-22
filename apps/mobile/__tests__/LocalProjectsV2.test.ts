@@ -18,6 +18,7 @@ const native = {
   cancelPushV2: jest.fn(),
   fetchV2: jest.fn(),
   pullFastForwardV2: jest.fn(),
+  mergeRemoteV2: jest.fn() as jest.Mock | undefined,
   pushReceiptsV2: jest.fn(),
   cloneWorkspaceV2: jest.fn(),
   cancelWorkspaceCloneV2: jest.fn(),
@@ -482,6 +483,76 @@ test('fetch and fast-forward pull travel by root and are held to their shapes', 
   await expect(
     LocalProjects.pullFastForwardV2({ schema_version: 1, root: root(), expected_head_oid: previous }),
   ).rejects.toMatchObject({ code: 'E_PROJECT_NON_FAST_FORWARD' });
+});
+
+test('a merge travels by root, is bound to the reviewed branch and tips, and is held to its outcome', async () => {
+  const ours = 'c'.repeat(40);
+  const theirs = 'd'.repeat(40);
+  const merge = 'e'.repeat(40);
+  const request = {
+    schema_version: 1, root: root(), operation_id: OPERATION_ID, expected_branch: 'main',
+    expected_head_oid: ours, expected_remote_oid: theirs, author_name: 'Rish Bot', author_email: 'rish@example.invalid',
+  };
+  const merged = {
+    schema_version: 2, root: root(), project_id: PROJECT_ID, branch: 'main', outcome: 'merged',
+    oid: merge, previous_oid: ours, conflicts: [], paths: [],
+  };
+  expect(LocalProjects.isMergeAvailable()).toBe(true);
+  native.mergeRemoteV2!.mockResolvedValue(merged);
+  await expect(LocalProjects.mergeRemoteV2(request)).resolves.toEqual(merged);
+  expect(native.mergeRemoteV2).toHaveBeenCalledWith(request);
+
+  // Every outcome but a merge promises the branch did not move.
+  const conflicts = [{ ancestor: 'a.txt', ours: 'a.txt', theirs: 'a.txt' }, { ancestor: 'b.txt', ours: null, theirs: 'b.txt' }];
+  native.mergeRemoteV2!.mockResolvedValueOnce({ ...merged, outcome: 'conflicts', oid: ours, conflicts });
+  await expect(LocalProjects.mergeRemoteV2(request)).resolves.toMatchObject({ outcome: 'conflicts', conflicts });
+  native.mergeRemoteV2!.mockResolvedValueOnce({ ...merged, outcome: 'obstructed', oid: ours, paths: ['build/out.txt'] });
+  await expect(LocalProjects.mergeRemoteV2(request)).resolves.toMatchObject({ paths: ['build/out.txt'] });
+  for (const hostile of [
+    { ...merged, outcome: 'conflicts', conflicts },
+    { ...merged, oid: ours },
+    { ...merged, outcome: 'up_to_date' },
+    { ...merged, outcome: 'rebased' },
+    { ...merged, branch: 'other' },
+    { ...merged, previous_oid: theirs },
+    { ...merged, paths: ['x'] },
+    { ...merged, outcome: 'obstructed', oid: ours, conflicts },
+    { ...merged, outcome: 'conflicts', oid: ours, conflicts: [{ ancestor: null, ours: 'a' }] },
+    { ...merged, extra: true },
+  ]) {
+    native.mergeRemoteV2!.mockResolvedValueOnce(hostile);
+    await expect(LocalProjects.mergeRemoteV2(request)).rejects.toMatchObject({ code: 'E_PROJECT_RESULT_INVALID' });
+  }
+
+  for (const bad of [
+    { ...request, expected_remote_oid: 'abc' },
+    { ...request, expected_head_oid: null },
+    { ...request, expected_branch: '' },
+    { ...request, author_email: 'rish' },
+    { ...request, author_name: '' },
+    { ...request, operation_id: 'nope' },
+    { ...request, force: true },
+  ]) {
+    await expect(LocalProjects.mergeRemoteV2(bad)).rejects.toMatchObject({ code: 'E_PROJECT_REQUEST_INVALID' });
+  }
+  const dispatched = native.mergeRemoteV2!.mock.calls.length;
+  expect(dispatched).toBe(13);
+
+  for (const code of ['E_PROJECT_MERGE_UNSUPPORTED', 'E_PROJECT_RECOVERY_REQUIRED']) {
+    native.mergeRemoteV2!.mockRejectedValueOnce(Object.assign(new Error(code), { code }));
+    await expect(LocalProjects.mergeRemoteV2(request)).rejects.toMatchObject({ code });
+  }
+
+  // A platform without merge keeps the rest of V2, and says it cannot merge.
+  const saved = native.mergeRemoteV2;
+  native.mergeRemoteV2 = undefined;
+  try {
+    expect(LocalProjects.isMergeAvailable()).toBe(false);
+    expect(LocalProjects.isV2Available()).toBe(true);
+    await expect(LocalProjects.mergeRemoteV2(request)).rejects.toMatchObject({ code: 'E_PROJECT_NATIVE' });
+  } finally {
+    native.mergeRemoteV2 = saved;
+  }
 });
 
 test('push receipts travel by root and carry only what a push proved', async () => {

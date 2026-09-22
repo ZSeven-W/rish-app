@@ -34,6 +34,13 @@ const MODULE_FAILURES: &[(i64, &str)] = &[
     (3196, "E_PROJECT_NON_FAST_FORWARD"),
     (3197, "E_PROJECT_CREDENTIAL"),
     (3198, "E_PROJECT_TIMEOUT"),
+    // A merge after divergence that this build does not carry out: a
+    // shallow clone, unrelated histories, a submodule, a filter or merge
+    // driver, a path this filesystem cannot hold.
+    (3180, "E_PROJECT_MERGE_UNSUPPORTED"),
+    // An interrupted merge whose repository state recovery cannot settle on
+    // its own; the state is kept, never reset.
+    (3181, "E_PROJECT_RECOVERY_REQUIRED"),
 ];
 
 /// The workspace failures this module re-reports, and as what. The rest become

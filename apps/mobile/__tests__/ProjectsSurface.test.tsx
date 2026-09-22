@@ -39,6 +39,8 @@ jest.mock('../src/native/LocalProjects', () => ({
     cancelPushV2: jest.fn(),
     fetchV2: jest.fn(),
     pullFastForwardV2: jest.fn(),
+    isMergeAvailable: jest.fn(),
+    mergeRemoteV2: jest.fn(),
     pushReceiptsV2: jest.fn(),
     isLegacyCloneAvailable: jest.fn(),
     isWorkspaceCloneAvailable: jest.fn(),
@@ -1716,6 +1718,103 @@ test('a workspace project fetches and fast-forwards by root, and a diverged bran
     renderer.root.findAll(instance => typeof instance.props.children === 'string' &&
       instance.props.children.startsWith('Local and remote histories have diverged')).length,
   ).toBeGreaterThan(0);
+});
+
+test('a diverged branch merges what was fetched, bound to the reviewed tips, and a conflict names its files', async () => {
+  const alert = jest.spyOn(Alert, 'alert').mockImplementation(() => undefined);
+  mockLocalProjects.isV2Available.mockReturnValue(true);
+  mockLocalProjects.isMergeAvailable.mockReturnValue(true);
+  mockLocalProjects.list.mockRejectedValue(Object.assign(new Error('E_PROJECT_NATIVE'), { code: 'E_PROJECT_NATIVE' }));
+  mockWorkspaceProjects.mockResolvedValue([workspaceProject]);
+  const v2Status = { ...dirtyStatus, schema_version: 2, root: workspaceRoot, project_id: workspaceRoot.project_id, ahead: 1, behind: 1 };
+  mockLocalProjects.statusV2.mockResolvedValue(v2Status);
+  mockLocalProjects.diffV2.mockImplementation(async (request: { staged: boolean }) => ({
+    ...diff, schema_version: 2, root: workspaceRoot, project_id: workspaceRoot.project_id, staged: request.staged,
+  }));
+  mockLocalProjects.remoteV2.mockResolvedValue({
+    schema_version: 2, root: workspaceRoot, project_id: workspaceRoot.project_id, remote: 'origin',
+    url: 'https://github.com/example/demo.git', host: 'github.com',
+  });
+  mockLocalProjects.credentialStatusV2.mockResolvedValue({
+    schema_version: 2, root: workspaceRoot, project_id: workspaceRoot.project_id, host: 'github.com', configured: true,
+    expires_at: 1_800_000_000, expiry_seconds: 3600,
+  });
+  const theirs = 'f'.repeat(40);
+  mockLocalProjects.fetchV2.mockResolvedValue({
+    schema_version: 2, root: workspaceRoot, project_id: workspaceRoot.project_id, remote: 'origin', branch: 'main',
+    remote_oid: theirs, ahead: 1, behind: 1, fetched_at: '2026-09-23T00:00:00.000Z',
+  });
+  const merged = {
+    schema_version: 2, root: workspaceRoot, project_id: workspaceRoot.project_id, branch: 'main', outcome: 'merged',
+    oid: 'e'.repeat(40), previous_oid: dirtyStatus.head_oid, conflicts: [], paths: [],
+  };
+  mockLocalProjects.mergeRemoteV2.mockResolvedValue(merged);
+  const renderer = await renderSurface();
+  const row = renderer.root.findByProps({ testID: 'projects-row-Smoke' });
+  await act(async () => { row.props.onPress(); await settle(); });
+  await act(async () => { await settle(); await settle(); });
+
+  // Nothing fetched in this view: nothing to bind a merge to.
+  expect(renderer.root.findAllByProps({ accessibilityLabel: 'Merge remote changes' }).length).toBe(0);
+  mockLocalProjects.pullFastForwardV2.mockRejectedValueOnce(
+    Object.assign(new Error('E_PROJECT_NON_FAST_FORWARD'), { code: 'E_PROJECT_NON_FAST_FORWARD' }),
+  );
+  await act(async () => { actionByLabel(renderer.root, 'Pull (fast-forward)').props.onPress(); await settle(); });
+  expect(renderer.root.findAllByProps({
+    children: 'Local and remote histories have diverged. Merge the remote changes below, or push to a different branch.',
+  }).length).toBeGreaterThan(0);
+
+  await act(async () => { actionByLabel(renderer.root, 'Fetch').props.onPress(); await settle(); await settle(); });
+  // No identity yet: refused before any confirmation.
+  await act(async () => { actionByLabel(renderer.root, 'Merge remote changes').props.onPress(); await settle(); });
+  expect(alert).not.toHaveBeenCalled();
+  expect(renderer.root.findAllByProps({
+    children: 'Enter an author name and email above; the merge commit is signed with them.',
+  }).length).toBeGreaterThan(0);
+
+  await act(async () => inputByLabel(renderer.root, 'Author name').props.onChangeText('Rish Bot'));
+  await act(async () => inputByLabel(renderer.root, 'Author email').props.onChangeText('rish@example.invalid'));
+  const confirmMerge = async () => {
+    await act(async () => { actionByLabel(renderer.root, 'Merge remote changes').props.onPress(); await settle(); });
+    const buttons = alert.mock.calls[alert.mock.calls.length - 1]?.[2];
+    const confirm = Array.isArray(buttons) ? buttons.find(button => button.text === 'Merge') : undefined;
+    await act(async () => { confirm?.onPress?.(); await settle(); await settle(); });
+  };
+  await confirmMerge();
+  expect(mockLocalProjects.mergeRemoteV2).toHaveBeenCalledWith({
+    schema_version: 1,
+    root: workspaceRoot,
+    operation_id: 'op-1',
+    expected_branch: 'main',
+    expected_head_oid: dirtyStatus.head_oid,
+    expected_remote_oid: theirs,
+    author_name: 'Rish Bot',
+    author_email: 'rish@example.invalid',
+  });
+  expect(renderer.root.findAllByProps({ children: `Merged into ${'e'.repeat(12)}.` }).length).toBeGreaterThan(0);
+
+  mockLocalProjects.mergeRemoteV2.mockResolvedValueOnce({
+    ...merged, outcome: 'conflicts', oid: dirtyStatus.head_oid,
+    conflicts: [{ ancestor: 'a.txt', ours: 'a.txt', theirs: 'a.txt' }, { ancestor: 'b.txt', ours: null, theirs: 'b.txt' }],
+  });
+  await confirmMerge();
+  expect(renderer.root.findAllByProps({
+    children: 'The merge would conflict in: a.txt, b.txt. Nothing was changed; resolve it elsewhere.',
+  }).length).toBeGreaterThan(0);
+
+  mockLocalProjects.mergeRemoteV2.mockRejectedValueOnce(
+    Object.assign(new Error('E_WORKSPACE_CONFIRMATION'), { code: 'E_WORKSPACE_CONFIRMATION' }),
+  );
+  await confirmMerge();
+  expect(renderer.root.findAllByProps({
+    children: 'The remote moved since the last fetch. Fetch again, then merge.',
+  }).length).toBeGreaterThan(0);
+
+  // A platform that cannot merge offers nothing, and says so when diverged.
+  mockLocalProjects.isMergeAvailable.mockReturnValue(false);
+  await act(async () => { actionByLabel(renderer.root, 'Refresh project status').props.onPress(); await settle(); await settle(); });
+  expect(renderer.root.findAllByProps({ accessibilityLabel: 'Merge remote changes' }).length).toBe(0);
+  alert.mockRestore();
 });
 
 test('without legacy projects a clone becomes a new workspace project, and can be cancelled while it runs', async () => {

@@ -835,6 +835,24 @@ const enUS = {
   'projects.pullUpToDate': 'Already at the remote tip.',
   'projects.pullDiverged':
     'Local and remote histories have diverged. Rish only fast-forwards; reconcile the branches elsewhere or push to a different branch.',
+  'projects.pullDivergedMerge':
+    'Local and remote histories have diverged. Merge the remote changes below, or push to a different branch.',
+  'projects.merge': 'Merge remote changes',
+  'projects.mergeTitle': 'Merge remote changes?',
+  'projects.mergeBody':
+    'Creates a merge commit on {branch} joining it with the fetched origin/{branch}, using the author above. If any file conflicts, nothing is changed.',
+  'projects.mergeConfirm': 'Merge',
+  'projects.mergeNeedsAuthor': 'Enter an author name and email above; the merge commit is signed with them.',
+  'projects.merged': 'Merged into {oid}.',
+  'projects.mergeFastForward': 'No merge needed: the branch can fast-forward. Use Pull instead.',
+  'projects.mergeConflicts': 'The merge would conflict in: {paths}. Nothing was changed; resolve it elsewhere.',
+  'projects.mergeObstructed':
+    'Local files are in the way of the merge: {paths}. Nothing was changed; move them aside and try again.',
+  'projects.mergeStale': 'The remote moved since the last fetch. Fetch again, then merge.',
+  'projects.mergeUnsupported':
+    'Rish cannot merge this repository here (shallow history, unrelated histories, submodules, filters or unsupported paths).',
+  'projects.mergeRecovery':
+    'A previous merge was interrupted and the repository is not in a state Rish recognises. Nothing more was changed; inspect it with another git client.',
   'projects.pullDirty':
     'The working tree has changes to tracked files, or the branch moved. Commit or revert them, refresh, then pull again.',
   'projects.pullNothingFetched': 'Nothing fetched for this branch yet. Fetch first.',
@@ -1843,6 +1861,20 @@ const zhCN: Readonly<Record<TranslationKey, string>> = {
   'projects.pulled': '已快进到 {oid}。',
   'projects.pullUpToDate': '已经在远端最新提交上。',
   'projects.pullDiverged': '本地与远端历史已分叉。Rish 只做快进；请在别处合并，或推到另一个分支。',
+  'projects.pullDivergedMerge': '本地与远端历史已分叉。可在下方合并远端更改，或推到另一个分支。',
+  'projects.merge': '合并远端更改',
+  'projects.mergeTitle': '合并远端更改？',
+  'projects.mergeBody':
+    '在 {branch} 上创建一个合并提交，并入已获取的 origin/{branch}，作者使用上方填写的身份。只要有文件冲突，就什么都不改。',
+  'projects.mergeConfirm': '合并',
+  'projects.mergeNeedsAuthor': '请先在上方填写作者名和邮箱；合并提交会用它们署名。',
+  'projects.merged': '已合并为 {oid}。',
+  'projects.mergeFastForward': '无需合并：该分支可以直接快进，请使用“拉取”。',
+  'projects.mergeConflicts': '合并会在这些文件上冲突：{paths}。未做任何更改；请在别处解决。',
+  'projects.mergeObstructed': '本地文件挡住了合并：{paths}。未做任何更改；把它们移开后再试。',
+  'projects.mergeStale': '自上次获取后远端已变化。请重新获取，再合并。',
+  'projects.mergeUnsupported': 'Rish 无法在此合并这个仓库（浅克隆、无共同历史、子模块、过滤器或不支持的路径）。',
+  'projects.mergeRecovery': '上一次合并被中断，仓库处于 Rish 无法识别的状态。没有再做任何更改；请用其他 git 客户端检查。',
   'projects.pullDirty': '工作树里有已跟踪文件的改动，或分支已变动。请先提交或撤销，刷新后再拉取。',
   'projects.pullNothingFetched': '这个分支还没拉取过远端。请先 fetch。',
   'projects.pushTitle': '推送此分支？',

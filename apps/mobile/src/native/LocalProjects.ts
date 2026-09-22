@@ -255,6 +255,44 @@ export type GitPullRequestV1 = GitWorkspaceRequestV1 & {
   expected_head_oid: string;
 };
 
+/**
+ * A merge of the upstream the person just fetched into a diverged branch.
+ * Bound to what they reviewed: the branch by name, the local tip, and the
+ * fetched upstream tip -- two branches can share a commit, and a later
+ * fetch can move the upstream.
+ */
+export type GitMergeRequestV1 = GitWorkspaceRequestV1 & {
+  operation_id: string;
+  expected_branch: string;
+  expected_head_oid: string;
+  expected_remote_oid: string;
+  author_name: string;
+  author_email: string;
+};
+
+/** One conflicting entry: each side's path, or null where that side has none. */
+export type ProjectMergeConflictV2 = {
+  ancestor: string | null;
+  ours: string | null;
+  theirs: string | null;
+};
+
+/**
+ * What a merge did. Only `merged` changed anything; the rest leave the
+ * branch, index and working tree exactly as they were.
+ */
+export type ProjectMergeResultV2 = {
+  schema_version: 2;
+  root: WorkspaceRootRefV1;
+  project_id: string;
+  branch: string;
+  outcome: 'merged' | 'up_to_date' | 'fast_forward_available' | 'conflicts' | 'obstructed';
+  oid: string;
+  previous_oid: string;
+  conflicts: ProjectMergeConflictV2[];
+  paths: string[];
+};
+
 /** What origin holds for the current branch after a fetch, and where the local branch stands. */
 export type ProjectFetchResultV2 = {
   schema_version: 2;
@@ -455,6 +493,7 @@ type NativeLocalProjects = {
   cancelPushV2?(request: GitCancelPushRequestV1): Promise<unknown>;
   fetchV2?(request: GitFetchRequestV1): Promise<unknown>;
   pullFastForwardV2?(request: GitPullRequestV1): Promise<unknown>;
+  mergeRemoteV2?(request: GitMergeRequestV1): Promise<unknown>;
   pushReceiptsV2?(request: GitWorkspaceRequestV1): Promise<unknown>;
   cloneWorkspaceV2?(request: WorkspaceCloneRequestV1): Promise<unknown>;
   cancelWorkspaceCloneV2?(request: { schema_version: 1; operation_id: string }): Promise<unknown>;
@@ -489,6 +528,8 @@ const projectV2ErrorCodes = new Set([
   'E_PROJECT_CREDENTIAL',
   'E_PROJECT_TIMEOUT',
   'E_PROJECT_CANCELLED',
+  'E_PROJECT_MERGE_UNSUPPORTED',
+  'E_PROJECT_RECOVERY_REQUIRED',
 ]);
 
 export class ProjectGitBridgeError extends Error {
@@ -1232,6 +1273,97 @@ function projectV2PullRequest(value: unknown): GitPullRequestV1 {
     schema_version: 1,
     root: projectV2RequestRoot(row.root),
     expected_head_oid: row.expected_head_oid as string,
+  };
+}
+
+function projectV2MergeRequest(value: unknown): GitMergeRequestV1 {
+  const row = projectV2ExactRecord(value, [
+    'schema_version', 'root', 'operation_id', 'expected_branch', 'expected_head_oid',
+    'expected_remote_oid', 'author_name', 'author_email',
+  ], 'E_PROJECT_REQUEST_INVALID');
+  if (
+    row.schema_version !== 1 ||
+    typeof row.expected_branch !== 'string' ||
+    !projectV2Branch(row.expected_branch) ||
+    !projectV2OID(row.expected_head_oid) ||
+    !projectV2OID(row.expected_remote_oid) ||
+    !projectV2String(row.author_name, 120) ||
+    !projectV2Email(row.author_email)
+  ) {
+    return projectV2Fail('E_PROJECT_REQUEST_INVALID');
+  }
+  return {
+    schema_version: 1,
+    root: projectV2RequestRoot(row.root),
+    operation_id: projectV2OperationId(row.operation_id),
+    expected_branch: row.expected_branch,
+    expected_head_oid: row.expected_head_oid as string,
+    expected_remote_oid: row.expected_remote_oid as string,
+    author_name: projectV2Bounded(row.author_name, 120),
+    author_email: row.author_email as string,
+  };
+}
+
+const MERGE_OUTCOMES = ['merged', 'up_to_date', 'fast_forward_available', 'conflicts', 'obstructed'] as const;
+
+function projectV2MergePath(value: unknown): value is string | null {
+  return value === null || projectV2String(value, 4096);
+}
+
+function projectV2Merge(
+  value: unknown,
+  request: GitMergeRequestV1,
+): ProjectMergeResultV2 {
+  const row = projectV2ExactRecord(value, [
+    'schema_version', 'root', 'project_id', 'branch', 'outcome', 'oid', 'previous_oid', 'conflicts', 'paths',
+  ], 'E_PROJECT_RESULT_INVALID');
+  const root = projectV2RootResult(row.root, request.root);
+  const outcome = row.outcome as ProjectMergeResultV2['outcome'];
+  if (
+    row.schema_version !== 2 ||
+    row.project_id !== request.root.project_id ||
+    row.branch !== request.expected_branch ||
+    !(MERGE_OUTCOMES as readonly string[]).includes(outcome) ||
+    !projectV2OID(row.oid) ||
+    row.previous_oid !== request.expected_head_oid ||
+    // Only a merge moves the branch; every other outcome is a promise that
+    // nothing did, and a result that says otherwise is not believed.
+    (outcome === 'merged') === (row.oid === row.previous_oid) ||
+    !Array.isArray(row.conflicts) || row.conflicts.length > 64 ||
+    !Array.isArray(row.paths) || row.paths.length > 64 ||
+    (outcome !== 'conflicts' && row.conflicts.length > 0) ||
+    (outcome !== 'obstructed' && row.paths.length > 0)
+  ) {
+    return projectV2Fail('E_PROJECT_RESULT_INVALID');
+  }
+  const conflicts = row.conflicts.map(entry => {
+    const conflict = projectV2ExactRecord(entry, ['ancestor', 'ours', 'theirs'], 'E_PROJECT_RESULT_INVALID');
+    if (
+      !projectV2MergePath(conflict.ancestor) ||
+      !projectV2MergePath(conflict.ours) ||
+      !projectV2MergePath(conflict.theirs)
+    ) {
+      return projectV2Fail('E_PROJECT_RESULT_INVALID');
+    }
+    return {
+      ancestor: conflict.ancestor as string | null,
+      ours: conflict.ours as string | null,
+      theirs: conflict.theirs as string | null,
+    };
+  });
+  const paths = row.paths.map(path =>
+    projectV2String(path, 4096) ? path : projectV2Fail('E_PROJECT_RESULT_INVALID'),
+  );
+  return {
+    schema_version: 2,
+    root,
+    project_id: request.root.project_id as string,
+    branch: request.expected_branch,
+    outcome,
+    oid: row.oid as string,
+    previous_oid: row.previous_oid as string,
+    conflicts,
+    paths,
   };
 }
 
@@ -2303,6 +2435,32 @@ export const LocalProjects = {
       return await projectV2Boundary(
         () => requiredV2().pullFastForwardV2!(request),
         raw => projectV2Pull(raw, request.root),
+      );
+    } catch (error) {
+      throw projectV2Error(error);
+    }
+  },
+  /**
+   * Whether this platform can merge a diverged branch. Separate from the V2
+   * set on purpose: a platform without it keeps everything else.
+   */
+  isMergeAvailable: (): boolean => {
+    try {
+      return hasV2Capabilities(native) &&
+        typeof (native as NativeLocalProjects).mergeRemoteV2 === 'function';
+    } catch {
+      return false;
+    }
+  },
+  /** Merges the fetched upstream into a diverged branch, only when the merge is clean. */
+  mergeRemoteV2: async (requestValue: unknown): Promise<ProjectMergeResultV2> => {
+    try {
+      const request = projectV2MergeRequest(requestValue);
+      const module = requiredV2();
+      if (typeof module.mergeRemoteV2 !== 'function') projectV2Fail('E_PROJECT_NATIVE');
+      return await projectV2Boundary(
+        () => module.mergeRemoteV2!(request),
+        raw => projectV2Merge(raw, request),
       );
     } catch (error) {
       throw projectV2Error(error);

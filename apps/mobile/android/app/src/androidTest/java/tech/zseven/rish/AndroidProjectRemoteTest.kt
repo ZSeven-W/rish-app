@@ -305,18 +305,24 @@ class AndroidProjectRemoteTest {
     // --- fetch and fast-forward -------------------------------------------
 
     /** A second working repository beside the fixture, sharing nothing but the origin. */
-    private class Peer(scratch: File, name: String, copyOf: Peer? = null) {
+    private class Peer(scratch: File, name: String, copyOf: Peer? = null, fromGitDir: File? = null, fromWorkDir: File? = null) {
         val gitDir: File = File(scratch, "$name.git")
         val workDir: File = File(scratch, "$name-work").apply { mkdirs() }
         init {
-            if (copyOf == null) {
-                assertEquals("ok", RishLibgit2Native.initSplitRepository(gitDir.absolutePath, workDir.absolutePath))
-            } else {
+            when {
                 // The gitdir pairs with whatever working tree it is opened with, so a copy of both is a second peer.
-                copyOf.gitDir.copyRecursively(gitDir); copyOf.workDir.copyRecursively(workDir)
+                fromGitDir != null && fromWorkDir != null -> {
+                    fromGitDir.copyRecursively(gitDir); fromWorkDir.copyRecursively(workDir, overwrite = true)
+                }
+                copyOf != null -> { copyOf.gitDir.copyRecursively(gitDir); copyOf.workDir.copyRecursively(workDir) }
+                else -> assertEquals("ok", RishLibgit2Native.initSplitRepository(gitDir.absolutePath, workDir.absolutePath))
             }
         }
-        companion object { fun copyOf(peer: Peer, scratch: File, name: String) = Peer(scratch, name, peer) }
+        companion object {
+            fun copyOf(peer: Peer, scratch: File, name: String) = Peer(scratch, name, peer)
+            fun fromDirs(scratch: File, name: String, gitDir: File, workDir: File) =
+                Peer(scratch, name, null, gitDir, workDir)
+        }
         fun commit(path: String, text: String, message: String): String {
             File(workDir, path).apply { parentFile?.mkdirs() }.writeText(text)
             assertEquals("ok", RishLibgit2Native.stagePath(gitDir.absolutePath, workDir.absolutePath, path))
@@ -428,6 +434,174 @@ class AndroidProjectRemoteTest {
         assertEquals("mine\n", File(e.workDir, "local.cfg").readText())
         assertEquals(ignoring, e.head())
         f.scratch.deleteRecursively()
+    }
+
+    // --- merge after divergence ---------------------------------------------
+
+    /**
+     * The fixture's project and a peer with one shared commit, each then
+     * moving on: the project locally with `mine`, the peer with `theirs`,
+     * pushed. The project has fetched, so it is one ahead and one behind.
+     */
+    private class Diverged(val f: Fixture, val peer: Peer, val ours: String, val theirs: String) {
+        fun request(ours: String = this.ours, theirs: String = this.theirs): JSONObject = f.request()
+            .put("operation_id", UUID.randomUUID().toString()).put("expected_branch", "main")
+            .put("expected_head_oid", ours).put("expected_remote_oid", theirs)
+            .put("author_name", "Rish").put("author_email", "rish@example.invalid")
+        fun head(): String? = JSONObject(String(RishLibgit2Native.status(f.gitDir.absolutePath, f.workDir.absolutePath), Charsets.UTF_8))
+            .opt("head_oid").takeIf { it != JSONObject.NULL } as? String
+        fun fetch(): JSONObject = JSONObject(String(RishLibgit2Native.fetch(f.gitDir.absolutePath, f.workDir.absolutePath, UUID.randomUUID().toString(), "", "", "main", "", "", 30), Charsets.UTF_8))
+        fun journal(): File = File(f.gitDir, "rish-merge.json")
+    }
+
+    private fun diverged(
+        shared: Pair<String, String> = "shared.txt" to "base\n",
+        mine: Pair<String, String> = "mine.txt" to "mine\n",
+        theirs: Pair<String, String> = "theirs.txt" to "theirs\n",
+        beforeDiverging: (Fixture, Peer) -> Unit = { _, _ -> },
+    ): Diverged {
+        val f = fixture()
+        val bare = File(f.scratch, "merge-origin.git")
+        assertEquals("ok", RishLibgit2Native.initSplitRepository(bare.absolutePath, File(f.scratch, "merge-unused").apply { mkdirs() }.absolutePath))
+        assertEquals("ok", RishLibgit2Native.setRemote(f.gitDir.absolutePath, f.workDir.absolutePath, "file://" + bare.absolutePath))
+        val base = f.commit(shared.first, shared.second, "base")
+        val pushed = JSONObject(String(RishLibgit2Native.push(f.gitDir.absolutePath, f.workDir.absolutePath, UUID.randomUUID().toString(), "", "", "refs/heads/main", base, "", "", 30, false, null), Charsets.UTF_8))
+        assertEquals(pushed.toString(), "success", pushed.getString("outcome"))
+        val peer = Peer.fromDirs(f.scratch, "merge-peer", f.gitDir, f.workDir)
+        beforeDiverging(f, peer)
+        val theirsOid = peer.commit(theirs.first, theirs.second, "theirs")
+        assertEquals("success", peer.push(theirsOid).getString("outcome"))
+        val oursOid = f.commit(mine.first, mine.second, "mine")
+        val d = Diverged(f, peer, oursOid, theirsOid)
+        val fetched = d.fetch()
+        assertEquals(fetched.toString(), 1, fetched.getInt("ahead")); assertEquals(1, fetched.getInt("behind"))
+        return d
+    }
+
+    /**
+     * The one the whole feature is for: two people changed different files,
+     * and the person gets both, with history that says so.
+     */
+    @Test
+    fun aCleanDivergenceIsMergedAndTheBranchCarriesBothSides() {
+        val d = diverged()
+        val merged = d.f.git.mergeRemote(d.request())
+        assertEquals(merged.toString(), "merged", merged.getString("outcome"))
+        assertEquals(d.ours, merged.getString("previous_oid"))
+        val mergeOid = merged.getString("oid")
+        assertTrue(mergeOid != d.ours && mergeOid != d.theirs)
+        assertEquals(mergeOid, d.head())
+        assertEquals("mine\n", File(d.f.workDir, "mine.txt").readText())
+        assertEquals("theirs\n", File(d.f.workDir, "theirs.txt").readText())
+        // Both parents are real: the upstream is now an ancestor of HEAD and
+        // nothing is left behind -- two ahead (mine and the merge), none behind.
+        val after = d.fetch()
+        assertEquals(after.toString(), 0, after.getInt("behind")); assertEquals(2, after.getInt("ahead"))
+        assertTrue("the journal outlived a finished merge", !d.journal().exists())
+        d.f.scratch.deleteRecursively()
+    }
+
+    /**
+     * A conflict is answered with its paths, and nothing about the
+     * repository moves: no markers, no MERGE_HEAD, no index change, no ref.
+     */
+    @Test
+    fun aConflictingDivergenceIsRefusedAndWritesNothing() {
+        val d = diverged(mine = "shared.txt" to "mine\n", theirs = "shared.txt" to "theirs\n")
+        val answer = d.f.git.mergeRemote(d.request())
+        assertEquals(answer.toString(), "conflicts", answer.getString("outcome"))
+        val conflict = answer.getJSONArray("conflicts").getJSONObject(0)
+        assertEquals("shared.txt", conflict.getString("ours"))
+        assertEquals("shared.txt", conflict.getString("theirs"))
+        assertEquals(d.ours, d.head())
+        assertEquals("mine\n", File(d.f.workDir, "shared.txt").readText())
+        assertTrue("MERGE_HEAD was written", !File(d.f.gitDir, "MERGE_HEAD").exists())
+        val status = JSONObject(String(RishLibgit2Native.status(d.f.gitDir.absolutePath, d.f.workDir.absolutePath), Charsets.UTF_8))
+        assertEquals(status.toString(), 0, status.optJSONArray("entries")?.length() ?: 0)
+        assertTrue(!d.journal().exists())
+        d.f.scratch.deleteRecursively()
+    }
+
+    /** An ignored file the merge would write over is reported, not overwritten. */
+    @Test
+    fun anIgnoredFileInTheWayIsReportedAndKept() {
+        val d = diverged(
+            shared = ".gitignore" to "local.cfg\n",
+            theirs = "local.cfg" to "theirs\n",
+            beforeDiverging = { f, _ -> File(f.workDir, "local.cfg").writeText("mine\n") },
+        )
+        val answer = d.f.git.mergeRemote(d.request())
+        assertEquals(answer.toString(), "obstructed", answer.getString("outcome"))
+        assertTrue(answer.toString(), answer.getJSONArray("paths").toString().contains("local.cfg"))
+        assertEquals("mine\n", File(d.f.workDir, "local.cfg").readText())
+        assertEquals(d.ours, d.head())
+        assertTrue(!d.journal().exists())
+        d.f.scratch.deleteRecursively()
+    }
+
+    /**
+     * The merge is bound to what the person reviewed: a HEAD that moved or
+     * an upstream that is not the one they fetched is refused.
+     */
+    @Test
+    fun aMovedHeadOrAStaleFetchIsRefused() {
+        val d = diverged()
+        val elsewhere = "0".repeat(40)
+        assertEquals(3110, refusal { d.f.git.mergeRemote(d.request(ours = elsewhere)) })
+        assertEquals(3112, refusal { d.f.git.mergeRemote(d.request(theirs = elsewhere)) })
+        assertEquals(d.ours, d.head())
+        d.f.scratch.deleteRecursively()
+    }
+
+    /**
+     * A crash after the checkout but before the branch moved leaves the
+     * files at the merge and the branch at ours. Recovery reads that from
+     * the repository and finishes the move -- it never resets.
+     */
+    @Test
+    fun aMergeInterruptedBeforeTheBranchMovedIsFinishedByRecovery() {
+        val d = diverged()
+        val merged = d.f.git.mergeRemote(d.request())
+        val mergeOid = merged.getString("oid")
+        // Put the repository back into the state a crash would leave: the
+        // branch moved back to ours with a compare-and-swap, the index and
+        // files still the merge, and the journal on disk.
+        val back = JSONObject(String(RishLibgit2Native.mergeMoveRef(d.f.gitDir.absolutePath, d.f.workDir.absolutePath, "main", mergeOid, d.ours), Charsets.UTF_8))
+        assertEquals(back.toString(), "merged", back.getString("outcome"))
+        assertEquals(d.ours, d.head())
+        d.journal().writeText(
+            JSONObject().put("schema_version", 1).put("operation_id", UUID.randomUUID().toString())
+                .put("branch", "main").put("ours", d.ours).put("theirs", d.theirs).put("merge_oid", mergeOid)
+                .put("tree_oid", "0".repeat(40)).put("phase", "applying").put("created_at", "2026-09-23T00:00:00.000Z")
+                .toString(),
+        )
+        // The next merge settles the journal first. After recovery the
+        // branch is the merge, so the new request -- made against it -- is
+        // simply up to date.
+        val answer = d.f.git.mergeRemote(d.request(ours = mergeOid))
+        assertEquals(answer.toString(), "up_to_date", answer.getString("outcome"))
+        assertEquals(mergeOid, d.head())
+        assertTrue("recovery left the journal", !d.journal().exists())
+        d.f.scratch.deleteRecursively()
+    }
+
+    /** A state recovery does not recognise is kept, and refused -- never reset. */
+    @Test
+    fun anUnrecognisedStateBehindAJournalIsKeptAndRefused() {
+        val d = diverged()
+        d.journal().writeText(
+            JSONObject().put("schema_version", 1).put("operation_id", UUID.randomUUID().toString())
+                .put("branch", "main").put("ours", d.ours).put("theirs", d.theirs).put("merge_oid", d.theirs)
+                .put("tree_oid", "0".repeat(40)).put("phase", "applying").put("created_at", "2026-09-23T00:00:00.000Z")
+                .toString(),
+        )
+        // A tracked file changed by hand: nothing recovery may explain away.
+        File(d.f.workDir, "mine.txt").writeText("edited\n")
+        assertEquals(3181, refusal { d.f.git.mergeRemote(d.request()) })
+        assertTrue("the journal was discarded", d.journal().exists())
+        assertEquals("edited\n", File(d.f.workDir, "mine.txt").readText())
+        assertEquals(d.ours, d.head())
+        d.f.scratch.deleteRecursively()
     }
 
     @Test

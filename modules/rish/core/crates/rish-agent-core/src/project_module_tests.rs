@@ -19,6 +19,8 @@ fn every_module_failure_maps_to_its_stable_code() {
         (3112, "E_WORKSPACE_CONFIRMATION"),
         (3195, "E_PROJECT_CANCELLED"),
         (3196, "E_PROJECT_NON_FAST_FORWARD"),
+        (3180, "E_PROJECT_MERGE_UNSUPPORTED"),
+        (3181, "E_PROJECT_RECOVERY_REQUIRED"),
         (3197, "E_PROJECT_CREDENTIAL"),
         (3198, "E_PROJECT_TIMEOUT"),
     ] {

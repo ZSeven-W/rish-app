@@ -303,6 +303,175 @@ internal class AndroidProjectGit(
         )
     }
 
+    /**
+     * `mergeRemoteV2`: a diverged branch merged with the upstream the person
+     * just fetched -- only when the merge is clean.
+     *
+     * A conflict is answered with its paths and nothing moves. A clean merge
+     * is carried out in the order astra ruled on: everything is decided and
+     * the merge commit exists (referenced by nothing) before a file changes;
+     * a journal is written before the first index or working-tree write; the
+     * merged tree is checked out; then the branch moves with a
+     * compare-and-swap. Checkout is not atomic, so anything that fails after
+     * it started leaves the journal for [recoverMerge] instead of being
+     * reported as "nothing changed".
+     */
+    fun mergeRemote(rawRequest: JSONObject?): JSONObject {
+        val request = exact(rawRequest, MERGE_KEYS)
+        val operationId = request.opt("operation_id") as? String
+        val branch = request.opt("expected_branch") as? String
+        val ours = request.opt("expected_head_oid") as? String
+        val theirs = request.opt("expected_remote_oid") as? String
+        val name = request.opt("author_name") as? String
+        val email = request.opt("author_email") as? String
+        if (operationId == null || !projects.canonicalOperationId(operationId) ||
+            branch == null || !branchShaped(branch) ||
+            ours == null || !oid(ours) || theirs == null || !oid(theirs) ||
+            name == null || !bounded(name, MAX_AUTHOR_NAME_BYTES) || !nameShaped(name) ||
+            email == null || !bounded(email, MAX_EMAIL_BYTES) || !emailShaped(email)
+        ) {
+            throw refused(REQUEST_INVALID, "git merge request is invalid")
+        }
+        val opened = open(request, write = true)
+        // A merge left unfinished by a crash is settled first; if it cannot
+        // be, nothing new is attempted over it.
+        recoverMerge(opened)
+
+        val prepared = answer(
+            RishLibgit2Native.mergePrepare(opened.gitDir, opened.workDir, branch, ours, theirs, name, email),
+        )
+        fun result(outcome: String, oid: String) = stamped(
+            JSONObject().put("branch", branch).put("outcome", outcome).put("oid", oid).put("previous_oid", ours)
+                .put("conflicts", prepared.optJSONArray("conflicts") ?: JSONArray())
+                .put("paths", prepared.optJSONArray("paths") ?: JSONArray()),
+            opened,
+        )
+        when (val outcome = prepared.optString("outcome")) {
+            "ready" -> Unit
+            "up_to_date", "fast_forward_available", "conflicts", "obstructed" -> return result(outcome, ours)
+            "head_changed", "detached_head", "unborn_head", "dirty", "operation_in_progress" ->
+                throw refused(HEAD_CHANGED, "git merge refused: $outcome")
+            "no_upstream", "upstream_changed" -> throw refused(REMOTE_MISSING, "git merge refused: $outcome")
+            "shallow", "unrelated_histories", "unsupported_submodule", "unsupported_filter", "unsupported_paths" ->
+                throw refused(MERGE_UNSUPPORTED, "git merge refused: $outcome")
+            else -> throw refused(NATIVE, "git merge prepare failed")
+        }
+        val mergeOid = prepared.getString("merge_oid")
+        val journal = JSONObject().put("schema_version", 1).put("operation_id", operationId)
+            .put("branch", branch).put("ours", ours).put("theirs", theirs).put("merge_oid", mergeOid)
+            .put("tree_oid", prepared.getString("tree_oid")).put("phase", "applying")
+            .put("created_at", RuntimeJson.now())
+        writeMergeJournal(opened, journal)
+
+        val applied = answer(RishLibgit2Native.mergeApply(opened.gitDir, opened.workDir, branch, ours, mergeOid))
+        when (applied.optString("outcome")) {
+            "merged" -> Unit
+            // Found before a file was written: the journal has nothing to
+            // guard, so it goes, and the refusal is an honest one.
+            "head_changed" -> { clearMergeJournal(opened); throw refused(HEAD_CHANGED, "git merge refused: head_changed") }
+            "obstructed" -> { clearMergeJournal(opened); return result("obstructed", ours) }
+            // Anything else may have happened after the checkout began.
+            else -> throw refused(RECOVERY_REQUIRED, "git merge interrupted: ${applied.optString("outcome")}")
+        }
+        val inspected = answer(RishLibgit2Native.mergeInspect(opened.gitDir, opened.workDir, branch, ours, mergeOid))
+        if (inspected.optString("head") != "merge" || inspected.optString("index") != "merge" ||
+            !inspected.optBoolean("worktree_clean")
+        ) {
+            throw refused(RECOVERY_REQUIRED, "git merge landed in an unexpected state")
+        }
+        clearMergeJournal(opened)
+        return result("merged", mergeOid)
+    }
+
+    /**
+     * Settles a merge journal left by an interrupted merge, from what the
+     * repository actually is -- never from the phase alone, which may have
+     * been written before its effect. Never a hard reset: a state this does
+     * not recognise is kept, and refused as needing recovery.
+     */
+    private fun recoverMerge(opened: Opened) {
+        val file = mergeJournal(opened)
+        if (!file.exists()) return
+        val journal = try {
+            JSONObject(file.readText())
+        } catch (_: Exception) {
+            throw refused(RECOVERY_REQUIRED, "git merge journal is unreadable")
+        }
+        val branch = journal.optString("branch")
+        val ours = journal.optString("ours")
+        val merge = journal.optString("merge_oid")
+        if (!branchShaped(branch) || !oid(ours) || !oid(merge)) {
+            throw refused(RECOVERY_REQUIRED, "git merge journal is invalid")
+        }
+        val state = answer(RishLibgit2Native.mergeInspect(opened.gitDir, opened.workDir, branch, ours, merge))
+        val head = state.optString("head")
+        val index = state.optString("index")
+        val clean = state.optBoolean("worktree_clean") && !state.optBoolean("conflicted")
+        when {
+            // Done: the branch, the index and the files are the merge.
+            head == "merge" && index == "merge" && clean -> clearMergeJournal(opened)
+            // Checked out but the branch never moved: finish the move.
+            head == "ours" && index == "merge" && clean -> {
+                val moved = answer(RishLibgit2Native.mergeMoveRef(opened.gitDir, opened.workDir, branch, ours, merge))
+                if (moved.optString("outcome") != "merged") {
+                    throw refused(RECOVERY_REQUIRED, "git merge could not be finished")
+                }
+                clearMergeJournal(opened)
+            }
+            // Nothing was written: the merge never started.
+            head == "ours" && index == "ours" && clean -> clearMergeJournal(opened)
+            else -> throw refused(RECOVERY_REQUIRED, "git merge needs recovery")
+        }
+    }
+
+    private fun mergeJournal(opened: Opened): File = File(opened.gitDir, MERGE_JOURNAL)
+
+    /**
+     * Written whole and flushed before the first write to the index or the
+     * working tree: a journal that could be lost in a crash would guard
+     * nothing.
+     */
+    private fun writeMergeJournal(opened: Opened, journal: JSONObject) {
+        val target = mergeJournal(opened)
+        val staging = File(target.parentFile, "$MERGE_JOURNAL.tmp")
+        try {
+            java.io.FileOutputStream(staging).use { stream ->
+                stream.write(journal.toString().toByteArray(Charsets.UTF_8))
+                stream.fd.sync()
+            }
+            if (!staging.renameTo(target)) throw java.io.IOException("rename")
+            syncDirectory(target.parentFile)
+        } catch (_: Exception) {
+            staging.delete()
+            throw refused(NATIVE, "git merge journal could not be written")
+        }
+    }
+
+    /**
+     * The rename made durable. A directory is synced through a raw
+     * descriptor: Java's file classes refuse to open one. A directory that
+     * cannot be synced does not fail the merge -- recovery re-reads the
+     * repository itself rather than trusting the journal's presence alone.
+     */
+    private fun syncDirectory(directory: File?) {
+        if (directory == null) return
+        try {
+            val descriptor = android.system.Os.open(directory.absolutePath, android.system.OsConstants.O_RDONLY, 0)
+            try { android.system.Os.fsync(descriptor) } finally { android.system.Os.close(descriptor) }
+        } catch (_: Exception) {
+        }
+    }
+
+    private fun clearMergeJournal(opened: Opened) {
+        val file = mergeJournal(opened)
+        if (file.exists() && !file.delete()) throw refused(NATIVE, "git merge journal could not be cleared")
+    }
+
+    /** A branch name as the panel can show one: no ref prefix, no whitespace or control characters. */
+    private fun branchShaped(value: String): Boolean =
+        value.isNotEmpty() && value.length <= 255 && !value.startsWith("refs/") &&
+            value.none { it.isWhitespace() || it.isISOControl() } && !value.contains("..")
+
     /** `cancelPushV2`: asks a running push -- or fetch -- for this root to stop. */
     fun cancelPush(rawRequest: JSONObject?): JSONObject {
         val request = exact(rawRequest, CANCEL_PUSH_KEYS)
@@ -415,6 +584,11 @@ internal class AndroidProjectGit(
         private val CANCEL_PUSH_KEYS = setOf("schema_version", "root", "operation_id")
         private val FETCH_KEYS = setOf("schema_version", "root", "operation_id", "remote")
         private val PULL_KEYS = setOf("schema_version", "root", "expected_head_oid")
+        private val MERGE_KEYS = setOf(
+            "schema_version", "root", "operation_id", "expected_branch", "expected_head_oid",
+            "expected_remote_oid", "author_name", "author_email",
+        )
+        private const val MERGE_JOURNAL = "rish-merge.json"
         private const val PUSH_TIMEOUT_SECONDS = 60
         // iOS's numbers for the same refusals.
         private const val HEAD_CHANGED = 3110
@@ -423,6 +597,10 @@ internal class AndroidProjectGit(
         private const val REMOTE_CHANGED = 3113
         private const val CANCELLED = 3195
         private const val NON_FAST_FORWARD = 3196
+        /** A merge this slice does not carry out: shallow, unrelated, submodule, filter, path. */
+        private const val MERGE_UNSUPPORTED = 3180
+        /** A merge journal whose state this cannot settle on its own. */
+        private const val RECOVERY_REQUIRED = 3181
         private const val AUTH_REJECTED = 3197
         private const val TIMED_OUT = 3198
     }
