@@ -161,7 +161,19 @@ class AndroidProjectRemoteTest {
         f.git.setRemote(f.request().put("url", "https://github.com/example/demo.git"))
         assertEquals(3111, refusal { f.git.push(push()) })
         assertEquals(3110, refusal { f.git.push(push(expected = "0".repeat(40))) })
-        assertEquals(3101, refusal { f.git.push(push().put("https_proxy_url", "https://proxy.example.com:8080")) })
+        // A proxy the rules do not accept is refused before anything else;
+        // a good one passes on to the credential check.
+        for (bad in listOf(
+            "proxy.example.com:8080", "https://proxy.example.com", "ftp://proxy.example.com:21",
+            "http://user:pw@proxy.example.com:8080", "http://proxy.example.com:8080/path", " http://proxy.example.com:8080",
+        )) {
+            assertEquals(bad, 3101, refusal { f.git.push(push().put("https_proxy_url", bad)) })
+        }
+        assertEquals(3111, refusal { f.git.push(push().put("https_proxy_url", "https://proxy.example.com:8080")) })
+        assertEquals(3111, refusal { f.git.push(push().put("https_proxy_url", "http://10.0.2.2:3128/")) })
+        // libgit2 would send a plain http remote straight past the proxy.
+        f.git.setRemote(f.request().put("url", "http://10.0.2.2:1/demo.git"))
+        assertEquals(3101, refusal { f.git.push(push().put("https_proxy_url", "http://10.0.2.2:3128")) })
         f.scratch.deleteRecursively()
     }
 
@@ -188,6 +200,92 @@ class AndroidProjectRemoteTest {
         assertTrue(reply.toString(), reply.getBoolean("ok"))
         assertEquals(reply.toString(), "auth_failure", reply.getString("outcome"))
         assertFalse(reply.getBoolean("effect_may_have_occurred"))
+        f.scratch.deleteRecursively()
+    }
+
+    // --- through a proxy, scripts/git-test-proxy.py on the Mac -------------
+    //
+    //   python3 scripts/git-test-proxy.py --port N
+    // and pass rish_proxy_base=http://10.0.2.2:N as an instrumentation
+    // argument. The proxy counts every CONNECT, so these prove the traffic
+    // went *through* it, not merely that an operation succeeded. Skipped
+    // without the argument or without a route to github.com.
+
+    private class TestProxy(val base: String) {
+        private fun control(method: String, path: String): JSONObject {
+            val uri = java.net.URI(base)
+            java.net.Socket(uri.host, uri.port).use { socket ->
+                socket.soTimeout = 10_000
+                socket.getOutputStream().write("$method $path HTTP/1.1\r\nHost: proxy\r\nContent-Length: 0\r\n\r\n".toByteArray())
+                val text = socket.getInputStream().readBytes().toString(Charsets.UTF_8)
+                return JSONObject(text.substringAfter("\r\n\r\n"))
+            }
+        }
+        fun tunnels(target: String = "github.com:443"): Int = control("GET", "/__rish_stats").getJSONObject("connects").optInt(target, 0)
+        fun refused(): Int = control("GET", "/__rish_stats").getInt("refused")
+        fun refuse(on: Boolean) { control("POST", "/__rish_mode?mode=" + if (on) "refuse" else "tunnel") }
+    }
+
+    private fun testProxy(): TestProxy {
+        val base = InstrumentationRegistry.getArguments().getString("rish_proxy_base")
+        assumeTrue("no test proxy: pass rish_proxy_base", base != null)
+        // The proxy reaches GitHub from the Mac; the device only has to reach the proxy.
+        assumeTrue("github.com is not reachable", try {
+            java.net.Socket().use { it.connect(java.net.InetSocketAddress("github.com", 443), 5_000) }; true
+        } catch (_: Exception) { false })
+        assertTrue(tech.zseven.rish.runtime.AndroidGitCertificates.ensure(context) != null)
+        return TestProxy(base!!.trimEnd('/') + "/")
+    }
+
+    @Test
+    fun fetchAndPushGoThroughTheProxyAndNeverAroundIt() {
+        val proxy = testProxy()
+        proxy.refuse(false)
+        val f = fixture()
+        val oid = f.commit("README.md", "# demo\n", "first")
+        f.git.setRemote(f.request().put("url", "https://github.com/octocat/Hello-World.git"))
+        fun fetch() = f.git.fetch(
+            f.request().put("operation_id", UUID.randomUUID().toString()).put("remote", "origin").put("https_proxy_url", proxy.base),
+        )
+
+        val beforeFetch = proxy.tunnels()
+        val fetched = fetch()
+        // The repository has no `main`, so there is nothing to track -- but the
+        // fetch itself succeeded, through one or more tunnels.
+        assertTrue(fetched.toString(), fetched.isNull("remote_oid"))
+        assertTrue("the fetch did not go through the proxy", proxy.tunnels() > beforeFetch)
+
+        // A push: GitHub turns the made-up credential away, after the tunnel.
+        f.credentials.store(f.projectId, "github.com", "rish", "not-a-token", 3600)
+        val beforePush = proxy.tunnels()
+        assertEquals(3197, refusal {
+            f.git.push(
+                f.request().put("operation_id", UUID.randomUUID().toString()).put("remote", "origin")
+                    .put("expected_local_oid", oid).put("credential_reference", "ref").put("https_proxy_url", proxy.base),
+            )
+        })
+        assertTrue("the push did not go through the proxy", proxy.tunnels() > beforePush)
+
+        // The proxy refuses: the fetch fails. It does not go around the proxy
+        // -- a direct fetch of this public repository would have succeeded.
+        proxy.refuse(true)
+        try {
+            val refusedBefore = proxy.refused()
+            val tunnelsBefore = proxy.tunnels()
+            // Said as the proxy's failure, not a generic one.
+            assertEquals(3182, refusal { fetch() })
+            assertTrue("the proxy was not asked", proxy.refused() > refusedBefore)
+            assertEquals(tunnelsBefore, proxy.tunnels())
+        } finally {
+            proxy.refuse(false)
+        }
+        // A proxy nothing listens on is the proxy's failure too.
+        assertEquals(3182, refusal {
+            f.git.fetch(
+                f.request().put("operation_id", UUID.randomUUID().toString()).put("remote", "origin")
+                    .put("https_proxy_url", "http://10.0.2.2:1/"),
+            )
+        })
         f.scratch.deleteRecursively()
     }
 
@@ -644,9 +742,9 @@ class AndroidProjectRemoteTest {
         // Unrelated `main` histories: the seeded remote and this fresh repository diverge from the start.
         val local = f.commit("android.txt", "local\n", "local first")
         f.git.setRemote(f.request().put("url", "${remote.base}/target.git"))
-        assertEquals(3197, refusal { f.git.fetch(f.request().put("operation_id", UUID.randomUUID().toString()).put("remote", "origin")) })
+        assertEquals(3197, refusal { f.git.fetch(f.request().put("operation_id", UUID.randomUUID().toString()).put("remote", "origin").put("https_proxy_url", JSONObject.NULL)) })
         f.git.storeCredential(f.credential(remote, remote.token))
-        val fetched = f.git.fetch(f.request().put("operation_id", UUID.randomUUID().toString()).put("remote", "origin"))
+        val fetched = f.git.fetch(f.request().put("operation_id", UUID.randomUUID().toString()).put("remote", "origin").put("https_proxy_url", JSONObject.NULL))
         assertEquals("main", fetched.getString("branch"))
         assertEquals(remote.tip("target.git", "main"), fetched.getString("remote_oid"))
         assertEquals(1, fetched.getInt("ahead")); assertEquals(1, fetched.getInt("behind"))
@@ -659,12 +757,12 @@ class AndroidProjectRemoteTest {
         val first = g.commit("android.txt", "first\n", "first")
         g.git.setRemote(g.request().put("url", "${remote.base}/target.git"))
         g.git.storeCredential(g.credential(remote, remote.token))
-        val nothing = g.git.fetch(g.request().put("operation_id", UUID.randomUUID().toString()).put("remote", "origin"))
+        val nothing = g.git.fetch(g.request().put("operation_id", UUID.randomUUID().toString()).put("remote", "origin").put("https_proxy_url", JSONObject.NULL))
         assertTrue(nothing.isNull("remote_oid"))
         assertEquals(3112, refusal { g.git.pullFastForward(g.request().put("expected_head_oid", first)) })
         g.git.push(g.pushRequest(first))
         val competing = remote.control("POST", "/g2/compete", JSONObject().put("repo", "target.git").put("branch", branch).toString())
-        val behind = g.git.fetch(g.request().put("operation_id", UUID.randomUUID().toString()).put("remote", "origin"))
+        val behind = g.git.fetch(g.request().put("operation_id", UUID.randomUUID().toString()).put("remote", "origin").put("https_proxy_url", JSONObject.NULL))
         assertEquals(competing.getString("oid"), behind.getString("remote_oid"))
         assertEquals(0, behind.getInt("ahead")); assertEquals(1, behind.getInt("behind"))
         val pulled = g.git.pullFastForward(g.request().put("expected_head_oid", first))

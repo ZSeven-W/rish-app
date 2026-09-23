@@ -1698,7 +1698,7 @@ test('a workspace project fetches and fast-forwards by root, and a diverged bran
 
   await act(async () => { actionByLabel(renderer.root, 'Fetch').props.onPress(); await settle(); });
   expect(mockLocalProjects.fetchV2).toHaveBeenCalledWith({
-    schema_version: 1, root: workspaceRoot, operation_id: 'op-1', remote: 'origin',
+    schema_version: 1, root: workspaceRoot, operation_id: 'op-1', remote: 'origin', https_proxy_url: null,
   });
   expect(renderer.root.findAllByProps({ children: 'Fetched. Ahead 0 · behind 1.' }).length).toBeGreaterThan(0);
 
@@ -1817,6 +1817,62 @@ test('a diverged branch merges what was fetched, bound to the reviewed tips, and
   alert.mockRestore();
 });
 
+test('a workspace project fetches and pushes through the Git proxy the person set', async () => {
+  // Android used to refuse a push while a proxy was set, and no fetch or
+  // clone ever carried one; both hosts now send every one through it.
+  const alert = jest.spyOn(Alert, 'alert').mockImplementation(() => undefined);
+  const gitHttpsProxyUrl = 'http://127.0.0.1:7890/';
+  mockLocalProjects.isV2Available.mockReturnValue(true);
+  mockLocalProjects.list.mockRejectedValue(Object.assign(new Error('E_PROJECT_NATIVE'), { code: 'E_PROJECT_NATIVE' }));
+  mockWorkspaceProjects.mockResolvedValue([workspaceProject]);
+  mockLocalProjects.statusV2.mockResolvedValue({ ...dirtyStatus, schema_version: 2, root: workspaceRoot, project_id: workspaceRoot.project_id });
+  mockLocalProjects.diffV2.mockImplementation(async (request: { staged: boolean }) => ({
+    ...diff, schema_version: 2, root: workspaceRoot, project_id: workspaceRoot.project_id, staged: request.staged,
+  }));
+  mockLocalProjects.remoteV2.mockResolvedValue({
+    schema_version: 2, root: workspaceRoot, project_id: workspaceRoot.project_id, remote: 'origin',
+    url: 'https://github.com/example/demo.git', host: 'github.com',
+  });
+  mockLocalProjects.credentialStatusV2.mockResolvedValue({
+    schema_version: 2, root: workspaceRoot, project_id: workspaceRoot.project_id, host: 'github.com', configured: true,
+    expires_at: 1_800_000_000, expiry_seconds: 3600,
+  });
+  mockLocalProjects.fetchV2.mockResolvedValue({
+    schema_version: 2, root: workspaceRoot, project_id: workspaceRoot.project_id, remote: 'origin', branch: 'main',
+    remote_oid: 'f'.repeat(40), ahead: 1, behind: 0, fetched_at: '2026-09-23T00:00:00.000Z',
+  });
+  mockLocalProjects.pushV2.mockResolvedValue({
+    schema_version: 2, root: workspaceRoot, project_id: workspaceRoot.project_id, remote: 'origin', branch: 'main',
+    oid: dirtyStatus.head_oid, pushed_at: '2026-09-23T00:00:00.000Z',
+  });
+  mockLocalProjects.pushReceiptsV2.mockResolvedValue({
+    schema_version: 2, root: workspaceRoot, project_id: workspaceRoot.project_id, receipts: [],
+  });
+  const renderer = await renderSurface({ gitHttpsProxyUrl });
+  const row = renderer.root.findByProps({ testID: 'projects-row-Smoke' });
+  await act(async () => { row.props.onPress(); await settle(); });
+  await act(async () => { await settle(); await settle(); });
+
+  await act(async () => { actionByLabel(renderer.root, 'Fetch').props.onPress(); await settle(); });
+  expect(mockLocalProjects.fetchV2).toHaveBeenCalledWith(expect.objectContaining({ https_proxy_url: gitHttpsProxyUrl }));
+  // When the proxy fails, the person is told it was the proxy, and which.
+  mockLocalProjects.fetchV2.mockRejectedValueOnce(Object.assign(new Error('E_PROJECT_PROXY'), { code: 'E_PROJECT_PROXY' }));
+  await act(async () => { await settle(); await settle(); });
+  await act(async () => { actionByLabel(renderer.root, 'Fetch').props.onPress(); await settle(); });
+  expect(
+    renderer.root.findAll(instance => typeof instance.props.children === 'string' &&
+      instance.props.children.startsWith(`The Git proxy ${gitHttpsProxyUrl} refused`)).length,
+  ).toBeGreaterThan(0);
+
+  await act(async () => { await settle(); await settle(); });
+  await act(async () => actionByLabel(renderer.root, 'Push').props.onPress());
+  const buttons = alert.mock.calls[alert.mock.calls.length - 1]?.[2];
+  const confirm = Array.isArray(buttons) ? buttons.find(button => button.text === 'Push now') : undefined;
+  await act(async () => { confirm?.onPress?.(); await settle(); });
+  expect(mockLocalProjects.pushV2).toHaveBeenCalledWith(expect.objectContaining({ https_proxy_url: gitHttpsProxyUrl }));
+  alert.mockRestore();
+});
+
 test('without legacy projects a clone becomes a new workspace project, and can be cancelled while it runs', async () => {
   // Android: the legacy module is linked (its methods stubbed) but has no clone controls.
   mockLocalProjects.isAvailable.mockReturnValue(true);
@@ -1839,6 +1895,7 @@ test('without legacy projects a clone becomes a new workspace project, and can b
   await act(async () => { actionByLabel(renderer.root, 'Clone').props.onPress(); await settle(); });
   expect(mockLocalProjects.cloneWorkspaceV2).toHaveBeenCalledWith({
     schema_version: 1, operation_id: 'op-1', url: 'https://github.com/example/demo.git', display_name: 'demo',
+    https_proxy_url: null,
   });
   expect(mockLocalProjects.startClone).not.toHaveBeenCalled();
   expect(renderer.root.findAllByProps({ testID: 'projects-workspace-clone' }).length).toBeGreaterThan(0);
@@ -1906,7 +1963,7 @@ test('a workspace clone that asks for a credential gets the native prompt once a
   expect(mockLocalProjects.cloneWorkspaceV2).toHaveBeenCalledTimes(2);
   expect(mockLocalProjects.cloneWorkspaceV2).toHaveBeenLastCalledWith({
     schema_version: 1, operation_id: 'op-1', url: 'https://github.com/example/demo.git', display_name: 'demo',
-    credential_reference: 'prompt',
+    https_proxy_url: null, credential_reference: 'prompt',
   });
   expect(renderer.root.findAllByProps({ children: 'Repository cloned locally.' }).length).toBeGreaterThan(0);
 });

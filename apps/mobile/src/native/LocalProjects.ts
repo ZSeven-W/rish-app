@@ -249,6 +249,8 @@ export type GitCancelPushRequestV1 = GitWorkspaceRequestV1 & {
 export type GitFetchRequestV1 = GitWorkspaceRequestV1 & {
   operation_id: string;
   remote: 'origin';
+  /** The Git HTTPS proxy every connection goes through, or null for none. */
+  https_proxy_url: string | null;
 };
 
 export type GitPullRequestV1 = GitWorkspaceRequestV1 & {
@@ -320,6 +322,8 @@ export type WorkspaceCloneRequestV1 = {
   display_name: string;
   /** `prompt`: use the credential typed for this operation id (see presentCloneCredentialPromptV2). */
   credential_reference?: 'prompt';
+  /** The Git HTTPS proxy every connection goes through, or null for none. */
+  https_proxy_url: string | null;
 };
 
 /** What the clone credential prompt answers: never the secret. */
@@ -530,6 +534,7 @@ const projectV2ErrorCodes = new Set([
   'E_PROJECT_CANCELLED',
   'E_PROJECT_MERGE_UNSUPPORTED',
   'E_PROJECT_RECOVERY_REQUIRED',
+  'E_PROJECT_PROXY',
 ]);
 
 export class ProjectGitBridgeError extends Error {
@@ -1254,13 +1259,18 @@ function projectV2CredentialPromptRequest(value: unknown): GitCredentialPromptRe
 }
 
 function projectV2FetchRequest(value: unknown): GitFetchRequestV1 {
-  const row = projectV2ExactRecord(value, ['schema_version', 'root', 'operation_id', 'remote'], 'E_PROJECT_REQUEST_INVALID');
+  const row = projectV2ExactRecord(
+    value,
+    ['schema_version', 'root', 'operation_id', 'remote', 'https_proxy_url'],
+    'E_PROJECT_REQUEST_INVALID',
+  );
   if (row.schema_version !== 1 || row.remote !== 'origin') return projectV2Fail('E_PROJECT_REQUEST_INVALID');
   return {
     schema_version: 1,
     root: projectV2RequestRoot(row.root),
     operation_id: projectV2OperationId(row.operation_id),
     remote: 'origin',
+    https_proxy_url: projectV2ProxyURL(row.https_proxy_url),
   };
 }
 
@@ -1489,8 +1499,8 @@ function projectV2WorkspaceCloneRequest(value: unknown): WorkspaceCloneRequestV1
   const row = projectV2ExactRecord(
     value,
     withCredential
-      ? ['schema_version', 'operation_id', 'url', 'display_name', 'credential_reference']
-      : ['schema_version', 'operation_id', 'url', 'display_name'],
+      ? ['schema_version', 'operation_id', 'url', 'display_name', 'https_proxy_url', 'credential_reference']
+      : ['schema_version', 'operation_id', 'url', 'display_name', 'https_proxy_url'],
     'E_PROJECT_REQUEST_INVALID',
   );
   if (row.schema_version !== 1 || !projectV2String(row.url, 2048) || !projectV2String(row.display_name, 120) ||
@@ -1502,6 +1512,7 @@ function projectV2WorkspaceCloneRequest(value: unknown): WorkspaceCloneRequestV1
     operation_id: projectV2OperationId(row.operation_id),
     url: row.url,
     display_name: row.display_name,
+    https_proxy_url: projectV2ProxyURL(row.https_proxy_url),
     ...(withCredential ? { credential_reference: 'prompt' as const } : {}),
   };
 }

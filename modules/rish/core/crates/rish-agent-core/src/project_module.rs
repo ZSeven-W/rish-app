@@ -41,6 +41,9 @@ const MODULE_FAILURES: &[(i64, &str)] = &[
     // An interrupted merge whose repository state recovery cannot settle on
     // its own; the state is kept, never reset.
     (3181, "E_PROJECT_RECOVERY_REQUIRED"),
+    // The Git HTTPS proxy the person set refused, failed or could not be
+    // reached. Never a direct connection instead.
+    (3182, "E_PROJECT_PROXY"),
 ];
 
 /// The workspace failures this module re-reports, and as what. The rest become

@@ -530,6 +530,9 @@ static NSString *const DSHAgentGitActiveCancelTokenKey =
                                    @"cancelled", YES, error)
           : DSHAgentGitPushFailure(name, @"E_AGENT_CANCELLED", @"cancelled",
                                    NO, error);
+    // The agent sends no proxy yet; a proxy failure would read as any other
+    // transport failure, with the same rule about what may have happened.
+    case DSHGitPushOutcomeProxyFailed:
     case DSHGitPushOutcomeFailed:
       // Once the request went out, a lost response cannot prove that the
       // server rejected the update.

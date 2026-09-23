@@ -19,7 +19,6 @@ import X from 'lucide-react-native/icons/x';
 import {
   ActivityIndicator,
   Alert,
-  Platform,
   Pressable,
   ScrollView,
   StyleSheet,
@@ -796,6 +795,7 @@ export function ProjectsSurface({
             operation_id: operationId,
             url: trimmedUrl,
             display_name: trimmedName.length === 0 ? workspaceNameFromUrl(trimmedUrl) : trimmedName,
+            https_proxy_url: preferences.gitHttpsProxyUrl,
           };
           try {
             let cloned;
@@ -848,6 +848,7 @@ export function ProjectsSurface({
             if (!tasks.owns(task)) return;
             const code = errorCode(caught);
             if (code === 'E_PROJECT_CANCELLED') setNotice(t('projects.cloneCancelled'));
+            else if (code === 'E_PROJECT_PROXY') setError(t('projects.proxyFailed', { proxy: preferences.gitHttpsProxyUrl ?? '' }));
             else if (code === 'E_PROJECT_CREDENTIAL') setError(t('projects.cloneAuthRequired'));
             else if (code === 'E_PROJECT_CREDENTIAL_REJECTED') setError(t('projects.cloneCredentialRejected'));
             else if (code === 'E_PROJECT_TIMEOUT') setError(t('projects.cloneTimeout'));
@@ -1211,14 +1212,6 @@ export function ProjectsSurface({
     const target = selected.root !== null ? '' : pushBranch.trim();
     const host = remoteHost(selected.origin_url);
     const newBranch = target.length > 0 && target !== status.branch;
-    if (
-      selected.root !== null &&
-      Platform.OS === 'android' &&
-      preferences.gitHttpsProxyUrl !== null
-    ) {
-      setError(t('projects.pushProxyUnsupported'));
-      return;
-    }
     // A confirmation belongs to this exact view and target, not a later visit.
     const confirmation = tasks.begin('push');
     tasks.finish(confirmation);
@@ -1284,6 +1277,8 @@ export function ProjectsSurface({
                 const code = errorCode(caught);
                 if (code === 'non-fast-forward' || code === 'E_PROJECT_NON_FAST_FORWARD') {
                   setError(t('projects.pushNonFastForward'));
+                } else if (code === 'E_PROJECT_PROXY') {
+                  setError(t('projects.proxyFailed', { proxy: preferences.gitHttpsProxyUrl ?? '' }));
                 } else if (code === 'rejected' || code === 'E_PROJECT_CREDENTIAL') {
                   setError(t('projects.pushRejected'));
                 } else if (code === 'conflict') {
@@ -1348,6 +1343,7 @@ export function ProjectsSurface({
         root: selected.root,
         operation_id: operationId,
         remote: 'origin',
+        https_proxy_url: preferences.gitHttpsProxyUrl,
       });
       if (!tasks.owns(task)) return;
       setFetched(
@@ -1364,7 +1360,8 @@ export function ProjectsSurface({
     } catch (caught) {
       if (!tasks.owns(task)) return;
       const code = errorCode(caught);
-      if (code === 'E_PROJECT_CREDENTIAL') setError(t('projects.pushRejected'));
+      if (code === 'E_PROJECT_PROXY') setError(t('projects.proxyFailed', { proxy: preferences.gitHttpsProxyUrl ?? '' }));
+      else if (code === 'E_PROJECT_CREDENTIAL') setError(t('projects.pushRejected'));
       else if (code === 'E_PROJECT_TIMEOUT') setError(t('projects.pushTimeout'));
       else if (code === 'E_PROJECT_CANCELLED') setError(t('projects.pushCancelled'));
       else setError(t('projects.operationFailed', { error: errorText(caught) }));
@@ -1372,7 +1369,7 @@ export function ProjectsSurface({
       if (pushOperationId.current === operationId) pushOperationId.current = null;
       finishTask(task);
     }
-  }, [beginTask, finishTask, loadDetail, selected, t, tasks]);
+  }, [beginTask, finishTask, loadDetail, preferences.gitHttpsProxyUrl, selected, t, tasks]);
 
   /** Moves the branch to origin's tip only as a fast-forward over an unchanged tree. */
   const pullFastForward = useCallback(async () => {

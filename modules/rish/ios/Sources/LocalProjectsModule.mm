@@ -3177,6 +3177,12 @@ RCT_REMAP_METHOD(fetch,
                                    operation:(LPCloneOperation *)operation
                                sshProfileId:(NSString *)sshProfileId
                                        error:(NSError **)error {
+  // libgit2 tunnels only an HTTPS origin through an HTTP proxy; an SSH one
+  // would go around the proxy the person set.
+  if (proxyURL.length > 0 && ![remoteURL.scheme.lowercaseString isEqualToString:@"https"]) {
+    if (error != nil) *error = LPError(3003, @"A proxy cannot carry this remote");
+    return nil;
+  }
   if (self.clonePhaseHook != nil) self.clonePhaseHook(@"queued");
   if ([operation shouldCancel]) return nil;
   [operation updatePhase:@"connecting"];
@@ -5103,6 +5109,13 @@ RCT_REMAP_METHOD(pushV2,
       return;
     }
     NSString *origin = [self originURLForRepository:repository error:&error];
+    // libgit2 tunnels only an HTTPS origin through an HTTP proxy; a plain
+    // http or SSH one would go around the proxy the person set.
+    if (proxyURL != nil && origin != nil && ![origin.lowercaseString hasPrefix:@"https://"]) {
+      if (head != nullptr) git_reference_free(head);
+      LPV2Reject(reject, LPError(3101, @"A proxy cannot carry this remote"));
+      return;
+    }
     NSString *host = origin == nil ? nil
       : [NSURLComponents componentsWithString:origin].host.lowercaseString;
     // V2 resolves the credential from the same (project id, host) Keychain
@@ -5167,6 +5180,9 @@ RCT_REMAP_METHOD(pushV2,
           return;
         case DSHGitPushOutcomeCancelled:
           LPV2Reject(reject, LPError(3195, @"Push was cancelled"));
+          return;
+        case DSHGitPushOutcomeProxyFailed:
+          LPV2Reject(reject, LPError(3182, @"The Git proxy failed"));
           return;
         default:
           LPV2Reject(reject, error ?: LPError(3199, @"Git push failed"));
@@ -5636,14 +5652,22 @@ RCT_REMAP_METHOD(fetchV2,
   NSError *validationError = nil;
   NSDictionary *root = nil;
   NSString *operationId = nil;
+  NSString *proxyURL = nil;
   BOOL inputValid = NO;
   @try {
     request = LPDictionary(requestValue);
     root = LPV2Root(request[@"root"], YES, &validationError);
     operationId = LPString(request[@"operation_id"]);
-    inputValid = LPV2ExactKeys(request, @[@"schema_version", @"root", @"operation_id", @"remote"]) &&
+    // The proxy the person set; every connection of this fetch goes through
+    // it, never around it.
+    id proxyValue = request[@"https_proxy_url"];
+    if (proxyValue != nil && proxyValue != NSNull.null) {
+      proxyURL = LPValidatedHTTPSProxyURL(@{ @"httpsProxyUrl" : proxyValue }, &validationError);
+    }
+    BOOL proxyValid = proxyValue == NSNull.null || proxyURL != nil;
+    inputValid = LPV2ExactKeys(request, @[@"schema_version", @"root", @"operation_id", @"remote", @"https_proxy_url"]) &&
         [request[@"schema_version"] isEqual:@1] && root != nil &&
-        LPV2CanonicalOperationId(operationId) && [request[@"remote"] isEqual:@"origin"];
+        LPV2CanonicalOperationId(operationId) && [request[@"remote"] isEqual:@"origin"] && proxyValid;
   } @catch (__unused NSException *exception) {
     validationError = LPError(3199, @"Git fetch request is invalid");
   }
@@ -5680,6 +5704,13 @@ RCT_REMAP_METHOD(fetchV2,
       LPV2Reject(reject, LPError(3112, @"Git remote is not configured"));
       return;
     }
+    // libgit2 does not route a non-HTTPS remote (plain http, SSH) through an
+    // HTTP proxy; with a proxy set, such a fetch would go around it.
+    if (proxyURL != nil && ![origin.lowercaseString hasPrefix:@"https://"]) {
+      lease = nil;
+      LPV2Reject(reject, LPError(3101, @"A proxy cannot carry this remote"));
+      return;
+    }
     NSString *projectId = root[@"project_id"];
     NSDictionary *credential = host == nil ? nil : DSHGitCredentialForScope(projectId, host, nil);
     DSHGitPushCancelToken *cancelToken = [[DSHGitPushCancelToken alloc] init];
@@ -5697,7 +5728,8 @@ RCT_REMAP_METHOD(fetchV2,
     if (result == 0 && host != nil) result = git_remote_set_instance_url(remote, origin.UTF8String);
     git_fetch_options options = GIT_FETCH_OPTIONS_INIT;
     options.follow_redirects = GIT_REMOTE_REDIRECT_NONE;
-    options.proxy_opts.type = GIT_PROXY_NONE;
+    options.proxy_opts.type = proxyURL != nil ? GIT_PROXY_SPECIFIED : GIT_PROXY_NONE;
+    options.proxy_opts.url = proxyURL != nil ? proxyURL.UTF8String : nullptr;
     if (credential != nil) options.callbacks.credentials = LPV2FetchCredentialCallback;
     options.callbacks.transfer_progress = LPV2FetchProgress;
     options.callbacks.payload = &state;
@@ -5713,6 +5745,7 @@ RCT_REMAP_METHOD(fetchV2,
     if (result != 0) {
       lease = nil;
       if (cancelToken.cancelled) LPV2Reject(reject, LPError(3195, @"Fetch was cancelled"));
+      else if (DSHGitProxyFailed(proxyURL)) LPV2Reject(reject, LPError(3182, @"The Git proxy failed"));
       else if (result == GIT_EAUTH) LPV2Reject(reject, LPError(3197, @"Git credential was rejected by the remote"));
       else LPV2Reject(reject, LPError(3199, @"Git fetch failed"));
       return;

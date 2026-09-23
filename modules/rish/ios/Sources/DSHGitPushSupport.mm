@@ -547,6 +547,7 @@ static DSHGitPushResult *DSHGitPushExecute(DSHGitPushRequest *request,
     if (remote != nullptr) git_remote_free(remote);
     if (state->interruptedByCancel) result.outcome = DSHGitPushOutcomeCancelled;
     else if (state->interruptedByDeadline) result.outcome = DSHGitPushOutcomeTimedOut;
+    else if (DSHGitProxyFailed(request.proxyURL)) result.outcome = DSHGitPushOutcomeProxyFailed;
     else if (code == GIT_EAUTH) result.outcome = DSHGitPushOutcomeAuthFailure;
     else result.outcome = DSHGitPushOutcomeFailed;
     return result;
@@ -579,6 +580,7 @@ static DSHGitPushResult *DSHGitPushExecute(DSHGitPushRequest *request,
     result.effectMayHaveOccurred = state->bytesMayHaveBeenSent;
     if (state->interruptedByCancel) result.outcome = DSHGitPushOutcomeCancelled;
     else if (state->interruptedByDeadline) result.outcome = DSHGitPushOutcomeTimedOut;
+    else if (DSHGitProxyFailed(request.proxyURL)) result.outcome = DSHGitPushOutcomeProxyFailed;
     else if (code == GIT_EAUTH) result.outcome = DSHGitPushOutcomeAuthFailure;
     else {
       result.outcome = DSHGitPushOutcomeFailed;
@@ -837,4 +839,17 @@ NSArray<NSDictionary *> *DSHGitPushLoadReceipts(int directoryDescriptor,
                                                 NSString *projectId,
                                                 NSError **error) {
   return DSHGitPushLoadReceiptsInternal(directoryDescriptor, projectId, error);
+}
+
+BOOL DSHGitProxyFailed(NSString *proxyURL) {
+  if (proxyURL.length == 0) return NO;
+  const git_error *last = git_error_last();
+  NSString *message = last != nullptr && last->message != nullptr
+      ? [NSString stringWithUTF8String:last->message] : nil;
+  if (message.length == 0) return NO;
+  if ([message hasPrefix:@"proxy "]) return YES;
+  NSString *host = [NSURLComponents componentsWithString:proxyURL].host;
+  if (host.length == 0) return NO;
+  return [message containsString:[@"failed to connect to " stringByAppendingString:host]] ||
+      [message containsString:[@"failed to resolve address for " stringByAppendingString:host]];
 }

@@ -119,8 +119,18 @@ internal object RishLibgit2Native {
     @JvmStatic external fun push(
         gitDir: String?, workDir: String, operationId: String, remoteUrl: String, host: String,
         reference: String, localOid: String, username: String, token: String, timeoutSeconds: Int,
-        hasExpectedRemoteOid: Boolean, expectedRemoteOid: String?,
+        hasExpectedRemoteOid: Boolean, expectedRemoteOid: String?, proxy: String,
     ): ByteArray
+
+    /** [push] with no proxy. */
+    @JvmStatic fun push(
+        gitDir: String?, workDir: String, operationId: String, remoteUrl: String, host: String,
+        reference: String, localOid: String, username: String, token: String, timeoutSeconds: Int,
+        hasExpectedRemoteOid: Boolean, expectedRemoteOid: String?,
+    ): ByteArray = push(
+        gitDir, workDir, operationId, remoteUrl, host, reference, localOid, username, token, timeoutSeconds,
+        hasExpectedRemoteOid, expectedRemoteOid, "",
+    )
 
     /**
      * What origin advertises for `reference` now, over a FETCH connection
@@ -130,8 +140,14 @@ internal object RishLibgit2Native {
      */
     @JvmStatic external fun remoteRefOid(
         gitDir: String?, workDir: String, remoteUrl: String, host: String, reference: String,
-        username: String, token: String, timeoutSeconds: Int,
+        username: String, token: String, timeoutSeconds: Int, proxy: String,
     ): ByteArray
+
+    /** [remoteRefOid] with no proxy. */
+    @JvmStatic fun remoteRefOid(
+        gitDir: String?, workDir: String, remoteUrl: String, host: String, reference: String,
+        username: String, token: String, timeoutSeconds: Int,
+    ): ByteArray = remoteRefOid(gitDir, workDir, remoteUrl, host, reference, username, token, timeoutSeconds, "")
 
     /** `refs/remotes/origin/<branch>` := oid. Answers "ok" or "error:<stage>". */
     @JvmStatic external fun setTrackingReference(gitDir: String?, workDir: String, branch: String, oid: String): String
@@ -146,8 +162,14 @@ internal object RishLibgit2Native {
      */
     @JvmStatic external fun fetch(
         gitDir: String?, workDir: String, operationId: String, remoteUrl: String, host: String, branch: String,
-        username: String, token: String, timeoutSeconds: Int,
+        username: String, token: String, timeoutSeconds: Int, proxy: String,
     ): ByteArray
+
+    /** [fetch] with no proxy. */
+    @JvmStatic fun fetch(
+        gitDir: String?, workDir: String, operationId: String, remoteUrl: String, host: String, branch: String,
+        username: String, token: String, timeoutSeconds: Int,
+    ): ByteArray = fetch(gitDir, workDir, operationId, remoteUrl, host, branch, username, token, timeoutSeconds, "")
 
     /**
      * A fast-forward of the current branch to `origin/<branch>` and nothing
@@ -210,8 +232,14 @@ internal object RishLibgit2Native {
      */
     @JvmStatic external fun cloneCheckout(
         gitDir: String?, workDir: String, operationId: String, host: String, username: String, token: String,
-        timeoutSeconds: Int,
+        timeoutSeconds: Int, proxy: String,
     ): ByteArray
+
+    /** [cloneCheckout] with no proxy. */
+    @JvmStatic fun cloneCheckout(
+        gitDir: String?, workDir: String, operationId: String, host: String, username: String, token: String,
+        timeoutSeconds: Int,
+    ): ByteArray = cloneCheckout(gitDir, workDir, operationId, host, username, token, timeoutSeconds, "")
 
     // --- capturing a selection --------------------------------------------
     //

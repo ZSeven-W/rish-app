@@ -7,6 +7,9 @@
 #import "LocalProjectsModuleV2TestSupport.h"
 #import "../../../../modules/rish/ios/Sources/DSHGitPushSupport.h"
 #include <git2.h>
+#include <arpa/inet.h>
+#include <sys/socket.h>
+#include <unistd.h>
 
 typedef void (^RV2Resolve)(id result);
 typedef void (^RV2Reject)(NSString *code, NSString *message, NSError *error);
@@ -123,7 +126,10 @@ typedef void (^RV2Reject)(NSString *code, NSString *message, NSError *error);
             ^(NSString *rejectCode, __unused NSString *message, __unused NSError *error) {
               code = rejectCode; dispatch_semaphore_signal(done);
             });
-  XCTAssertEqual(dispatch_semaphore_wait(done, dispatch_time(DISPATCH_TIME_NOW, 30 * NSEC_PER_SEC)), 0L,
+  // Generous: the proxy tests reach github.com, which from here has taken
+  // over thirty seconds for one small fetch. A call that works settles long
+  // before this; only a hang waits it out.
+  XCTAssertEqual(dispatch_semaphore_wait(done, dispatch_time(DISPATCH_TIME_NOW, 120 * NSEC_PER_SEC)), 0L,
                  @"%@ did not settle", step);
   if (codeOut != nil) *codeOut = code;
   return resolved;
@@ -380,7 +386,7 @@ static BOOL RV2PushMain(git_repository *repository) {
 
   NSDictionary *fetched = [self bridge:^(RV2Resolve resolve, RV2Reject reject) {
     [self.module fetchV2Request:[self requestWith:@{
-      @"operation_id" : @"44444444-4444-4444-8444-444444444444", @"remote" : @"origin" }] resolver:resolve rejecter:reject];
+      @"operation_id" : @"44444444-4444-4444-8444-444444444444", @"remote" : @"origin", @"https_proxy_url" : NSNull.null }] resolver:resolve rejecter:reject];
   } code:&code];
   XCTAssertNotNil(fetched, @"%@", code);
   XCTAssertEqualObjects(fetched[@"branch"], @"main");
@@ -434,7 +440,7 @@ static BOOL RV2PushMain(git_repository *repository) {
   git_repository_free(peer);
   NSDictionary *diverged = [self bridge:^(RV2Resolve resolve, RV2Reject reject) {
     [self.module fetchV2Request:[self requestWith:@{
-      @"operation_id" : @"55555555-5555-4555-8555-555555555555", @"remote" : @"origin" }] resolver:resolve rejecter:reject];
+      @"operation_id" : @"55555555-5555-4555-8555-555555555555", @"remote" : @"origin", @"https_proxy_url" : NSNull.null }] resolver:resolve rejecter:reject];
   } code:&code];
   XCTAssertEqualObjects(diverged[@"ahead"], @1);
   XCTAssertEqualObjects(diverged[@"behind"], @1);
@@ -504,7 +510,7 @@ static BOOL RV2PushMain(git_repository *repository) {
 
   NSDictionary *fetched = [self bridge:^(RV2Resolve resolve, RV2Reject reject) {
     [self.module fetchV2Request:[self requestWith:@{
-      @"operation_id" : @"66666666-6666-4666-8666-666666666666", @"remote" : @"origin" }] resolver:resolve rejecter:reject];
+      @"operation_id" : @"66666666-6666-4666-8666-666666666666", @"remote" : @"origin", @"https_proxy_url" : NSNull.null }] resolver:resolve rejecter:reject];
   } code:&code];
   XCTAssertEqualObjects(fetched[@"behind"], @1, @"%@", code);
 
@@ -603,7 +609,7 @@ static NSString *RV2Hex(const git_oid *oid) {
   XCTAssertNotNil(oursOid);
   NSDictionary *fetched = [self bridge:^(RV2Resolve resolve, RV2Reject reject) {
     [self.module fetchV2Request:[self requestWith:@{
-      @"operation_id" : NSUUID.UUID.UUIDString.lowercaseString, @"remote" : @"origin" }] resolver:resolve rejecter:reject];
+      @"operation_id" : NSUUID.UUID.UUIDString.lowercaseString, @"remote" : @"origin", @"https_proxy_url" : NSNull.null }] resolver:resolve rejecter:reject];
   } code:&code];
   XCTAssertEqualObjects(fetched[@"ahead"], @1, @"%@", code);
   XCTAssertEqualObjects(fetched[@"remote_oid"], theirsOid);
@@ -832,6 +838,122 @@ static NSString *RV2Hex(const git_oid *oid) {
   XCTAssertEqualObjects([self repositoryFacts][@"head"], mergeOid);
   XCTAssertEqualObjects([self repositoryFacts][@"journal"], @YES);
   [NSFileManager.defaultManager removeItemAtPath:d[@"scratch"] error:nil];
+}
+
+// ---------------------------------------------------------------------------
+// The person's HTTPS proxy on fetch. Every connection goes through it, never
+// around it; the positive leg runs against scripts/git-test-proxy.py, which
+// counts every CONNECT (TEST_RUNNER_RISH_PROXY_BASE=http://127.0.0.1:N/).
+
+/// One control request to the test proxy over a raw socket, its JSON body.
+static NSDictionary *RV2ProxyControl(NSString *base, NSString *method, NSString *path) {
+  NSURLComponents *url = [NSURLComponents componentsWithString:base];
+  int fd = socket(AF_INET, SOCK_STREAM, 0);
+  if (fd < 0) return nil;
+  struct sockaddr_in address = {};
+  address.sin_family = AF_INET;
+  address.sin_port = htons((uint16_t)url.port.integerValue);
+  inet_pton(AF_INET, url.host.UTF8String, &address.sin_addr);
+  NSMutableData *reply = [NSMutableData data];
+  if (connect(fd, (struct sockaddr *)&address, sizeof(address)) == 0) {
+    NSString *request = [NSString stringWithFormat:@"%@ %@ HTTP/1.1\r\nHost: proxy\r\nContent-Length: 0\r\n\r\n", method, path];
+    const char *bytes = request.UTF8String;
+    (void)write(fd, bytes, strlen(bytes));
+    char buffer[4096];
+    ssize_t count = 0;
+    while ((count = read(fd, buffer, sizeof(buffer))) > 0) [reply appendBytes:buffer length:(NSUInteger)count];
+  }
+  close(fd);
+  NSString *text = [[NSString alloc] initWithData:reply encoding:NSUTF8StringEncoding];
+  NSRange split = [text rangeOfString:@"\r\n\r\n"];
+  if (split.location == NSNotFound) return nil;
+  NSData *body = [[text substringFromIndex:NSMaxRange(split)] dataUsingEncoding:NSUTF8StringEncoding];
+  id value = [NSJSONSerialization JSONObjectWithData:body options:0 error:nil];
+  return [value isKindOfClass:NSDictionary.class] ? value : nil;
+}
+
+- (NSDictionary *)fetchWithProxy:(id)proxy code:(NSString **)code {
+  return [self bridge:^(RV2Resolve resolve, RV2Reject reject) {
+    [self.module fetchV2Request:[self requestWith:@{
+      @"operation_id" : NSUUID.UUID.UUIDString.lowercaseString, @"remote" : @"origin", @"https_proxy_url" : proxy,
+    }] resolver:resolve rejecter:reject];
+  } code:code];
+}
+
+- (void)testAFetchProxyIsJudgedAndNeverUsedForARemoteItCannotCarry {
+  NSError *error = nil;
+  NSString *code = nil;
+  NSString *scratch = [NSTemporaryDirectory() stringByAppendingPathComponent:
+      [NSString stringWithFormat:@"rish-proxy-%@", NSUUID.UUID.UUIDString.lowercaseString]];
+  NSString *barePath = [scratch stringByAppendingPathComponent:@"origin.git"];
+  git_repository *bare = nullptr;
+  git_repository_init_options bareOptions = GIT_REPOSITORY_INIT_OPTIONS_INIT;
+  bareOptions.flags = GIT_REPOSITORY_INIT_BARE | GIT_REPOSITORY_INIT_MKPATH;
+  XCTAssertEqual(git_repository_init_ext(&bare, barePath.UTF8String, &bareOptions), 0);
+  git_repository_free(bare);
+  @autoreleasepool {
+    __attribute__((objc_precise_lifetime)) DSHLocalProjectLease *lease = [self.projectAccess
+        leaseWorkspaceRootRef:self.projectRoot mode:DSHLocalProjectAccessModeWrite includeMetadata:NO timeout:1 error:&error];
+    XCTAssertNotNil(lease, @"%@", error);
+    git_remote *remote = nullptr;
+    XCTAssertEqual(git_remote_create(&remote, lease.repository, "origin", barePath.UTF8String), 0);
+    git_remote_free(remote);
+    XCTAssertNotNil(RV2Commit(lease.repository, @"a.txt", @"a\n", @"first"));
+  }
+  for (NSString *bad in @[ @"proxy:3128", @"http://proxy.example.com", @"ftp://proxy.example.com:21",
+                           @"http://u:p@proxy.example.com:8080", @"http://proxy.example.com:8080/x" ]) {
+    XCTAssertNil([self fetchWithProxy:bad code:&code], @"%@", bad);
+    XCTAssertEqualObjects(code, @"E_PROJECT_REQUEST_INVALID", @"%@", bad);
+  }
+  // A local-path origin (as a plain http or SSH one) would not go through an
+  // HTTP proxy at all; with one set it is refused rather than fetched around it.
+  XCTAssertNil([self fetchWithProxy:@"http://127.0.0.1:3128" code:&code]);
+  XCTAssertEqualObjects(code, @"E_PROJECT_REQUEST_INVALID");
+  // Without a proxy the same fetch works.
+  XCTAssertNotNil([self fetchWithProxy:NSNull.null code:&code], @"%@", code);
+  [NSFileManager.defaultManager removeItemAtPath:scratch error:nil];
+}
+
+- (void)testAFetchGoesThroughTheProxyAndNeverAroundIt {
+  NSString *proxy = NSProcessInfo.processInfo.environment[@"RISH_PROXY_BASE"];
+  if (proxy.length == 0) XCTSkip(@"no test proxy: set TEST_RUNNER_RISH_PROXY_BASE");
+  if (RV2ProxyControl(proxy, @"POST", @"/__rish_mode?mode=tunnel") == nil) XCTSkip(@"the test proxy does not answer");
+  NSString *code = nil;
+  NSDictionary *set = [self bridge:^(RV2Resolve resolve, RV2Reject reject) {
+    [self.module setRemoteV2Request:[self requestWith:@{ @"url" : @"https://github.com/octocat/Hello-World.git" }]
+                           resolver:resolve rejecter:reject];
+  } code:&code];
+  XCTAssertNotNil(set, @"%@", code);
+  @autoreleasepool {
+    NSError *error = nil;
+    __attribute__((objc_precise_lifetime)) DSHLocalProjectLease *lease = [self.projectAccess
+        leaseWorkspaceRootRef:self.projectRoot mode:DSHLocalProjectAccessModeWrite includeMetadata:NO timeout:1 error:&error];
+    XCTAssertNotNil(RV2Commit(lease.repository, @"a.txt", @"a\n", @"first"));
+  }
+  NSInteger (^tunnels)(void) = ^NSInteger {
+    return [RV2ProxyControl(proxy, @"GET", @"/__rish_stats")[@"connects"][@"github.com:443"] integerValue];
+  };
+  // A direct fetch first: GitHub is reachable, so what follows is about the proxy.
+  if ([self fetchWithProxy:NSNull.null code:&code] == nil) XCTSkip(@"github.com is not reachable: %@", code);
+  NSInteger before = tunnels();
+  NSDictionary *fetched = [self fetchWithProxy:proxy code:&code];
+  XCTAssertNotNil(fetched, @"%@", code);
+  XCTAssertGreaterThan(tunnels(), before, @"the fetch did not go through the proxy");
+
+  // Refused by the proxy: the fetch fails, and does not go around it -- a
+  // direct fetch of this public repository would have succeeded.
+  RV2ProxyControl(proxy, @"POST", @"/__rish_mode?mode=refuse");
+  NSInteger refusedBefore = [RV2ProxyControl(proxy, @"GET", @"/__rish_stats")[@"refused"] integerValue];
+  NSInteger tunnelsBefore = tunnels();
+  XCTAssertNil([self fetchWithProxy:proxy code:&code]);
+  RV2ProxyControl(proxy, @"POST", @"/__rish_mode?mode=tunnel");
+  // Said as the proxy's failure, not a generic one.
+  XCTAssertEqualObjects(code, @"E_PROJECT_PROXY");
+  XCTAssertGreaterThan([RV2ProxyControl(proxy, @"GET", @"/__rish_stats")[@"refused"] integerValue], refusedBefore);
+  XCTAssertEqual(tunnels(), tunnelsBefore);
+  // A proxy nothing listens on is the proxy's failure too.
+  XCTAssertNil([self fetchWithProxy:@"http://127.0.0.1:1/" code:&code]);
+  XCTAssertEqualObjects(code, @"E_PROJECT_PROXY");
 }
 
 @end

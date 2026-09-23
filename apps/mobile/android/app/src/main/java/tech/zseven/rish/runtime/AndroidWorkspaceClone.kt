@@ -96,6 +96,13 @@ internal class AndroidWorkspaceClone(
         ) {
             throw refused(REQUEST_INVALID, "clone request is invalid")
         }
+        val proxy = try {
+            AndroidGitProxyUrl.canonical(request.opt("https_proxy_url"))
+        } catch (_: AndroidGitProxyUrl.Invalid) {
+            throw refused(REQUEST_INVALID, "https proxy url is invalid")
+        }
+        // libgit2 would send a plain http remote straight past the proxy.
+        if (!AndroidGitProxyUrl.usableWith(proxy, url)) throw refused(REQUEST_INVALID, "a proxy cannot carry a plain http remote")
         if (!RishLibgit2Native.require()) throw refused(UNAVAILABLE, "libgit2 is not available")
         // The credential the person typed for this very clone, if any. It is
         // taken now, so a clone that fails does not leave it for another.
@@ -123,7 +130,7 @@ internal class AndroidWorkspaceClone(
                 String(
                     RishLibgit2Native.cloneCheckout(
                         stagedGit.absolutePath, stagedWork.absolutePath, operationId, host,
-                        credential?.username ?: "", credential?.token ?: "", TIMEOUT_SECONDS,
+                        credential?.username ?: "", credential?.token ?: "", TIMEOUT_SECONDS, proxy ?: "",
                     ),
                     Charsets.UTF_8,
                 ),
@@ -141,6 +148,7 @@ internal class AndroidWorkspaceClone(
                 throw refused(
                     when (outcome.optString("outcome")) {
                         "auth_failure" -> AUTH_REJECTED
+                        "proxy_failed" -> PROXY_FAILED
                         "timed_out" -> TIMED_OUT
                         "cancelled" -> CANCELLED
                         "empty" -> REMOTE_MISSING
@@ -226,7 +234,7 @@ internal class AndroidWorkspaceClone(
     private fun refused(number: Int, reason: String) = AndroidWorkspaceProjects.Refused(number, reason)
 
     private companion object {
-        val CLONE_KEYS = setOf("schema_version", "operation_id", "url", "display_name")
+        val CLONE_KEYS = setOf("schema_version", "operation_id", "url", "display_name", "https_proxy_url")
         val PROMPT_KEYS = setOf("schema_version", "operation_id", "url", "locale")
         val CANCEL_KEYS = setOf("schema_version", "operation_id")
         const val OFFER_TTL_MS = 5L * 60 * 1000
@@ -241,5 +249,7 @@ internal class AndroidWorkspaceClone(
         const val AUTH_REJECTED = 3197
         const val TIMED_OUT = 3198
         const val NATIVE = 3199
+        /** The person's proxy refused, failed or could not be reached. */
+        const val PROXY_FAILED = 3182
     }
 }

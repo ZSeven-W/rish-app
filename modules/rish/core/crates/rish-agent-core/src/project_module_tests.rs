@@ -21,6 +21,7 @@ fn every_module_failure_maps_to_its_stable_code() {
         (3196, "E_PROJECT_NON_FAST_FORWARD"),
         (3180, "E_PROJECT_MERGE_UNSUPPORTED"),
         (3181, "E_PROJECT_RECOVERY_REQUIRED"),
+        (3182, "E_PROJECT_PROXY"),
         (3197, "E_PROJECT_CREDENTIAL"),
         (3198, "E_PROJECT_TIMEOUT"),
     ] {

@@ -436,22 +436,35 @@ test('fetch and fast-forward pull travel by root and are held to their shapes', 
   };
   native.fetchV2.mockResolvedValue(fetched);
   await expect(
-    LocalProjects.fetchV2({ schema_version: 1, root: root(), operation_id: OPERATION_ID, remote: 'origin' }),
+    LocalProjects.fetchV2({ schema_version: 1, root: root(), operation_id: OPERATION_ID, remote: 'origin', https_proxy_url: null }),
   ).resolves.toEqual(fetched);
   expect(native.fetchV2).toHaveBeenCalledWith({
-    schema_version: 1, root: root(), operation_id: OPERATION_ID, remote: 'origin',
+    schema_version: 1, root: root(), operation_id: OPERATION_ID, remote: 'origin', https_proxy_url: null,
   });
+  // The person's proxy travels with the fetch, in its one canonical spelling;
+  // a malformed one, or none at all where the key is required, never leaves JS.
+  await LocalProjects.fetchV2({
+    schema_version: 1, root: root(), operation_id: OPERATION_ID, remote: 'origin', https_proxy_url: 'http://127.0.0.1:7890',
+  });
+  expect(native.fetchV2).toHaveBeenLastCalledWith(expect.objectContaining({ https_proxy_url: 'http://127.0.0.1:7890/' }));
+  const dispatchedFetches = native.fetchV2.mock.calls.length;
+  for (const bad of [{ https_proxy_url: 'proxy:3128' }, { https_proxy_url: 'http://u:p@proxy.example.com:1/' }, {}]) {
+    await expect(
+      LocalProjects.fetchV2({ schema_version: 1, root: root(), operation_id: OPERATION_ID, remote: 'origin', ...bad }),
+    ).rejects.toMatchObject({ code: 'E_PROJECT_REQUEST_INVALID' });
+  }
+  expect(native.fetchV2.mock.calls.length).toBe(dispatchedFetches);
   // Nothing fetched for the branch is an answer, not a refusal.
   native.fetchV2.mockResolvedValueOnce({ ...fetched, remote_oid: null, behind: 0 });
   await expect(
-    LocalProjects.fetchV2({ schema_version: 1, root: root(), operation_id: OPERATION_ID, remote: 'origin' }),
+    LocalProjects.fetchV2({ schema_version: 1, root: root(), operation_id: OPERATION_ID, remote: 'origin', https_proxy_url: null }),
   ).resolves.toMatchObject({ remote_oid: null, behind: 0 });
   await expect(
-    LocalProjects.fetchV2({ schema_version: 1, root: root(), operation_id: OPERATION_ID, remote: 'upstream' }),
+    LocalProjects.fetchV2({ schema_version: 1, root: root(), operation_id: OPERATION_ID, remote: 'upstream', https_proxy_url: null }),
   ).rejects.toMatchObject({ code: 'E_PROJECT_REQUEST_INVALID' });
   native.fetchV2.mockResolvedValueOnce({ ...fetched, behind: -1 });
   await expect(
-    LocalProjects.fetchV2({ schema_version: 1, root: root(), operation_id: OPERATION_ID, remote: 'origin' }),
+    LocalProjects.fetchV2({ schema_version: 1, root: root(), operation_id: OPERATION_ID, remote: 'origin', https_proxy_url: null }),
   ).rejects.toMatchObject({ code: 'E_PROJECT_RESULT_INVALID' });
 
   const previous = 'c'.repeat(40);
@@ -477,6 +490,11 @@ test('fetch and fast-forward pull travel by root and are held to their shapes', 
   await expect(
     LocalProjects.pullFastForwardV2({ schema_version: 1, root: root(), expected_head_oid: null }),
   ).rejects.toMatchObject({ code: 'E_PROJECT_REQUEST_INVALID' });
+  // A proxy that failed is said as such, not as a generic native failure.
+  native.fetchV2.mockRejectedValueOnce(Object.assign(new Error('E_PROJECT_PROXY'), { code: 'E_PROJECT_PROXY' }));
+  await expect(
+    LocalProjects.fetchV2({ schema_version: 1, root: root(), operation_id: OPERATION_ID, remote: 'origin', https_proxy_url: null }),
+  ).rejects.toMatchObject({ code: 'E_PROJECT_PROXY' });
   native.pullFastForwardV2.mockRejectedValueOnce(
     Object.assign(new Error('E_PROJECT_NON_FAST_FORWARD'), { code: 'E_PROJECT_NON_FAST_FORWARD' }),
   );
@@ -581,18 +599,28 @@ test('a workspace clone is requested by url and name and answers the attached pr
   native.cloneWorkspaceV2.mockResolvedValue(cloned);
   expect(LocalProjects.isWorkspaceCloneAvailable()).toBe(true);
   await expect(
-    LocalProjects.cloneWorkspaceV2({ schema_version: 1, operation_id: OPERATION_ID, url: 'https://github.com/example/demo.git', display_name: 'demo' }),
+    LocalProjects.cloneWorkspaceV2({ schema_version: 1, operation_id: OPERATION_ID, url: 'https://github.com/example/demo.git', display_name: 'demo', https_proxy_url: null }),
   ).resolves.toEqual(cloned);
   expect(native.cloneWorkspaceV2).toHaveBeenCalledWith({
-    schema_version: 1, operation_id: OPERATION_ID, url: 'https://github.com/example/demo.git', display_name: 'demo',
+    schema_version: 1, operation_id: OPERATION_ID, url: 'https://github.com/example/demo.git', display_name: 'demo', https_proxy_url: null,
   });
   // The answer must agree with itself: root, project and workspace name one thing.
   native.cloneWorkspaceV2.mockResolvedValueOnce({ ...cloned, workspace: { workspace_id: PROJECT_ID, display_name: 'x' } });
   await expect(
-    LocalProjects.cloneWorkspaceV2({ schema_version: 1, operation_id: OPERATION_ID, url: 'https://github.com/example/demo.git', display_name: 'demo' }),
+    LocalProjects.cloneWorkspaceV2({ schema_version: 1, operation_id: OPERATION_ID, url: 'https://github.com/example/demo.git', display_name: 'demo', https_proxy_url: null }),
   ).rejects.toMatchObject({ code: 'E_PROJECT_RESULT_INVALID' });
   await expect(
-    LocalProjects.cloneWorkspaceV2({ schema_version: 1, operation_id: OPERATION_ID, url: '', display_name: 'demo' }),
+    LocalProjects.cloneWorkspaceV2({ schema_version: 1, operation_id: OPERATION_ID, url: '', display_name: 'demo', https_proxy_url: null }),
+  ).rejects.toMatchObject({ code: 'E_PROJECT_REQUEST_INVALID' });
+  await LocalProjects.cloneWorkspaceV2({
+    schema_version: 1, operation_id: OPERATION_ID, url: 'https://github.com/example/demo.git', display_name: 'demo',
+    https_proxy_url: 'https://proxy.example.com:8443',
+  });
+  expect(native.cloneWorkspaceV2).toHaveBeenLastCalledWith(
+    expect.objectContaining({ https_proxy_url: 'https://proxy.example.com:8443/' }),
+  );
+  await expect(
+    LocalProjects.cloneWorkspaceV2({ schema_version: 1, operation_id: OPERATION_ID, url: 'https://github.com/example/demo.git', display_name: 'demo' }),
   ).rejects.toMatchObject({ code: 'E_PROJECT_REQUEST_INVALID' });
   native.cancelWorkspaceCloneV2.mockResolvedValue({ schema_version: 2, operation_id: OPERATION_ID, status: 'cancel_requested' });
   await expect(LocalProjects.cancelWorkspaceCloneV2(OPERATION_ID)).resolves.toBe('cancel_requested');
@@ -648,17 +676,17 @@ test('a clone that asks for a credential is given one through the native prompt,
   native.cloneWorkspaceV2.mockResolvedValue(cloned);
   await expect(
     LocalProjects.cloneWorkspaceV2({
-      schema_version: 1, operation_id: OPERATION_ID, url: 'https://github.com/example/demo.git', display_name: 'demo',
+      schema_version: 1, operation_id: OPERATION_ID, url: 'https://github.com/example/demo.git', display_name: 'demo', https_proxy_url: null,
       credential_reference: 'prompt',
     }),
   ).resolves.toEqual(cloned);
   expect(native.cloneWorkspaceV2).toHaveBeenLastCalledWith({
-    schema_version: 1, operation_id: OPERATION_ID, url: 'https://github.com/example/demo.git', display_name: 'demo',
+    schema_version: 1, operation_id: OPERATION_ID, url: 'https://github.com/example/demo.git', display_name: 'demo', https_proxy_url: null,
     credential_reference: 'prompt',
   });
   await expect(
     LocalProjects.cloneWorkspaceV2({
-      schema_version: 1, operation_id: OPERATION_ID, url: 'https://github.com/example/demo.git', display_name: 'demo',
+      schema_version: 1, operation_id: OPERATION_ID, url: 'https://github.com/example/demo.git', display_name: 'demo', https_proxy_url: null,
       credential_reference: 'stored',
     }),
   ).rejects.toMatchObject({ code: 'E_PROJECT_REQUEST_INVALID' });

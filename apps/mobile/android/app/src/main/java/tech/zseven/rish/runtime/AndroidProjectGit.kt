@@ -172,9 +172,7 @@ internal class AndroidProjectGit(
         ) {
             throw refused(REQUEST_INVALID, "git push request is invalid")
         }
-        // No proxy on Android yet: a request that names one is refused
-        // rather than sent past it.
-        if (request.opt("https_proxy_url") != JSONObject.NULL) throw refused(REQUEST_INVALID, "https proxy is not supported here")
+        val proxy = proxyOf(request)
         val opened = open(request, write = true)
         val status = answer(RishLibgit2Native.status(opened.gitDir, opened.workDir))
         val branch = status.opt("branch") as? String
@@ -182,11 +180,12 @@ internal class AndroidProjectGit(
         if (branch.isNullOrEmpty() || head != expected) throw refused(HEAD_CHANGED, "git HEAD changed")
         val url = originUrl(opened) ?: throw refused(REMOTE_MISSING, "git remote is not configured")
         val host = hostOf(url)
+        requireProxyUsable(proxy, url)
         val credential = credentialStore().read(opened.projectId, host) ?: throw refused(CREDENTIAL_MISSING, "git credential is unavailable")
         val reply = answer(
             RishLibgit2Native.push(
                 opened.gitDir, opened.workDir, operationId, url, host, "refs/heads/$branch", expected,
-                credential.username, credential.token, PUSH_TIMEOUT_SECONDS, false, null,
+                credential.username, credential.token, PUSH_TIMEOUT_SECONDS, false, null, proxy ?: "",
             ),
         )
         val outcome = reply.optString("outcome")
@@ -195,6 +194,7 @@ internal class AndroidProjectGit(
                 when (outcome) {
                     "non_fast_forward" -> NON_FAST_FORWARD
                     "auth_failure" -> AUTH_REJECTED
+                    "proxy_failed" -> PROXY_FAILED
                     "timed_out" -> TIMED_OUT
                     "cancelled" -> CANCELLED
                     else -> NATIVE
@@ -239,16 +239,18 @@ internal class AndroidProjectGit(
         if (operationId == null || !projects.canonicalOperationId(operationId) || request.opt("remote") != "origin") {
             throw refused(REQUEST_INVALID, "git fetch request is invalid")
         }
+        val proxy = proxyOf(request)
         val opened = open(request, write = true)
         val branch = answer(RishLibgit2Native.status(opened.gitDir, opened.workDir)).opt("branch") as? String
         if (branch.isNullOrEmpty()) throw refused(HEAD_CHANGED, "no branch to fetch for")
         val url = originUrl(opened) ?: throw refused(REMOTE_MISSING, "git remote is not configured")
         val host = hostOf(url)
+        requireProxyUsable(proxy, url)
         val credential = credentialStore().read(opened.projectId, host)
         val reply = answer(
             RishLibgit2Native.fetch(
                 opened.gitDir, opened.workDir, operationId, url, host, branch,
-                credential?.username ?: "", credential?.token ?: "", PUSH_TIMEOUT_SECONDS,
+                credential?.username ?: "", credential?.token ?: "", PUSH_TIMEOUT_SECONDS, proxy ?: "",
             ),
         )
         val outcome = reply.optString("outcome")
@@ -256,6 +258,7 @@ internal class AndroidProjectGit(
             throw refused(
                 when (outcome) {
                     "auth_failure" -> AUTH_REJECTED
+                    "proxy_failed" -> PROXY_FAILED
                     "timed_out" -> TIMED_OUT
                     "cancelled" -> CANCELLED
                     else -> NATIVE
@@ -545,6 +548,20 @@ internal class AndroidProjectGit(
         return reply
     }
 
+    /** The request's proxy, canonical, or null for none; a malformed one is refused. */
+    private fun proxyOf(request: JSONObject): String? = try {
+        AndroidGitProxyUrl.canonical(request.opt("https_proxy_url"))
+    } catch (_: AndroidGitProxyUrl.Invalid) {
+        throw refused(REQUEST_INVALID, "https proxy url is invalid")
+    }
+
+    /** A proxy is never silently skipped: an http remote libgit2 would not route through it is refused. */
+    private fun requireProxyUsable(proxy: String?, remoteUrl: String) {
+        if (!AndroidGitProxyUrl.usableWith(proxy, remoteUrl)) {
+            throw refused(REQUEST_INVALID, "a proxy cannot carry a plain http remote")
+        }
+    }
+
     private fun stamped(reply: JSONObject, opened: Opened): JSONObject =
         reply.put("schema_version", 2).put("root", opened.root).put("project_id", opened.projectId)
 
@@ -573,6 +590,8 @@ internal class AndroidProjectGit(
         private const val REQUEST_INVALID = AndroidWorkspaceProjects.REQUEST_INVALID
         private const val UNAVAILABLE = AndroidWorkspaceProjects.UNAVAILABLE
         private const val NATIVE = 3199
+        /** The person's proxy refused, failed or could not be reached; see [AndroidGitProxyUrl]. */
+        private const val PROXY_FAILED = 3182
         private const val CONTEXT_LINES = 3
         private const val MAX_DIFF_BYTES = 1024L * 1024
         private const val MAX_COMMIT_MESSAGE_BYTES = 500
@@ -590,7 +609,7 @@ internal class AndroidProjectGit(
             "schema_version", "root", "operation_id", "remote", "expected_local_oid", "credential_reference", "https_proxy_url",
         )
         private val CANCEL_PUSH_KEYS = setOf("schema_version", "root", "operation_id")
-        private val FETCH_KEYS = setOf("schema_version", "root", "operation_id", "remote")
+        private val FETCH_KEYS = setOf("schema_version", "root", "operation_id", "remote", "https_proxy_url")
         private val PULL_KEYS = setOf("schema_version", "root", "expected_head_oid")
         private val MERGE_KEYS = setOf(
             "schema_version", "root", "operation_id", "expected_branch", "expected_head_oid",

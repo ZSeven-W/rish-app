@@ -66,7 +66,17 @@ typedef NS_ENUM(NSInteger, DSHGitPushOutcome) {
   DSHGitPushOutcomeTimedOut,
   DSHGitPushOutcomeCancelled,
   DSHGitPushOutcomeFailed,
+  /// The proxy the person set refused, failed or could not be reached.
+  /// Last, so the values before it keep their numbers.
+  DSHGitPushOutcomeProxyFailed,
 };
+
+/// Whether libgit2's last error came from `proxyURL` rather than the
+/// repository: libgit2 words every proxy refusal "proxy ..." (including a
+/// 407, which it returns as GIT_EAUTH), and names an unreachable proxy's
+/// host in the connect error. NO when no proxy is set. Ask before treating
+/// GIT_EAUTH as the repository turning a credential away.
+BOOL DSHGitProxyFailed(NSString *_Nullable proxyURL);
 
 /// Cancellation token polled by the bounded push runner.
 @interface DSHGitPushCancelToken : NSObject

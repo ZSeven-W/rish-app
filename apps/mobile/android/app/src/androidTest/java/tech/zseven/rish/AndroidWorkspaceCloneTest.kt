@@ -49,11 +49,49 @@ class AndroidWorkspaceCloneTest {
     }
 
     private fun request(url: String, name: String = "Cloned", operationId: String = UUID.randomUUID().toString()): JSONObject =
-        JSONObject().put("schema_version", 1).put("operation_id", operationId).put("url", url).put("display_name", name)
+        JSONObject().put("schema_version", 1).put("operation_id", operationId).put("url", url).put("display_name", name).put("https_proxy_url", JSONObject.NULL)
 
     private fun refusal(block: () -> Unit): Int {
         try { block() } catch (refused: AndroidWorkspaceProjects.Refused) { return refused.number }
         throw AssertionError("expected a refusal")
+    }
+
+    /**
+     * A clone through the person's proxy, counted by scripts/git-test-proxy.py
+     * (pass rish_proxy_base=http://10.0.2.2:N). A plain http remote with a
+     * proxy is refused: libgit2 would send it straight past the proxy.
+     */
+    @Test
+    fun aCloneGoesThroughTheProxy() {
+        val proxy = InstrumentationRegistry.getArguments().getString("rish_proxy_base")
+        assumeTrue("no test proxy: pass rish_proxy_base", proxy != null)
+        assumeTrue("github.com is not reachable", try {
+            java.net.Socket().use { it.connect(java.net.InetSocketAddress("github.com", 443), 5_000) }; true
+        } catch (_: Exception) { false })
+        assertTrue(tech.zseven.rish.runtime.AndroidGitCertificates.ensure(context) != null)
+        val f = fixture()
+        fun tunnels(): Int {
+            val uri = java.net.URI(proxy)
+            java.net.Socket(uri.host, uri.port).use { socket ->
+                socket.soTimeout = 10_000
+                socket.getOutputStream().write("GET /__rish_stats HTTP/1.1\r\nHost: proxy\r\n\r\n".toByteArray())
+                val text = socket.getInputStream().readBytes().toString(Charsets.UTF_8)
+                return JSONObject(text.substringAfter("\r\n\r\n")).getJSONObject("connects").optInt("github.com:443", 0)
+            }
+        }
+        val before = tunnels()
+        val result = f.clone.clone(
+            request("https://github.com/octocat/Hello-World.git", "Hello").put("https_proxy_url", proxy),
+        )
+        assertEquals("master", result.getString("branch"))
+        assertTrue("the clone did not go through the proxy", tunnels() > before)
+        assertEquals(3101, refusal {
+            f.clone.clone(request("http://10.0.2.2:1/demo.git", "Plain").put("https_proxy_url", proxy))
+        })
+        assertEquals(3101, refusal {
+            f.clone.clone(request("https://github.com/octocat/Hello-World.git", "Bad").put("https_proxy_url", "proxy:3128"))
+        })
+        f.scratch.deleteRecursively()
     }
 
     @Test

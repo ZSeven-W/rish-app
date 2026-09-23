@@ -88,7 +88,26 @@ struct PushState {
   bool interrupted_by_cancel = false;
   bool interrupted_by_deadline = false;
   bool bytes_may_have_been_sent = false;
+  // The proxy every connection of this operation goes through, or empty for
+  // none. Held here so the C string outlives each connect.
+  std::string proxy;
 };
+
+/// Every connection names its proxy explicitly: the configured one, or none.
+/// Never GIT_PROXY_AUTO, and never a quiet fallback to a direct connection
+/// when the proxy fails -- a person who set one did so because direct does
+/// not work or is not allowed. The origin's certificate is still checked
+/// through the tunnel; the proxy's own (an https:// proxy) by the default
+/// verification against the exported system roots.
+void ApplyProxy(git_proxy_options *options, const PushState &state) {
+  if (state.proxy.empty()) {
+    options->type = GIT_PROXY_NONE;
+    options->url = nullptr;
+  } else {
+    options->type = GIT_PROXY_SPECIFIED;
+    options->url = state.proxy.c_str();
+  }
+}
 
 int AbortIfRequested(PushState *state) {
   if (state == nullptr) return 0;
@@ -218,6 +237,7 @@ const char *OutcomeName(int outcome) {
     case 4: return "auth_failure";
     case 5: return "timed_out";
     case 6: return "cancelled";
+    case 8: return "proxy_failed";
     default: return "failed";
   }
 }
@@ -240,9 +260,25 @@ std::string Encode(const PushResult &result) {
          (result.outcome == 7 ? ",\"error\":" + Quoted(LastError()) : std::string()) + "}";
 }
 
+/// Whether a failure came from the proxy rather than the repository: libgit2
+/// words every proxy refusal "proxy ..." (a status it did not expect, or
+/// authentication it cannot do), and a proxy it cannot reach is named in the
+/// connect error. Judged before authentication, because a proxy's 407 comes
+/// back as GIT_EAUTH and would otherwise blame the repository's credential.
+bool ProxyFailed(const PushState &state) {
+  if (state.proxy.empty()) return false;
+  const std::string message = LastError();
+  if (message.rfind("proxy ", 0) == 0) return true;
+  std::string host = state.proxy.substr(state.proxy.find("://") + 3);
+  host = host.substr(0, host.rfind(':'));
+  return !host.empty() && (message.find("failed to connect to " + host) != std::string::npos ||
+                           message.find("failed to resolve address for " + host) != std::string::npos);
+}
+
 int InterruptedOutcome(const PushState &state, int code, int otherwise) {
   if (state.interrupted_by_cancel) return 6;
   if (state.interrupted_by_deadline) return 5;
+  if (ProxyFailed(state)) return 8;
   if (code == GIT_EAUTH) return 4;
   return otherwise;
 }
@@ -267,7 +303,7 @@ PushResult Execute(git_repository *repository, const std::string &remote_url, co
   if (code == 0) code = git_remote_connect_options_init(&connect_options, GIT_REMOTE_CONNECT_OPTIONS_VERSION);
   if (code == 0) {
     push_options.follow_redirects = GIT_REMOTE_REDIRECT_NONE;
-    push_options.proxy_opts.type = GIT_PROXY_NONE;
+    ApplyProxy(&push_options.proxy_opts, *state);
     FillCallbacks(&push_options.callbacks, state, with_credentials);
     connect_options.callbacks = push_options.callbacks;
     connect_options.follow_redirects = push_options.follow_redirects;
@@ -427,7 +463,7 @@ Java_tech_zseven_rish_runtime_RishLibgit2Native_push(JNIEnv *env, jclass, jstrin
                                                      jstring referenceValue, jstring localOidValue,
                                                      jstring usernameValue, jstring tokenValue,
                                                      jint timeoutSeconds, jboolean hasExpected,
-                                                     jstring expectedRemoteOidValue) {
+                                                     jstring expectedRemoteOidValue, jstring proxyValue) {
   const char *gitdir = Chars(env, gitDirValue);
   const char *workdir = Chars(env, workDirValue);
   const std::string operation = String(env, operationValue);
@@ -438,6 +474,7 @@ Java_tech_zseven_rish_runtime_RishLibgit2Native_push(JNIEnv *env, jclass, jstrin
   const std::string local_oid = String(env, localOidValue);
   const std::string username = String(env, usernameValue);
   const std::string token = String(env, tokenValue);
+  const std::string proxy = String(env, proxyValue);
   std::string answer;
   git_repository *repository = nullptr;
   do {
@@ -456,6 +493,7 @@ Java_tech_zseven_rish_runtime_RishLibgit2Native_push(JNIEnv *env, jclass, jstrin
     state.token = token;
     state.target_ref = reference;
     state.cancel = cancel;
+    state.proxy = proxy;
     state.deadline = std::chrono::steady_clock::now() + std::chrono::seconds(timeoutSeconds);
     const PushResult result =
         Execute(repository, remote_url, reference, local_oid, &state, hasExpected == JNI_TRUE, expected_remote_oid);
@@ -476,7 +514,7 @@ Java_tech_zseven_rish_runtime_RishLibgit2Native_remoteRefOid(JNIEnv *env, jclass
                                                              jstring workDirValue, jstring remoteUrlValue,
                                                              jstring hostValue, jstring referenceValue,
                                                              jstring usernameValue, jstring tokenValue,
-                                                             jint timeoutSeconds) {
+                                                             jint timeoutSeconds, jstring proxyValue) {
   const char *gitdir = Chars(env, gitDirValue);
   const char *workdir = Chars(env, workDirValue);
   const std::string remote_url = String(env, remoteUrlValue);
@@ -484,6 +522,7 @@ Java_tech_zseven_rish_runtime_RishLibgit2Native_remoteRefOid(JNIEnv *env, jclass
   const std::string reference = String(env, referenceValue);
   const std::string username = String(env, usernameValue);
   const std::string token = String(env, tokenValue);
+  const std::string proxy = String(env, proxyValue);
   std::string answer;
   git_repository *repository = nullptr;
   git_remote *remote = nullptr;
@@ -500,6 +539,7 @@ Java_tech_zseven_rish_runtime_RishLibgit2Native_remoteRefOid(JNIEnv *env, jclass
     state.username = username;
     state.token = token;
     state.target_ref = reference;
+    state.proxy = proxy;
     state.deadline = std::chrono::steady_clock::now() + std::chrono::seconds(timeoutSeconds);
     int code = git_remote_lookup(&remote, repository, "origin");
     if (code == 0 && !remote_url.empty()) code = git_remote_set_instance_url(remote, remote_url.c_str());
@@ -507,7 +547,7 @@ Java_tech_zseven_rish_runtime_RishLibgit2Native_remoteRefOid(JNIEnv *env, jclass
     if (code == 0) code = git_remote_connect_options_init(&connect_options, GIT_REMOTE_CONNECT_OPTIONS_VERSION);
     if (code == 0) {
       connect_options.follow_redirects = GIT_REMOTE_REDIRECT_NONE;
-      connect_options.proxy_opts.type = GIT_PROXY_NONE;
+      ApplyProxy(&connect_options.proxy_opts, state);
       FillCallbacks(&connect_options.callbacks, &state, !token.empty() && !username.empty());
       code = git_remote_connect_ext(remote, GIT_DIRECTION_FETCH, &connect_options);
     }
@@ -516,7 +556,8 @@ Java_tech_zseven_rish_runtime_RishLibgit2Native_remoteRefOid(JNIEnv *env, jclass
     if (code == 0) code = ls_code;
     if (git_remote_connected(remote)) git_remote_disconnect(remote);
     if (code != 0) {
-      answer = Failure(InterruptedOutcome(state, code, 7) == 4 ? 3197 : 3199, "remote_ls");
+      const int outcome = InterruptedOutcome(state, code, 7);
+      answer = Failure(outcome == 4 ? 3197 : outcome == 8 ? 3182 : 3199, "remote_ls");
       break;
     }
     answer = std::string("{\"ok\":true,\"oid\":") + (advertised.empty() ? "null" : Quoted(advertised)) + "}";
@@ -571,7 +612,7 @@ Java_tech_zseven_rish_runtime_RishLibgit2Native_fetch(JNIEnv *env, jclass, jstri
                                                       jstring workDirValue, jstring operationValue,
                                                       jstring remoteUrlValue, jstring hostValue,
                                                       jstring branchValue, jstring usernameValue,
-                                                      jstring tokenValue, jint timeoutSeconds) {
+                                                      jstring tokenValue, jint timeoutSeconds, jstring proxyValue) {
   const char *gitdir = Chars(env, gitDirValue);
   const char *workdir = Chars(env, workDirValue);
   const std::string operation = String(env, operationValue);
@@ -580,6 +621,7 @@ Java_tech_zseven_rish_runtime_RishLibgit2Native_fetch(JNIEnv *env, jclass, jstri
   const std::string branch = String(env, branchValue);
   const std::string username = String(env, usernameValue);
   const std::string token = String(env, tokenValue);
+  const std::string proxy = String(env, proxyValue);
   std::string answer;
   git_repository *repository = nullptr;
   git_remote *remote = nullptr;
@@ -599,6 +641,7 @@ Java_tech_zseven_rish_runtime_RishLibgit2Native_fetch(JNIEnv *env, jclass, jstri
     state.username = username;
     state.token = token;
     state.cancel = cancel;
+    state.proxy = proxy;
     state.deadline = std::chrono::steady_clock::now() + std::chrono::seconds(timeoutSeconds);
     int code = git_remote_lookup(&remote, repository, "origin");
     if (code == 0 && !remote_url.empty()) code = git_remote_set_instance_url(remote, remote_url.c_str());
@@ -606,7 +649,7 @@ Java_tech_zseven_rish_runtime_RishLibgit2Native_fetch(JNIEnv *env, jclass, jstri
     if (code == 0) code = git_fetch_options_init(&options, GIT_FETCH_OPTIONS_VERSION);
     if (code == 0) {
       options.follow_redirects = GIT_REMOTE_REDIRECT_NONE;
-      options.proxy_opts.type = GIT_PROXY_NONE;
+      ApplyProxy(&options.proxy_opts, state);
       FillCallbacks(&options.callbacks, &state, !token.empty() && !username.empty());
       options.callbacks.transfer_progress = FetchProgress;
       code = git_remote_fetch(remote, nullptr, &options, "rish fetch");
@@ -768,13 +811,15 @@ JNIEXPORT jbyteArray JNICALL
 Java_tech_zseven_rish_runtime_RishLibgit2Native_cloneCheckout(JNIEnv *env, jclass, jstring gitDirValue,
                                                               jstring workDirValue, jstring operationValue,
                                                               jstring hostValue, jstring usernameValue,
-                                                              jstring tokenValue, jint timeoutSeconds) {
+                                                              jstring tokenValue, jint timeoutSeconds,
+                                                              jstring proxyValue) {
   const char *gitdir = Chars(env, gitDirValue);
   const char *workdir = Chars(env, workDirValue);
   const std::string operation = String(env, operationValue);
   const std::string host = String(env, hostValue);
   const std::string username = String(env, usernameValue);
   const std::string token = String(env, tokenValue);
+  const std::string proxy = String(env, proxyValue);
   std::string answer;
   git_repository *repository = nullptr;
   git_remote *remote = nullptr;
@@ -795,6 +840,7 @@ Java_tech_zseven_rish_runtime_RishLibgit2Native_cloneCheckout(JNIEnv *env, jclas
     state.host = host;
     state.username = username;
     state.token = token;
+    state.proxy = proxy;
     state.deadline = std::chrono::steady_clock::now() + std::chrono::seconds(timeoutSeconds);
     const bool with_credentials = !state.token.empty() && !state.username.empty();
     int code = git_remote_lookup(&remote, repository, "origin");
@@ -803,7 +849,7 @@ Java_tech_zseven_rish_runtime_RishLibgit2Native_cloneCheckout(JNIEnv *env, jclas
     std::string branch;
     if (code == 0) {
       options.follow_redirects = GIT_REMOTE_REDIRECT_NONE;
-      options.proxy_opts.type = GIT_PROXY_NONE;
+      ApplyProxy(&options.proxy_opts, state);
       FillCallbacks(&options.callbacks, &state, with_credentials);
       options.callbacks.transfer_progress = FetchProgress;
       git_remote_connect_options connect_options = {};

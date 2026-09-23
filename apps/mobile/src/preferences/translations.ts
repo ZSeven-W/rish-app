@@ -599,7 +599,7 @@ const enUS = {
     'Configure Alpine, pip, and npm sources for the local rish guest.',
   'settings.gitHttpsProxy': 'Git HTTPS proxy',
   'settings.gitHttpsProxy.description':
-    'Use an explicit HTTP(S) proxy for Git clone and push.',
+    'Use an explicit HTTP(S) proxy for Git clone, fetch and push from the Git panel. If the proxy fails, the operation fails; it never falls back to a direct connection. The agent’s Git tools do not use it yet.',
   'settings.gitHttpsProxy.input': 'Git HTTPS proxy URL',
   'settings.gitHttpsProxy.placeholder': 'http://127.0.0.1:1082',
   'settings.gitHttpsProxy.hint':
@@ -710,8 +710,6 @@ const enUS = {
   'projects.title': 'Projects',
   'projects.onDevice': 'ON THIS DEVICE',
   'projects.workspaceProject': 'Workspace · {workspace}',
-  'projects.pushProxyUnsupported':
-    'An HTTPS proxy is configured, but pushes from a workspace project on Android do not go through a proxy yet. Clear the proxy in Settings to push.',
   'projects.pushCredentialMissing':
     'No credential is stored for this remote. Configure the remote credential first.',
   'projects.pushHeadChanged':
@@ -832,6 +830,8 @@ const enUS = {
   'projects.cloneCredentialRejected': 'The repository did not accept that credential. Nothing was created.',
   'projects.cloneUrlInvalid': 'Enter a public HTTPS repository URL.',
   'projects.fetch': 'Fetch',
+  'projects.proxyFailed':
+    'The Git proxy {proxy} refused the connection or could not be reached. Nothing went around it. Check that the proxy is running, or clear it in Settings.',
   'projects.pull': 'Pull (fast-forward)',
   'projects.fetched': 'Fetched. Ahead {ahead} · behind {behind}.',
   'projects.fetchedNothing': 'Fetched. The remote has no branch of this name yet.',
@@ -1641,7 +1641,7 @@ const zhCN: Readonly<Record<TranslationKey, string>> = {
     '配置本地 rish guest 使用的 Alpine、pip 和 npm 软件源。',
   'settings.gitHttpsProxy': 'Git HTTPS 代理',
   'settings.gitHttpsProxy.description':
-    '为 Git 克隆和推送指定 HTTP(S) 代理。',
+    '为 Git 面板的克隆、获取和推送指定 HTTP(S) 代理。代理出错时操作直接失败，不会改走直连。智能体的 Git 工具暂不经过代理。',
   'settings.gitHttpsProxy.input': 'Git HTTPS 代理地址',
   'settings.gitHttpsProxy.placeholder': 'http://127.0.0.1:1082',
   'settings.gitHttpsProxy.hint':
@@ -1750,7 +1750,6 @@ const zhCN: Readonly<Record<TranslationKey, string>> = {
   'projects.title': '项目',
   'projects.onDevice': '此设备',
   'projects.workspaceProject': '工作区 · {workspace}',
-  'projects.pushProxyUnsupported': '已配置 HTTPS 代理，但 Android 上工作区项目的推送暂不经过代理。请先在设置中清除代理再推送。',
   'projects.pushCredentialMissing': '尚未为该远程保存凭据，请先配置远程凭据。',
   'projects.pushHeadChanged': '准备推送时分支已变动，请刷新后重试。',
   'projects.description': '每个项目都是由 Rish 管理的独立本地 Git 工作树。',
@@ -1863,6 +1862,7 @@ const zhCN: Readonly<Record<TranslationKey, string>> = {
   'projects.cloneCredentialRejected': '仓库没有接受这个凭据，什么都没有创建。',
   'projects.cloneUrlInvalid': '请输入公开的 HTTPS 仓库地址。',
   'projects.fetch': '拉取远端（fetch）',
+  'projects.proxyFailed': 'Git 代理 {proxy} 拒绝了连接或无法连通。没有绕过它直连。请确认代理正在运行，或在设置中清除它。',
   'projects.pull': '快进更新（pull）',
   'projects.fetched': '已拉取。领先 {ahead} · 落后 {behind}。',
   'projects.fetchedNothing': '已拉取。远端还没有同名分支。',
