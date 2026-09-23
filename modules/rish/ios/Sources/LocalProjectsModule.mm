@@ -18,6 +18,10 @@
 #include <errno.h>
 #include <fcntl.h>
 #include <git2.h>
+// The merge both hosts share (modules/rish/shared/git). Included rather than
+// listed in the podspec so the pod's layout and source globs stay as they
+// are; Android compiles the same file from its CMake build.
+#include "../../shared/git/rish_project_merge.cpp"
 #include <netinet/in.h>
 #include <sys/stat.h>
 #include <unistd.h>
@@ -5871,6 +5875,321 @@ RCT_REMAP_METHOD(pullFastForwardV2,
     lease = nil;
     if (!valid) {
       LPV2Reject(reject, failure ?: error ?: LPError(3199, @"Git pull failed"));
+      return;
+    }
+    resolve(answer);
+  } });
+}
+
+// ---------------------------------------------------------------------------
+// Merge after divergence. The decisions and the writes to the repository are
+// the shared rish::merge functions; what is here is the journal, the lease
+// and the codes. One write lease is held from recovery to the last check, so
+// nothing else can move the repository in between, and its identity is
+// re-checked before the first write and before the journal goes.
+
+static NSString *const LPMergeJournalName = @"rish-merge.json";
+
+/// The shared functions' answer as a dictionary, or nil if it is not one.
+static NSDictionary *LPMergeAnswer(const std::string &json) {
+  NSData *data = [NSData dataWithBytes:json.data() length:json.size()];
+  id value = data.length == 0 ? nil : [NSJSONSerialization JSONObjectWithData:data options:0 error:nil];
+  return [value isKindOfClass:NSDictionary.class] ? value : nil;
+}
+
+static std::string LPMergeText(NSString *value) {
+  const char *utf8 = value.UTF8String;
+  return utf8 == nullptr ? std::string() : std::string(utf8);
+}
+
+/// A branch name as the panel can show one; the same rule as Android.
+static BOOL LPMergeBranchShaped(id value) {
+  NSString *text = LPString(value);
+  if (text.length == 0 || text.length > 255 || [text hasPrefix:@"refs/"] || [text containsString:@".."]) return NO;
+  return [text rangeOfCharacterFromSet:NSCharacterSet.whitespaceAndNewlineCharacterSet].location == NSNotFound &&
+      !LPHasControlCharacter(text);
+}
+
+/// Writes the journal where the lease's gitdir is, durably: a fresh
+/// temporary file that follows no link, flushed, renamed over the name, and
+/// the directory flushed. Any failure withdraws both names -- nothing has
+/// been changed yet, so no journal is better than one that may not last.
+static BOOL LPMergeJournalWrite(int gitDescriptor, NSDictionary *journal) {
+  NSData *data = [NSJSONSerialization dataWithJSONObject:journal options:0 error:nil];
+  if (gitDescriptor < 0 || data.length == 0) return NO;
+  NSString *temporary = [NSString stringWithFormat:@"%@.%@.tmp", LPMergeJournalName,
+                                                   NSUUID.UUID.UUIDString.lowercaseString];
+  int descriptor = openat(gitDescriptor, temporary.fileSystemRepresentation,
+                          O_WRONLY | O_CREAT | O_EXCL | O_NOFOLLOW | O_CLOEXEC, 0600);
+  if (descriptor < 0) return NO;
+  BOOL written = YES;
+  const uint8_t *bytes = static_cast<const uint8_t *>(data.bytes);
+  size_t offset = 0;
+  while (written && offset < data.length) {
+    const ssize_t count = write(descriptor, bytes + offset, data.length - offset);
+    if (count < 0 && errno == EINTR) continue;
+    if (count <= 0) written = NO; else offset += static_cast<size_t>(count);
+  }
+  // F_FULLFSYNC asks the drive too; fsync is the fallback where it is refused.
+  if (written && fcntl(descriptor, F_FULLFSYNC) != 0 && fsync(descriptor) != 0) written = NO;
+  if (close(descriptor) != 0) written = NO;
+  if (written && renameat(gitDescriptor, temporary.fileSystemRepresentation, gitDescriptor,
+                          LPMergeJournalName.fileSystemRepresentation) != 0) {
+    written = NO;
+  }
+  if (written && fsync(gitDescriptor) != 0) written = NO;
+  if (!written) {
+    (void)unlinkat(gitDescriptor, temporary.fileSystemRepresentation, 0);
+    (void)unlinkat(gitDescriptor, LPMergeJournalName.fileSystemRepresentation, 0);
+  }
+  return written;
+}
+
+/// 0 absent, 1 read into `journal`, -1 present but unreadable.
+static int LPMergeJournalRead(int gitDescriptor, NSDictionary **journal) {
+  int descriptor = openat(gitDescriptor, LPMergeJournalName.fileSystemRepresentation,
+                          O_RDONLY | O_NOFOLLOW | O_CLOEXEC);
+  if (descriptor < 0) return errno == ENOENT ? 0 : -1;
+  struct stat metadata = {};
+  NSMutableData *data = nil;
+  if (fstat(descriptor, &metadata) == 0 && S_ISREG(metadata.st_mode) && metadata.st_size > 0 &&
+      metadata.st_size <= 64 * 1024) {
+    data = [NSMutableData dataWithLength:static_cast<NSUInteger>(metadata.st_size)];
+    size_t offset = 0;
+    while (data != nil && offset < data.length) {
+      const ssize_t count = read(descriptor, static_cast<uint8_t *>(data.mutableBytes) + offset, data.length - offset);
+      if (count < 0 && errno == EINTR) continue;
+      if (count <= 0) data = nil; else offset += static_cast<size_t>(count);
+    }
+  }
+  close(descriptor);
+  id value = data == nil ? nil : [NSJSONSerialization JSONObjectWithData:data options:0 error:nil];
+  if (![value isKindOfClass:NSDictionary.class]) return -1;
+  *journal = value;
+  return 1;
+}
+
+/// Removes the journal. A removal lost to power failure brings it back over
+/// a repository recovery reads as finished or untouched and clears again,
+/// so the directory flush is attempted but its failure is not the merge's.
+static BOOL LPMergeJournalClear(int gitDescriptor) {
+  if (unlinkat(gitDescriptor, LPMergeJournalName.fileSystemRepresentation, 0) != 0 && errno != ENOENT) return NO;
+  (void)fsync(gitDescriptor);
+  return YES;
+}
+
+- (NSError *)mergeRecoverWithLease:(DSHLocalProjectLease *)lease root:(NSDictionary *)root {
+  NSDictionary *journal = nil;
+  const int found = LPMergeJournalRead(lease.gitDescriptor, &journal);
+  if (found == 0) return nil;
+  if (found < 0) return LPError(3181, @"Git merge journal is unreadable");
+  NSString *branch = LPString(journal[@"branch"]);
+  NSString *ours = LPString(journal[@"ours"]);
+  NSString *merge = LPString(journal[@"merge_oid"]);
+  if (![journal[@"schema_version"] isEqual:@1] || !LPMergeBranchShaped(branch) ||
+      !LPV2CanonicalOID(ours, NO) || !LPV2CanonicalOID(merge, NO)) {
+    return LPError(3181, @"Git merge journal is invalid");
+  }
+  NSDictionary *state = LPMergeAnswer(rish::merge::Inspect(lease.repository, LPMergeText(branch),
+                                                           LPMergeText(ours), LPMergeText(merge)));
+  if (![state[@"ok"] isEqual:@YES]) return LPError(3181, @"Git merge state could not be read");
+  NSString *head = LPString(state[@"head"]);
+  const BOOL indexMerge = [state[@"index_merge"] isEqual:@YES];
+  const BOOL indexOurs = [state[@"index_ours"] isEqual:@YES];
+  const BOOL clean = [state[@"worktree_clean"] isEqual:@YES] && ![state[@"conflicted"] isEqual:@YES];
+  NSError *error = nil;
+  if ([head isEqualToString:@"merge"] && indexMerge && clean) {
+    // Done: the branch, the index and the files are the merge.
+  } else if ([head isEqualToString:@"ours"] && indexMerge && clean) {
+    // Checked out but the branch never moved: finish the move. Also the case
+    // where the merge's tree equals ours; the person approved this merge.
+    if (![self.projectAccessV2 validateWorkspaceLeaseIdentity:lease rootRef:root error:&error]) {
+      return error ?: LPError(3181, @"Git merge could not be finished");
+    }
+    NSDictionary *moved = LPMergeAnswer(rish::merge::MoveRef(lease.repository, LPMergeText(branch),
+                                                             LPMergeText(ours), LPMergeText(merge)));
+    if (![moved[@"outcome"] isEqual:@"merged"]) return LPError(3181, @"Git merge could not be finished");
+  } else if ([head isEqualToString:@"ours"] && indexOurs && clean) {
+    // Nothing was written: the merge never started.
+  } else {
+    // Never a reset: a state this does not recognise is kept, with its journal.
+    return LPError(3181, @"Git merge needs recovery");
+  }
+  return LPMergeJournalClear(lease.gitDescriptor) ? nil : LPError(3199, @"Git merge journal could not be cleared");
+}
+
+RCT_REMAP_METHOD(mergeRemoteV2,
+                 mergeRemoteV2Request:(id)requestValue
+                 resolver:(RCTPromiseResolveBlock)resolve
+                 rejecter:(RCTPromiseRejectBlock)reject) {
+  NSDictionary *request = nil;
+  NSError *validationError = nil;
+  NSDictionary *root = nil;
+  NSString *operationId = nil;
+  NSString *branch = nil;
+  NSString *ours = nil;
+  NSString *theirs = nil;
+  NSString *authorName = nil;
+  NSString *authorEmail = nil;
+  BOOL inputValid = NO;
+  @try {
+    request = LPDictionary(requestValue);
+    root = LPV2Root(request[@"root"], YES, &validationError);
+    operationId = LPString(request[@"operation_id"]);
+    branch = LPString(request[@"expected_branch"]);
+    ours = LPString(request[@"expected_head_oid"]);
+    theirs = LPString(request[@"expected_remote_oid"]);
+    authorName = LPString(request[@"author_name"]);
+    authorEmail = LPString(request[@"author_email"]);
+    // The commit's identity rules, so a name the panel commits with merges too.
+    BOOL nameValid = LPV2BoundedString(authorName, 120, NO) &&
+        [authorName isEqualToString:[authorName stringByTrimmingCharactersInSet:
+            NSCharacterSet.whitespaceAndNewlineCharacterSet]] &&
+        !LPHasControlCharacter(authorName) &&
+        ![authorName containsString:@"<"] && ![authorName containsString:@">"];
+    NSArray<NSString *> *emailParts = [authorEmail componentsSeparatedByString:@"@"];
+    BOOL emailValid = LPV2BoundedString(authorEmail, 254, NO) &&
+        emailParts.count == 2 && emailParts[0].length > 0 && emailParts[1].length > 0 &&
+        [authorEmail rangeOfCharacterFromSet:NSCharacterSet.whitespaceAndNewlineCharacterSet].location == NSNotFound &&
+        ![authorEmail containsString:@"<"] && ![authorEmail containsString:@">"];
+    inputValid = LPV2ExactKeys(request, @[
+          @"schema_version", @"root", @"operation_id", @"expected_branch", @"expected_head_oid",
+          @"expected_remote_oid", @"author_name", @"author_email"
+        ]) && [request[@"schema_version"] isEqual:@1] && root != nil &&
+        LPV2CanonicalOperationId(operationId) && LPMergeBranchShaped(branch) &&
+        LPV2CanonicalOID(ours, NO) && LPV2CanonicalOID(theirs, NO) && nameValid && emailValid;
+  } @catch (__unused NSException *exception) {
+    validationError = LPError(3199, @"Git merge request is invalid");
+  }
+  if (!inputValid) {
+    LPV2Reject(reject, validationError ?: LPError(3101, @"Git merge request is invalid"));
+    return;
+  }
+  dispatch_async(self.projectQueue, ^{ @autoreleasepool {
+    NSError *error = nil;
+    __attribute__((objc_precise_lifetime)) DSHLocalProjectLease *lease = [self v2LeaseForRoot:root
+                                                   mode:DSHLocalProjectAccessModeWrite
+                                                  error:&error];
+    if (lease == nil) {
+      LPV2Reject(reject, error ?: LPError(3199, @"Git merge failed"));
+      return;
+    }
+    git_repository *repository = lease.repository;
+    NSError *failure = nil;
+    NSDictionary *answer = nil;
+    NSDictionary *(^result)(NSString *, NSString *, id, id) =
+        ^NSDictionary *(NSString *outcome, NSString *oid, id conflicts, id paths) {
+      return @{
+        @"schema_version" : @2, @"root" : root, @"project_id" : root[@"project_id"],
+        @"branch" : branch, @"outcome" : outcome, @"oid" : oid, @"previous_oid" : ours,
+        @"conflicts" : [conflicts isKindOfClass:NSArray.class] ? conflicts : @[],
+        @"paths" : [paths isKindOfClass:NSArray.class] ? paths : @[],
+      };
+    };
+    do {
+      if (![self.projectAccessV2 validateWorkspaceLeaseIdentity:lease rootRef:root error:&error]) {
+        failure = error ?: LPError(3199, @"Git merge failed");
+        break;
+      }
+      // A merge left unfinished is settled first; if it cannot be, nothing
+      // new is attempted over it.
+      failure = [self mergeRecoverWithLease:lease root:root];
+      if (failure != nil) break;
+
+      NSDictionary *prepared = LPMergeAnswer(rish::merge::Prepare(
+          repository, LPMergeText(branch), LPMergeText(ours), LPMergeText(theirs),
+          LPMergeText(authorName), LPMergeText(authorEmail)));
+      NSString *outcome = LPString(prepared[@"outcome"]);
+      if (![prepared[@"ok"] isEqual:@YES] || outcome == nil) {
+        failure = LPError(3199, @"Git merge prepare failed");
+        break;
+      }
+      if ([@[@"up_to_date", @"fast_forward_available", @"conflicts", @"obstructed"] containsObject:outcome]) {
+        answer = result(outcome, ours, prepared[@"conflicts"], prepared[@"paths"]);
+        break;
+      }
+      if ([@[@"head_changed", @"detached_head", @"unborn_head", @"dirty", @"operation_in_progress"]
+              containsObject:outcome]) {
+        failure = LPError(3110, @"Git merge refused");
+        break;
+      }
+      if ([@[@"no_upstream", @"upstream_changed"] containsObject:outcome]) {
+        failure = LPError(3112, @"Git merge refused");
+        break;
+      }
+      if ([@[@"shallow", @"unrelated_histories", @"unsupported_submodule", @"unsupported_filter",
+             @"unsupported_paths"] containsObject:outcome]) {
+        failure = LPError(3180, @"Git merge unsupported");
+        break;
+      }
+      if (![outcome isEqualToString:@"ready"]) {
+        failure = LPError(3199, @"Git merge prepare failed");
+        break;
+      }
+      NSString *mergeOid = LPString(prepared[@"merge_oid"]);
+      NSString *treeOid = LPString(prepared[@"tree_oid"]);
+      if (!LPV2CanonicalOID(mergeOid, NO) || !LPV2CanonicalOID(treeOid, NO)) {
+        failure = LPError(3199, @"Git merge prepare failed");
+        break;
+      }
+      if (!LPMergeJournalWrite(lease.gitDescriptor, @{
+            @"schema_version" : @1, @"operation_id" : operationId, @"branch" : branch,
+            @"ours" : ours, @"theirs" : theirs, @"merge_oid" : mergeOid, @"tree_oid" : treeOid,
+            @"phase" : @"applying", @"created_at" : LPNow(),
+          })) {
+        failure = LPError(3199, @"Git merge journal could not be written");
+        break;
+      }
+      // The last check before files change; failing here changed nothing.
+      if (![self.projectAccessV2 validateWorkspaceLeaseIdentity:lease rootRef:root error:&error]) {
+        (void)LPMergeJournalClear(lease.gitDescriptor);
+        failure = error ?: LPError(3199, @"Git merge failed");
+        break;
+      }
+      NSDictionary *applied = LPMergeAnswer(rish::merge::Apply(repository, LPMergeText(branch),
+                                                                LPMergeText(ours), LPMergeText(mergeOid)));
+      NSString *appliedOutcome = LPString(applied[@"outcome"]);
+      if ([appliedOutcome isEqualToString:@"head_changed"]) {
+        // Found before a file was written: the journal has nothing to guard.
+        (void)LPMergeJournalClear(lease.gitDescriptor);
+        failure = LPError(3110, @"Git merge refused");
+        break;
+      }
+      if ([appliedOutcome isEqualToString:@"obstructed"]) {
+        (void)LPMergeJournalClear(lease.gitDescriptor);
+        answer = result(@"obstructed", ours, nil, nil);
+        break;
+      }
+      if (![appliedOutcome isEqualToString:@"merged"]) {
+        // Anything else may have happened after the checkout began.
+        failure = LPError(3181, @"Git merge interrupted");
+        break;
+      }
+      NSDictionary *inspected = LPMergeAnswer(rish::merge::Inspect(repository, LPMergeText(branch),
+                                                                    LPMergeText(ours), LPMergeText(mergeOid)));
+      if (![inspected[@"head"] isEqual:@"merge"] || ![inspected[@"index_merge"] isEqual:@YES] ||
+          ![inspected[@"worktree_clean"] isEqual:@YES] || [inspected[@"conflicted"] isEqual:@YES]) {
+        failure = LPError(3181, @"Git merge landed in an unexpected state");
+        break;
+      }
+      // After writes, an identity that no longer holds keeps the journal:
+      // the repository is not untouched and must not be reported as such.
+      if (![self.projectAccessV2 validateWorkspaceLeaseIdentity:lease rootRef:root error:&error]) {
+        failure = LPError(3181, @"Git merge could not be confirmed");
+        break;
+      }
+      if (!LPMergeJournalClear(lease.gitDescriptor)) {
+        failure = LPError(3181, @"Git merge journal could not be cleared");
+        break;
+      }
+      answer = result(@"merged", mergeOid, nil, nil);
+    } while (false);
+    // An answer that changed nothing is only as good as the lease it was
+    // read under.
+    BOOL valid = answer != nil && [self.projectAccessV2 validateWorkspaceLeaseIdentity:lease rootRef:root error:&error];
+    lease = nil;
+    if (!valid) {
+      LPV2Reject(reject, failure ?: error ?: LPError(3199, @"Git merge failed"));
       return;
     }
     resolve(answer);
