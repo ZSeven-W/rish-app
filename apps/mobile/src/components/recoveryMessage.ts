@@ -34,6 +34,11 @@ const reasons: Readonly<Record<string, TranslationKey>> = {
   E_COMPLETION_HTTP_429: 'recovery.rateLimit',
   E_COMPLETION_CREDENTIAL_UNAVAILABLE: 'recovery.credential',
   E_COMPLETION_CREDENTIAL_CHANGED: 'recovery.credential',
+  // Refusals about what a message carries, found before anything is sent.
+  E_COMPLETION_BODY_TOO_LARGE: 'recovery.attachmentsTooLarge',
+  E_COMPLETION_CONTEXT_UNSUPPORTED: 'recovery.attachmentUnsupported',
+  E_COMPLETION_CONTEXT_INVALID: 'recovery.attachmentUnreadable',
+  E_COMPLETION_HISTORY: 'recovery.history',
 };
 
 export function recoveryCode(error: string): string | null {

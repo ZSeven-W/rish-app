@@ -205,6 +205,9 @@ export type CompletionControllerEvents = {
 export type CompletionControllerOutcome = {
   readonly status:
     | 'completed'
+    /** The attempt settled as failed; nothing is left to resume, and `code`
+     * says why, for the person. */
+    | 'failed'
     | 'blocked'
     | 'persistence_pending'
     | 'retryable'
@@ -2892,6 +2895,13 @@ export function createCompletionController(
             cleanup,
             cas,
           );
+          // The attempt is settled either way, but a failed round must still
+          // say why: reported as completed, the screen cleared its notice
+          // and a refusal before dispatch (a PDF past the page cap) showed
+          // the person nothing at all.
+          if (phase === 'failed' && finalized.status === 'completed') {
+            return { ...finalized, status: 'failed', code: roundCause };
+          }
           return finalized;
         }
         publish(stateFor('retryable', { conversationId, turnId: located.attempt.turnId, attemptId, roundId: request.round_id, transportSchemaVersion: request.transport_schema_version, failureCode: result.status === 'unknown' ? 'E_AGENT_CONFLICT' : 'E_AGENT_ROUND_AMBIGUOUS' }));

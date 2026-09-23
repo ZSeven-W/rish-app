@@ -2514,7 +2514,11 @@ describe('project Agent completion controller', () => {
     }));
     const controller = agentController(store, runtime, committedPersistence(store));
     const conversationId = store.getState().selectedConversationId!;
-    await controller.send({ conversationId, text: 'offline round', attachments: [] });
+    const result = await controller.send({ conversationId, text: 'offline round', attachments: [] });
+    // What the screen shows comes from this answer. It used to say
+    // `completed`, so the notice was cleared and a round refused before it
+    // left the device (a PDF past the page cap) showed the person nothing.
+    expect(result).toMatchObject({ status: 'failed', code: 'E_AGENT_CAPABILITY' });
     const attempt = store.getState().conversations[conversationId]!.attempts[0]!;
     expect(attempt.agent!.phase).toBe('failed');
     expect(attempt.agent!.round_lineage!.status).toBe('failed_retryable');

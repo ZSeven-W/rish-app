@@ -118,3 +118,21 @@ test.each(['en-US', 'zh-CN'] as const)('preserves and explains the output-limit 
   expect(failure.message).not.toContain('private provider output');
   expect(recoveryMessage(failure.code, createTranslator(locale))).toBe(createTranslator(locale)('recovery.outputLimit'));
 });
+
+test('a refused attachment says what to change, on both hosts', () => {
+  const zh = createTranslator('zh-CN');
+  const en = createTranslator('en-US');
+  // Android's projection refusals, which used to read only as "could not finish".
+  expect(recoveryMessage('E_COMPLETION_BODY_TOO_LARGE', zh)).toContain('20 页');
+  expect(recoveryMessage('E_COMPLETION_BODY_TOO_LARGE', en)).toContain('20 pages');
+  expect(recoveryMessage('E_COMPLETION_CONTEXT_UNSUPPORTED', zh)).toContain('加密的 PDF');
+  expect(recoveryMessage('E_COMPLETION_CONTEXT_INVALID', en)).toContain('attach it again');
+  // iOS reports an attachment it cannot project as history.
+  expect(recoveryMessage('E_COMPLETION_HISTORY', zh)).toContain('附件');
+  for (const code of [
+    'E_COMPLETION_BODY_TOO_LARGE', 'E_COMPLETION_CONTEXT_UNSUPPORTED',
+    'E_COMPLETION_CONTEXT_INVALID', 'E_COMPLETION_HISTORY',
+  ]) {
+    expect(recoveryMessage(code, en)).not.toBe(en('recovery.generic'));
+  }
+});
