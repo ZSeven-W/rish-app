@@ -78,11 +78,10 @@ function required(): NativeLocalAttachments {
 /**
  * Whether an attachment of this kind can actually reach a model here.
  *
- * Android delivers images and text but has no PDF text extractor, so a PDF
- * there would reach the model as nothing at all. The composer asks this
- * before it starts a turn, so the person is told plainly with the draft kept
- * instead of watching a round fail for a reason nothing explains. A platform
- * that exports no such constant delivers every kind, which is what iOS does.
+ * The composer asks this before it starts a turn, so the person is told
+ * plainly with the draft kept instead of watching a round fail for a reason
+ * nothing explains. A platform that exports no such constant delivers every
+ * kind, which is what iOS does.
  */
 function kindDeliverable(kind: AttachmentKind): boolean {
   if (typeof native !== 'object' || native === null) return true;
@@ -91,9 +90,24 @@ function kindDeliverable(kind: AttachmentKind): boolean {
   return declared.includes(kind);
 }
 
+/**
+ * Whether an attachment of this kind needs a model that reads images here.
+ *
+ * An image always does. A PDF does on Android, which sends its pages as
+ * pictures, and not on iOS, which sends its text. A platform that exports no
+ * `model_vision_kinds` treats only images as pictures.
+ */
+function kindNeedsVision(kind: AttachmentKind): boolean {
+  if (kind === 'image') return true;
+  if (typeof native !== 'object' || native === null) return false;
+  const declared = Reflect.get(native, 'model_vision_kinds');
+  return Array.isArray(declared) && declared.includes(kind);
+}
+
 export const LocalAttachments = {
   isAvailable: () => hasNativeCapabilities(native),
   isKindDeliverable: kindDeliverable,
+  kindNeedsVision,
   present: (source: AttachmentSource) => required().present(source),
   discard: (ids: string[]) => required().discard(ids),
   prune: (referencedIds: string[]) => required().prune(referencedIds),

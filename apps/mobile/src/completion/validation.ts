@@ -1,4 +1,5 @@
 import { dshModelSupportsImages } from '../models/catalog';
+import { LocalAttachments } from '../native/LocalAttachments';
 import { isHarnessModelId } from '../harness/types';
 import { parseProviderBinding } from '../providers/configuration';
 import type {
@@ -567,7 +568,7 @@ function projectVisibleHistory(
     for (const attachment of attachments) {
       if (
         attachment.size > MAX_ATTACHMENT_BYTES - totalAttachmentBytes ||
-        (attachment.kind === 'image' &&
+        (LocalAttachments.kindNeedsVision(attachment.kind) &&
           !dshModelSupportsImages(model))
       ) {
         fail('E_COMPLETION_HISTORY');

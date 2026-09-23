@@ -74,3 +74,27 @@ test('passes only opaque identifiers to lifecycle methods', async () => {
     ids[0],
   );
 });
+
+test('a platform names which kinds need a model that reads images; without a list only images do', () => {
+  const native = mockNativeLocalAttachments as Record<string, unknown>;
+  // iOS exports nothing: it reads a PDF's text, so only an image needs vision.
+  expect(LocalAttachments.kindNeedsVision('image')).toBe(true);
+  expect(LocalAttachments.kindNeedsVision('pdf')).toBe(false);
+  expect(LocalAttachments.kindNeedsVision('text')).toBe(false);
+  // Android sends a PDF's pages as pictures.
+  native.model_vision_kinds = ['image', 'pdf'];
+  native.model_delivery = ['image', 'text', 'pdf'];
+  try {
+    expect(LocalAttachments.kindNeedsVision('pdf')).toBe(true);
+    expect(LocalAttachments.kindNeedsVision('text')).toBe(false);
+    expect(LocalAttachments.isKindDeliverable('pdf')).toBe(true);
+    // An image needs vision whatever a platform's list forgets to say.
+    native.model_vision_kinds = ['pdf'];
+    expect(LocalAttachments.kindNeedsVision('image')).toBe(true);
+    native.model_vision_kinds = 'pdf';
+    expect(LocalAttachments.kindNeedsVision('pdf')).toBe(false);
+  } finally {
+    delete native.model_vision_kinds;
+    delete native.model_delivery;
+  }
+});

@@ -113,6 +113,7 @@ jest.mock('../src/native/LocalAttachments', () => ({
   LocalAttachments: {
     isAvailable: jest.fn(),
     isKindDeliverable: jest.fn(() => true),
+    kindNeedsVision: jest.fn((kind: string) => kind === 'image'),
     present: jest.fn(),
     discard: jest.fn(),
     prune: jest.fn(),
@@ -1640,6 +1641,7 @@ beforeEach(() => {
   mockLocalRuntime.clearCredential.mockResolvedValue({ status: 'cleared' });
   mockLocalAttachments.isAvailable.mockReturnValue(true);
   mockLocalAttachments.isKindDeliverable.mockReturnValue(true);
+  mockLocalAttachments.kindNeedsVision.mockImplementation((kind: string) => kind === 'image');
   mockLocalAttachments.present.mockResolvedValue({
     schema_version: 1,
     status: 'cancelled',
@@ -6252,6 +6254,57 @@ test('refuses to send an attachment of a kind the platform cannot deliver, keepi
       'a kind this build cannot show a model',
     ),
   ).toBe(true);
+});
+
+async function sendPdfOnV4Pro(root: ReactTestInstance) {
+  mockLocalAttachments.present.mockResolvedValueOnce({
+    schema_version: 1,
+    status: 'selected',
+    attachments: [
+      {
+        schema_version: 1,
+        id: 'pdf-vision-1',
+        kind: 'pdf',
+        name: 'scan.pdf',
+        mime_type: 'application/pdf',
+        size: 2048,
+      },
+    ],
+  });
+  await act(async () => composerOptionsChip(root).props.onPress());
+  await act(async () => {
+    optionInComposerPanel(root, 'Use V4 Pro').props.onPress();
+    await settle();
+  });
+  await act(async () => optionInComposerPanel(root, 'Done').props.onPress());
+  await act(async () => actionByLabel(root, 'Add attachment').props.onPress());
+  await chooseAttachmentSource(root, 'Files');
+  await act(async () => {
+    root.findByProps({ accessibilityLabel: 'Message DSH' }).props.onChangeText('Summarise this');
+    await settle();
+  });
+  await act(async () => {
+    actionByLabel(root, 'Send message').props.onPress();
+    await settle();
+  });
+}
+
+test('a PDF sent as page pictures (Android) moves a text-only model to one that reads images', async () => {
+  mockLocalAttachments.kindNeedsVision.mockImplementation((kind: string) => kind === 'image' || kind === 'pdf');
+  const renderer = await renderApp();
+  await sendPdfOnV4Pro(renderer.root);
+  const sent = mockLocalRuntime.completeV2.mock.calls.at(-1)?.[0]?.model;
+  expect(sent).toBeDefined();
+  expect(sent).not.toBe('deepseek-v4-pro');
+  expect(['deepseek-v4-flash', 'deepseek-v4-flash-vision-exp']).toContain(sent);
+  expect(lastPersistedState().conversations[0]?.model_id).toBe(sent);
+});
+
+test('a PDF sent as text (iOS) keeps a text-only model', async () => {
+  const renderer = await renderApp();
+  await sendPdfOnV4Pro(renderer.root);
+  expect(mockLocalRuntime.completeV2.mock.calls.at(-1)?.[0]?.model).toBe('deepseek-v4-pro');
+  expect(lastPersistedState().conversations[0]?.model_id).toBe('deepseek-v4-pro');
 });
 
 test('ignores a stale attachment-menu dismissal after completion ownership changes', async () => {

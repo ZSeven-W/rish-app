@@ -60,11 +60,11 @@ class LocalAttachmentsModule(reactContext: ReactApplicationContext) :
 
     /**
      * `model_delivery` lists the attachment kinds this platform can actually
-     * put in front of a model. An image becomes a content part and text is
-     * folded into the message, both in `AndroidAttachmentContent`; a PDF is
-     * not here because Android has no text extractor in this app and sending
-     * the words around a PDF while dropping the PDF would answer a question
-     * about a document the model never saw.
+     * put in front of a model: an image becomes a content part, text is folded
+     * into the message, and a PDF becomes its pages drawn as pictures, all in
+     * `AndroidAttachmentContent`. `model_vision_kinds` lists the kinds that
+     * therefore need a model that reads images -- on Android a PDF does, on
+     * iOS (which reads its text, and exports no such key) only an image.
      *
      * JavaScript reads this to stop a send before a turn starts, with the
      * draft and the attachment kept, rather than letting the person watch a
@@ -73,7 +73,8 @@ class LocalAttachmentsModule(reactContext: ReactApplicationContext) :
      */
     override fun getConstants(): MutableMap<String, Any> = mutableMapOf(
         "implemented" to true,
-        "model_delivery" to listOf("image", "text"),
+        "model_delivery" to listOf("image", "text", "pdf"),
+        "model_vision_kinds" to listOf("image", "pdf"),
     )
 
     override fun getName(): String = "LocalAttachments"

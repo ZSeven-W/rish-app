@@ -3264,12 +3264,11 @@ export function HomeScreen({
       conversationId,
     );
     // An attachment of a kind this platform cannot put in front of a model.
-    // Android delivers images and text but cannot read a PDF, and sending the
-    // words around one while dropping the document itself would answer a
-    // question about something the model never saw. Refusing here keeps the
-    // draft and the attachment and says why, instead of starting a round that
-    // fails for a reason nothing explains. The history is checked too,
-    // because every round sends it again.
+    // Sending the words around one while dropping the file itself would
+    // answer a question about something the model never saw. Refusing here
+    // keeps the draft and the attachment and says why, instead of starting a
+    // round that fails for a reason nothing explains. The history is checked
+    // too, because every round sends it again.
     const undeliverable = [
       ...(beforeAppend?.messages ?? []).flatMap(
         message => message.attachments ?? [],
@@ -3282,11 +3281,13 @@ export function HomeScreen({
       );
       return;
     }
+    // Images, and on Android PDFs (sent as their pages drawn), need a model
+    // that reads pictures.
     const historyNeedsVision =
       beforeAppend?.messages.some(message =>
-        message.attachments?.some(attachment => attachment.kind === 'image'),
+        message.attachments?.some(attachment => LocalAttachments.kindNeedsVision(attachment.kind)),
       ) === true ||
-      outgoingAttachments.some(attachment => attachment.kind === 'image');
+      outgoingAttachments.some(attachment => LocalAttachments.kindNeedsVision(attachment.kind));
     const imageHarness = beforeAppend === null
       ? null
       : BUILTIN_HARNESSES.get(harnessForModel(beforeAppend.modelId));

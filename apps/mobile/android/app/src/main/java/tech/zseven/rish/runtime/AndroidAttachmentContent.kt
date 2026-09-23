@@ -22,11 +22,13 @@ import java.nio.charset.CodingErrorAction
  *   not any provider's; `completion_request` owns every wire spelling.
  * - Text is read as UTF-8 and folded into the message's words, fenced and
  *   named, exactly as iOS does. It needs no dialect support at all.
- * - A PDF is **refused**. Android has no text extractor here -- `PdfRenderer`
- *   draws pages, it does not read them -- and adding a library for it is not
- *   this change. Sending the words around a PDF while silently dropping the
- *   PDF would answer a question about a document the model never saw, so the
- *   person is told instead.
+ * - A PDF becomes its pages, every one drawn as a picture
+ *   ([AndroidPdfPages]), with a line in the words saying which pictures are
+ *   which pages of which file. Android has no PDF text API most phones here
+ *   have, so this is how the model reads it -- scanned documents included.
+ *   It therefore needs a model that reads images, and is refused otherwise;
+ *   iOS reads the text instead, so the two send the same document
+ *   differently and that is deliberate.
  *
  * Nothing here is best-effort. A reference the store cannot honour fails the
  * request rather than quietly shrinking what the model is shown.
@@ -51,6 +53,9 @@ internal class AndroidAttachmentContent(private val store: AndroidAttachmentStor
         var count = 0
         var rawBytes = 0L
         var expandedBytes = 0L
+        var pdfPages = 0
+        /** Picture bytes of every kind, images and drawn pages alike. */
+        var pictureBytes = 0L
     }
 
     /**
@@ -124,12 +129,46 @@ internal class AndroidAttachmentContent(private val store: AndroidAttachmentStor
                     if (mime !in PICTURE_MIMES) {
                         throw Refused(UNSUPPORTED, "This image format cannot be sent")
                     }
+                    budget.pictureBytes += bytes.size.toLong()
+                    if (budget.pictureBytes > MAX_PICTURE_BYTES) {
+                        throw Refused(TOO_LARGE, "The pictures in this conversation are too large to send")
+                    }
                     pictures.put(
                         JSONObject().put("type", "image").put("mime_type", mime)
                             .put("data", Base64.encodeToString(bytes, Base64.NO_WRAP)),
                     )
                 }
                 "text" -> projections.add(fenced(reference, decoded(bytes), "TEXT"))
+                "pdf" -> {
+                    if (!supportsImages) {
+                        throw Refused(UNSUPPORTED, "This model cannot read PDFs here; choose one that reads images")
+                    }
+                    if (mime != "application/pdf") throw Refused(INVALID, "A PDF attachment is not a PDF")
+                    val drawn = try {
+                        AndroidPdfPages.render(
+                            payload,
+                            MAX_PDF_PAGES - budget.pdfPages,
+                            MAX_PICTURE_BYTES - budget.pictureBytes,
+                        )
+                    } catch (refused: AndroidPdfPages.Refused) {
+                        throw Refused(refused.code, refused.reason)
+                    }
+                    budget.pdfPages += drawn.size
+                    val first = pictures.length() + 1
+                    for (page in drawn) {
+                        budget.pictureBytes += page.jpeg.size.toLong()
+                        pictures.put(
+                            JSONObject().put("type", "image").put("mime_type", "image/jpeg")
+                                .put("data", Base64.encodeToString(page.jpeg, Base64.NO_WRAP)),
+                        )
+                    }
+                    val last = pictures.length()
+                    val pages = if (drawn.size == 1) "page 1" else "pages 1-${drawn.size}"
+                    val images = if (first == last) "Image $first" else "Images $first-$last"
+                    projections.add(
+                        fenced(reference, "$images of this message are $pages of this PDF, in order.", "PDF"),
+                    )
+                }
                 else -> throw Refused(
                     UNSUPPORTED,
                     "A $kind attachment cannot be sent to a model yet",
@@ -177,6 +216,15 @@ internal class AndroidAttachmentContent(private val store: AndroidAttachmentStor
         const val MAX_COUNT = 24
         const val MAX_RAW_BYTES = 24L * 1024L * 1024L
         const val MAX_EXPANDED_BYTES = 4L * 1024L * 1024L
+        /** Pages drawn across a whole request. */
+        const val MAX_PDF_PAGES = 40
+        /**
+         * Picture bytes across a whole request. Base64 makes them a third
+         * larger, and the request crosses into the shared core as one string
+         * the bridge caps at 24 Mi characters, beside up to 4 MiB of words;
+         * past that the round would fail after it was marked dispatched.
+         */
+        const val MAX_PICTURE_BYTES = 12L * 1024L * 1024L
         const val INVALID = "E_COMPLETION_CONTEXT_INVALID"
         const val MISSING = "E_COMPLETION_CONTEXT_INVALID"
         const val UNSUPPORTED = "E_COMPLETION_CONTEXT_UNSUPPORTED"

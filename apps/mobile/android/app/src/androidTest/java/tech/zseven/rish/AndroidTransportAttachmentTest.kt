@@ -190,19 +190,182 @@ class AndroidTransportAttachmentTest {
         assertEquals(0, transport.activeRequestCount())
     }
 
-    /** A PDF has no projection here, so it is refused rather than dropped. */
+    /** A file that says it is a PDF and will not open as one is refused, not dropped. */
     @Test
-    fun aPdfIsRefusedBecauseNothingHereCanReadOne() {
+    fun aFileThatIsNotReallyAPdfIsRefused() {
         val home = home()
         val transport = transport(home)
         val reference = stage(home, "pdf", "application/pdf", "contract.pdf", png)
         val history = JSONArray().put(message("summarise", JSONArray().put(reference)))
         val prepared = transport.prepare(envelope(history, "deepseek-v4-flash"))
         assertEquals(
-            "E_COMPLETION_CONTEXT_UNSUPPORTED",
+            "E_COMPLETION_CONTEXT_INVALID",
             codeOf { transport.validate(prepared) },
         )
         assertEquals(0, transport.activeRequestCount())
+    }
+
+    /** A real PDF, one flat colour per page, written with the platform's own writer. */
+    private fun pdf(vararg colours: Int): ByteArray = pdfSized(200, 300, *colours)
+
+    private fun pdfSized(width: Int, height: Int, vararg colours: Int): ByteArray {
+        val document = android.graphics.pdf.PdfDocument()
+        colours.forEachIndexed { index, colour ->
+            val page = document.startPage(
+                android.graphics.pdf.PdfDocument.PageInfo.Builder(width, height, index + 1).create(),
+            )
+            page.canvas.drawColor(colour)
+            document.finishPage(page)
+        }
+        val out = java.io.ByteArrayOutputStream()
+        document.writeTo(out)
+        document.close()
+        return out.toByteArray()
+    }
+
+    /** The colour at the centre of a drawn page, as decoded from what would be sent. */
+    private fun centre(part: JSONObject): Int {
+        assertEquals("image", part.getString("type"))
+        assertEquals("image/jpeg", part.getString("mime_type"))
+        val bytes = Base64.decode(part.getString("data"), Base64.NO_WRAP)
+        val bitmap = android.graphics.BitmapFactory.decodeByteArray(bytes, 0, bytes.size)
+        // The long edge is what the renderer fixes; a 200x300 page is portrait.
+        assertEquals(1600, bitmap.height)
+        return bitmap.getPixel(bitmap.width / 2, bitmap.height / 2)
+    }
+
+    private fun near(expected: Int, actual: Int): Boolean =
+        Math.abs(android.graphics.Color.red(expected) - android.graphics.Color.red(actual)) < 40 &&
+            Math.abs(android.graphics.Color.green(expected) - android.graphics.Color.green(actual)) < 40 &&
+            Math.abs(android.graphics.Color.blue(expected) - android.graphics.Color.blue(actual)) < 40
+
+    /**
+     * Every page, drawn, in order, and the words say which pictures are
+     * which pages of which file. The colours are the proof the pages were
+     * really drawn and not sent as blank frames.
+     */
+    @Test
+    fun aPdfReachesTheModelAsEveryPageDrawnInOrder() {
+        val home = home()
+        val transport = transport(home)
+        val colours = intArrayOf(android.graphics.Color.RED, android.graphics.Color.BLUE, android.graphics.Color.GREEN)
+        val reference = stage(home, "pdf", "application/pdf", "report.pdf", pdf(*colours))
+        val history = JSONArray().put(message("what colours", JSONArray().put(reference)))
+        val prepared = transport.prepare(envelope(history, "deepseek-v4-flash"))
+        transport.validate(prepared)
+        val content = transport.composedForTest(prepared).getJSONObject(0).getJSONArray("content")
+        assertEquals(4, content.length())
+        val words = content.getJSONObject(0).getString("text")
+        assertTrue(words, words.startsWith("what colours\n\n"))
+        assertTrue(words, words.contains("BEGIN PDF: report.pdf"))
+        assertTrue(words, words.contains("Images 1-3 of this message are pages 1-3 of this PDF, in order."))
+        for (index in colours.indices) {
+            val seen = centre(content.getJSONObject(index + 1))
+            assertTrue("page ${index + 1} is not its colour: ${Integer.toHexString(seen)}", near(colours[index], seen))
+        }
+        transport.discard(prepared)
+    }
+
+    /** Pictures are numbered across the message, so a PDF after an image says so. */
+    @Test
+    fun aPdfAfterAnImageNamesItsOwnPictures() {
+        val home = home()
+        val transport = transport(home)
+        val image = stage(home, "image", "image/png", "probe.png", png)
+        val document = stage(home, "pdf", "application/pdf", "two.pdf", pdf(android.graphics.Color.RED, android.graphics.Color.BLUE))
+        val history = JSONArray().put(message("compare", JSONArray().put(image).put(document)))
+        val prepared = transport.prepare(envelope(history, "deepseek-v4-flash"))
+        transport.validate(prepared)
+        val content = transport.composedForTest(prepared).getJSONObject(0).getJSONArray("content")
+        assertEquals(4, content.length())
+        val words = content.getJSONObject(0).getString("text")
+        assertTrue(words, words.contains("Images 2-3 of this message are pages 1-2 of this PDF, in order."))
+        transport.discard(prepared)
+    }
+
+    /** A model that reads no images is told, before anything is sent. */
+    @Test
+    fun aPdfIsRefusedForAModelThatCannotSeePages() {
+        val home = home()
+        val transport = transport(home)
+        val before = transport.sentRequestCount
+        val reference = stage(home, "pdf", "application/pdf", "report.pdf", pdf(android.graphics.Color.RED))
+        val history = JSONArray().put(message("summarise", JSONArray().put(reference)))
+        val prepared = transport.prepare(envelope(history, "deepseek-v4-pro"))
+        assertEquals("E_COMPLETION_CONTEXT_UNSUPPORTED", codeOf { transport.validate(prepared) })
+        assertEquals("no request may be sent", before, transport.sentRequestCount)
+        assertEquals(0, transport.activeRequestCount())
+    }
+
+    /** Too long is refused whole: the first pages alone would answer about pages unseen. */
+    @Test
+    fun aPdfLongerThanTheCapIsRefusedWholeNotCut() {
+        val home = home()
+        val transport = transport(home)
+        val within = stage(home, "pdf", "application/pdf", "twenty.pdf", pdf(*IntArray(20) { android.graphics.Color.WHITE }))
+        val accepted = transport.prepare(
+            envelope(JSONArray().put(message("ok", JSONArray().put(within))), "deepseek-v4-flash"),
+        )
+        assertEquals("no refusal", codeOf { transport.validate(accepted) })
+        transport.discard(accepted)
+        val over = stage(home, "pdf", "application/pdf", "long.pdf", pdf(*IntArray(21) { android.graphics.Color.WHITE }))
+        val refused = transport.prepare(
+            envelope(JSONArray().put(message("summarise", JSONArray().put(over))), "deepseek-v4-flash"),
+        )
+        assertEquals("E_COMPLETION_BODY_TOO_LARGE", codeOf { transport.validate(refused) })
+        assertEquals(0, transport.activeRequestCount())
+    }
+
+    /** A till receipt drawn to a 1600-pixel strip would be unreadable; it is refused, not sent. */
+    @Test
+    fun aPageTooLongToReadIsRefused() {
+        val home = home()
+        val transport = transport(home)
+        val reference = stage(home, "pdf", "application/pdf", "receipt.pdf", pdfSized(100, 1000, android.graphics.Color.WHITE))
+        val prepared = transport.prepare(
+            envelope(JSONArray().put(message("total?", JSONArray().put(reference))), "deepseek-v4-flash"),
+        )
+        assertEquals("E_COMPLETION_CONTEXT_UNSUPPORTED", codeOf { transport.validate(prepared) })
+        assertEquals(0, transport.activeRequestCount())
+    }
+
+    /**
+     * Pictures of every kind share one budget: the request crosses into the
+     * shared core as one string the bridge caps, and a body past it would fail
+     * after the round was marked dispatched. Two 7 MiB images are over it.
+     */
+    @Test
+    fun picturesPastTheBridgeBudgetAreRefusedBeforeDispatch() {
+        val home = home()
+        val transport = transport(home)
+        val big = ByteArray(7 * 1024 * 1024) { 1 }
+        val first = stage(home, "image", "image/jpeg", "a.jpg", big)
+        val second = stage(home, "image", "image/jpeg", "b.jpg", big)
+        val prepared = transport.prepare(
+            envelope(JSONArray().put(message("both", JSONArray().put(first).put(second))), "deepseek-v4-flash"),
+        )
+        assertEquals("E_COMPLETION_BODY_TOO_LARGE", codeOf { transport.validate(prepared) })
+        assertEquals(0, transport.activeRequestCount())
+    }
+
+    /** The same PDF sent again -- every round resends history -- still arrives whole. */
+    @Test
+    fun aPdfInHistoryIsSentWholeEveryRound() {
+        val home = home()
+        val transport = transport(home)
+        val colours = intArrayOf(android.graphics.Color.RED, android.graphics.Color.BLUE)
+        val reference = stage(home, "pdf", "application/pdf", "again.pdf", pdf(*colours))
+        repeat(2) {
+            val prepared = transport.prepare(
+                envelope(JSONArray().put(message("again", JSONArray().put(reference))), "deepseek-v4-flash"),
+            )
+            transport.validate(prepared)
+            val content = transport.composedForTest(prepared).getJSONObject(0).getJSONArray("content")
+            assertEquals(3, content.length())
+            assertTrue(near(colours[0], centre(content.getJSONObject(1))))
+            assertTrue(near(colours[1], centre(content.getJSONObject(2))))
+            transport.discard(prepared)
+        }
     }
 
     /**
