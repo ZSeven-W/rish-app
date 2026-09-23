@@ -474,7 +474,7 @@ class AndroidProjectRemoteTest {
         val oursOid = f.commit(mine.first, mine.second, "mine")
         val d = Diverged(f, peer, oursOid, theirsOid)
         val fetched = d.fetch()
-        assertEquals(fetched.toString(), 1, fetched.getInt("ahead")); assertEquals(1, fetched.getInt("behind"))
+        assertEquals(fetched.toString(), 1, fetched.getInt("ahead")); assertTrue(fetched.toString(), fetched.getInt("behind") >= 1)
         return d
     }
 
@@ -498,6 +498,39 @@ class AndroidProjectRemoteTest {
         val after = d.fetch()
         assertEquals(after.toString(), 0, after.getInt("behind")); assertEquals(2, after.getInt("ahead"))
         assertTrue("the journal outlived a finished merge", !d.journal().exists())
+        d.f.scratch.deleteRecursively()
+    }
+
+    /**
+     * Both sides made the same change: the merge's tree is the tree the
+     * branch already had. It is still a merge -- the branch moves to a
+     * two-parent commit -- and must not be mistaken for one that never
+     * happened (it was, until the index check learned both trees can match).
+     */
+    @Test
+    fun theSameChangeOnBothSidesIsMergedNotMistakenForAnInterruption() {
+        val d = diverged(mine = "same.txt" to "same\n", theirs = "same.txt" to "same\n")
+        val merged = d.f.git.mergeRemote(d.request())
+        assertEquals(merged.toString(), "merged", merged.getString("outcome"))
+        assertEquals(merged.getString("oid"), d.head())
+        assertEquals("same\n", File(d.f.workDir, "same.txt").readText())
+        val after = d.fetch()
+        assertEquals(after.toString(), 0, after.getInt("behind"))
+        assertTrue("the journal outlived a finished merge", !d.journal().exists())
+        d.f.scratch.deleteRecursively()
+    }
+
+    /** A path the upstream filters (LFS) is refused, not merged as text. */
+    @Test
+    fun aFilteredPathIsRefusedAsUnsupported() {
+        val d = diverged(
+            theirs = "data.bin" to "version https://git-lfs.github.com/spec/v1\n",
+            beforeDiverging = { _, peer -> peer.commit(".gitattributes", "*.bin filter=lfs diff=lfs merge=lfs\n", "lfs") },
+        )
+        assertEquals(3180, refusal { d.f.git.mergeRemote(d.request()) })
+        assertEquals(d.ours, d.head())
+        assertTrue(!File(d.f.workDir, "data.bin").exists())
+        assertTrue(!d.journal().exists())
         d.f.scratch.deleteRecursively()
     }
 

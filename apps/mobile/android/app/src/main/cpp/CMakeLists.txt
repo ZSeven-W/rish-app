@@ -60,8 +60,15 @@ if(DEFINED RISH_LIBGIT2_DIR)
     add_library(rish_${library} STATIC IMPORTED)
     set_target_properties(rish_${library} PROPERTIES IMPORTED_LOCATION "${archive}")
   endforeach()
-  add_library(rish_libgit2_jni SHARED rish_libgit2_jni.cpp rish_project_git.cpp rish_project_panel.cpp rish_project_capture.cpp rish_project_agent.cpp rish_project_remote.cpp rish_project_merge.cpp)
-  target_include_directories(rish_libgit2_jni PRIVATE "${RISH_LIBGIT2_DIR}/include")
+  # Git logic both hosts share lives beside the shared core; iOS includes the
+  # same sources from LocalProjectsModule.mm. Refuse to build without it
+  # rather than link a JNI face with nothing behind it.
+  get_filename_component(RISH_SHARED_GIT_DIR "${CMAKE_CURRENT_LIST_DIR}/../../../../../../../modules/rish/shared/git" ABSOLUTE)
+  if(NOT EXISTS "${RISH_SHARED_GIT_DIR}/rish_project_merge.cpp")
+    message(FATAL_ERROR "shared git sources not found at ${RISH_SHARED_GIT_DIR}")
+  endif()
+  add_library(rish_libgit2_jni SHARED rish_libgit2_jni.cpp rish_project_git.cpp rish_project_panel.cpp rish_project_capture.cpp rish_project_agent.cpp rish_project_remote.cpp rish_project_merge.cpp "${RISH_SHARED_GIT_DIR}/rish_project_merge.cpp")
+  target_include_directories(rish_libgit2_jni PRIVATE "${RISH_LIBGIT2_DIR}/include" "${RISH_SHARED_GIT_DIR}")
   target_compile_features(rish_libgit2_jni PRIVATE cxx_std_17)
   target_compile_options(rish_libgit2_jni PRIVATE -fvisibility=hidden -Wall -Wextra)
   # libgit2 needs libssh2, which needs OpenSSL; the order is what the static

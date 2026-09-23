@@ -22,6 +22,9 @@ export const requiredFiles = [
   'apps/mobile/android/gradle/wrapper/gradle-wrapper.jar',
   'apps/mobile/android/app/src/main/java/tech/zseven/rish/MainActivity.kt',
   'modules/rish/ios/RishLocalRuntime.podspec',
+  // Git logic both hosts compile: Android's CMake and LocalProjectsModule.mm.
+  'modules/rish/shared/git/rish_project_merge.h',
+  'modules/rish/shared/git/rish_project_merge.cpp',
   'run-simulator.sh',
   'scripts/prepare-rish-ios.sh',
   'scripts/prepare-rish-agent-core.sh',

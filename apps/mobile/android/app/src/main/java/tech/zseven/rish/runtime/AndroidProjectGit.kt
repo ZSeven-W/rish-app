@@ -374,8 +374,10 @@ internal class AndroidProjectGit(
             else -> throw refused(RECOVERY_REQUIRED, "git merge interrupted: ${applied.optString("outcome")}")
         }
         val inspected = answer(RishLibgit2Native.mergeInspect(opened.gitDir, opened.workDir, branch, ours, mergeOid))
-        if (inspected.optString("head") != "merge" || inspected.optString("index") != "merge" ||
-            !inspected.optBoolean("worktree_clean")
+        // index_merge, not "not ours": when both sides made the same change
+        // the merge's tree is the tree the branch already had, and both hold.
+        if (inspected.optString("head") != "merge" || !inspected.optBoolean("index_merge") ||
+            !inspected.optBoolean("worktree_clean") || inspected.optBoolean("conflicted")
         ) {
             throw refused(RECOVERY_REQUIRED, "git merge landed in an unexpected state")
         }
@@ -405,13 +407,16 @@ internal class AndroidProjectGit(
         }
         val state = answer(RishLibgit2Native.mergeInspect(opened.gitDir, opened.workDir, branch, ours, merge))
         val head = state.optString("head")
-        val index = state.optString("index")
+        val indexMerge = state.optBoolean("index_merge")
+        val indexOurs = state.optBoolean("index_ours")
         val clean = state.optBoolean("worktree_clean") && !state.optBoolean("conflicted")
         when {
             // Done: the branch, the index and the files are the merge.
-            head == "merge" && index == "merge" && clean -> clearMergeJournal(opened)
+            head == "merge" && indexMerge && clean -> clearMergeJournal(opened)
             // Checked out but the branch never moved: finish the move.
-            head == "ours" && index == "merge" && clean -> {
+            // Also the case where the merge's tree equals ours: the person
+            // approved this merge, and finishing it writes no file.
+            head == "ours" && indexMerge && clean -> {
                 val moved = answer(RishLibgit2Native.mergeMoveRef(opened.gitDir, opened.workDir, branch, ours, merge))
                 if (moved.optString("outcome") != "merged") {
                     throw refused(RECOVERY_REQUIRED, "git merge could not be finished")
@@ -419,7 +424,7 @@ internal class AndroidProjectGit(
                 clearMergeJournal(opened)
             }
             // Nothing was written: the merge never started.
-            head == "ours" && index == "ours" && clean -> clearMergeJournal(opened)
+            head == "ours" && indexOurs && clean -> clearMergeJournal(opened)
             else -> throw refused(RECOVERY_REQUIRED, "git merge needs recovery")
         }
     }
@@ -442,29 +447,32 @@ internal class AndroidProjectGit(
             if (!staging.renameTo(target)) throw java.io.IOException("rename")
             syncDirectory(target.parentFile)
         } catch (_: Exception) {
+            // Nothing has been changed yet, so a journal that may not be
+            // durable is withdrawn and the merge refused.
             staging.delete()
+            target.delete()
             throw refused(NATIVE, "git merge journal could not be written")
         }
     }
 
     /**
-     * The rename made durable. A directory is synced through a raw
-     * descriptor: Java's file classes refuse to open one. A directory that
-     * cannot be synced does not fail the merge -- recovery re-reads the
-     * repository itself rather than trusting the journal's presence alone.
+     * A rename or removal made durable. A directory is synced through a raw
+     * descriptor: Java's file classes refuse to open one. Throws when it
+     * cannot be synced; each caller decides what that means.
      */
     private fun syncDirectory(directory: File?) {
-        if (directory == null) return
-        try {
-            val descriptor = android.system.Os.open(directory.absolutePath, android.system.OsConstants.O_RDONLY, 0)
-            try { android.system.Os.fsync(descriptor) } finally { android.system.Os.close(descriptor) }
-        } catch (_: Exception) {
-        }
+        if (directory == null) throw java.io.IOException("no directory")
+        val descriptor = android.system.Os.open(directory.absolutePath, android.system.OsConstants.O_RDONLY, 0)
+        try { android.system.Os.fsync(descriptor) } finally { android.system.Os.close(descriptor) }
     }
 
     private fun clearMergeJournal(opened: Opened) {
         val file = mergeJournal(opened)
         if (file.exists() && !file.delete()) throw refused(NATIVE, "git merge journal could not be cleared")
+        // A removal lost to power failure brings the journal back over a
+        // repository recovery reads as finished or untouched, and clears it
+        // again, so a failed sync here is not a failed merge.
+        try { syncDirectory(file.parentFile) } catch (_: Exception) {}
     }
 
     /** A branch name as the panel can show one: no ref prefix, no whitespace or control characters. */
