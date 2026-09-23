@@ -59,6 +59,12 @@ export type WorkspacePickerSheetProps = {
   onClose: () => void;
   onSelect: (workspaceId: string) => void;
   /**
+   * The conversation already has turns. Its workspace is frozen into them,
+   * so choosing one here opens a new chat in it; the sheet says so first
+   * rather than letting the choice look ignored.
+   */
+  startsNewChat?: boolean;
+  /**
    * Native-issued clearance from the session coordinator. The picker never
    * creates either ID and refuses to call native forget without both.
    */
@@ -88,6 +94,7 @@ export function WorkspacePickerSheet({
   activeWorkspaceId,
   onClose,
   onSelect,
+  startsNewChat = false,
   forgetAuthorization,
   onRemove,
 }: WorkspacePickerSheetProps) {
@@ -541,6 +548,11 @@ export function WorkspacePickerSheet({
               testID="workspace-picker-sheet"
             >
               <Text style={styles.title}>{t('workspaces.title')}</Text>
+              {startsNewChat && (
+                <Text style={styles.hint} testID="workspace-picker-new-chat-hint">
+                  {t('workspaces.startsNewChat')}
+                </Text>
+              )}
               {pendingSelection !== null && (
                 <View
                   accessibilityLabel={pendingSelection.display_name}

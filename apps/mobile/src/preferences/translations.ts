@@ -325,6 +325,8 @@ const enUS = {
   'messages.workspaceUnboundNotice': 'No workspace is bound to this chat, so the model cannot read files or start services here.',
   'options.title': 'Chat options',
   'options.close': 'Close chat options',
+  'workspaces.startsNewChat':
+    'This chat already has messages, so its workspace can no longer change. Choosing a workspace starts a new chat in it; this one stays as it is.',
   'workspaces.title': 'Workspaces',
   'workspaces.close': 'Close workspaces',
   'workspaces.list': 'Workspace list',
@@ -1385,6 +1387,7 @@ const zhCN: Readonly<Record<TranslationKey, string>> = {
   'messages.workspaceUnboundNotice': '这条对话没有绑定工作区，模型无法读写文件或启动服务。',
   'options.title': '对话选项',
   'options.close': '关闭对话选项',
+  'workspaces.startsNewChat': '这个对话已有消息，工作区不能再更改。选择一个工作区将在其中开始新对话，当前对话保持不变。',
   'workspaces.title': '工作区',
   'workspaces.close': '关闭工作区',
   'workspaces.list': '工作区列表',

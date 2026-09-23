@@ -1017,6 +1017,49 @@ test('binds the active conversation to a chosen local workspace', async () => {
   );
 });
 
+test('choosing a workspace for a chat with history opens a new chat in it and leaves that one alone', async () => {
+  // Reported from a phone: after chatting, the workspace sheet "did nothing"
+  // and showed E_WORKSPACE_CONFLICT. A chat's workspace is frozen into its
+  // attempts, so the store refuses to change it once there are any.
+  mockLocalWorkspaces.list.mockResolvedValue({
+    schema_version: 1,
+    workspaces: [appWorkspaceDescriptor('aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa', 'Alpha')],
+  });
+  const renderer = await renderApp();
+  const root = renderer.root;
+  await act(async () => root.findByType(ChatComposer).props.onChange('first question'));
+  await act(async () => {
+    root.findByType(ChatComposer).props.onSend();
+    await settle();
+  });
+  const sourceId = lastPersistedState().conversations.find(
+    conversation => conversation.workspace_id === null,
+  )?.id;
+  expect(sourceId).toBeDefined();
+
+  await act(async () => actionByLabel(root, 'Choose workspace').props.onPress());
+  await act(async () => settle());
+  // The sheet says what choosing will do before the person chooses.
+  expect(root.findAllByProps({ testID: 'workspace-picker-new-chat-hint' }).length).toBeGreaterThan(0);
+  await act(async () => {
+    const sheet = root.findByProps({ testID: 'workspace-picker-sheet' }) as ReactTestInstance;
+    actionByLabel(sheet, 'Use Alpha').props.onPress();
+    await settle();
+    await settle();
+  });
+
+  expect(
+    root.findAllByProps({ testID: 'workspace-picker-sheet' }).filter(node => typeof node.type === 'string'),
+  ).toHaveLength(0);
+  const conversations = lastPersistedState().conversations;
+  const source = conversations.find(conversation => conversation.id === sourceId);
+  const opened = conversations.find(conversation => conversation.id !== sourceId);
+  // The chat with history is untouched; a new one carries the workspace.
+  expect(source?.workspace_id).toBeNull();
+  expect(opened?.workspace_id).toBe('aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa');
+  expect(JSON.stringify(renderer.toJSON()).includes('E_WORKSPACE_CONFLICT')).toBe(false);
+});
+
 test('creates a new project chat from a workspace-only active conversation', async () => {
   jest.useFakeTimers();
   const harnessWorkspaceId = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa';

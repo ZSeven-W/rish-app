@@ -35,6 +35,12 @@ export const createWorkspacePickerStyles = (colors: ThemePalette) =>
       fontWeight: '800',
       marginBottom: 6,
     },
+    hint: {
+      color: colors.muted,
+      fontSize: 12,
+      lineHeight: 17,
+      marginBottom: 8,
+    },
     notice: {
       color: colors.danger,
       fontSize: 12,

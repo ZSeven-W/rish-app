@@ -4932,78 +4932,126 @@ export function HomeScreen({
       )
         return;
       invalidatePendingProjectSend();
-      const conversationId = ensureConversation();
-      workspaceBindingController
-        .bindWorkspace({
-          conversationId,
-          workspaceId,
-          pickerGeneration,
-          surfaceNonce,
-          requiredCapabilities:
-            preferences.toolPermission === 'read-only'
-              ? ['read']
-              : ['read', 'write'],
-        })
-        .then(outcome => {
-          if (
-            outcome.status !== 'committed' &&
-            outcome.status !== 'unchanged'
-          ) {
+      /** Binds the picked workspace to `conversationId`; answers whether it did. */
+      const bindPicked = (conversationId: string): Promise<boolean> =>
+        workspaceBindingController
+          .bindWorkspace({
+            conversationId,
+            workspaceId,
+            pickerGeneration,
+            surfaceNonce,
+            requiredCapabilities:
+              preferences.toolPermission === 'read-only'
+                ? ['read']
+                : ['read', 'write'],
+          })
+          .then(outcome => {
             if (
-              outcome.status === 'unknown' ||
-              outcome.status === 'session_only'
+              outcome.status !== 'committed' &&
+              outcome.status !== 'unchanged'
             ) {
-              setWorkspaceBindingRecoveryVisible(true);
-              if ('code' in outcome) setRequestFailure(outcome.code);
-            } else if (
-              outcome.status === 'stale' &&
-              workspaceBindingController.getState().phase ===
-                'persistence_pending'
-            ) {
-              setWorkspaceBindingRecoveryVisible(true);
-              setRequestFailure('E_WORKSPACE_PERSISTENCE');
-            } else if (
-              outcome.status !== 'stale' &&
-              outcome.code !== undefined
-            ) {
-              setRequestFailure(outcome.code);
+              if (
+                outcome.status === 'unknown' ||
+                outcome.status === 'session_only'
+              ) {
+                setWorkspaceBindingRecoveryVisible(true);
+                if ('code' in outcome) setRequestFailure(outcome.code);
+              } else if (
+                outcome.status === 'stale' &&
+                workspaceBindingController.getState().phase ===
+                  'persistence_pending'
+              ) {
+                setWorkspaceBindingRecoveryVisible(true);
+                setRequestFailure('E_WORKSPACE_PERSISTENCE');
+              } else if (
+                outcome.status !== 'stale' &&
+                outcome.code !== undefined
+              ) {
+                setRequestFailure(outcome.code);
+              }
+              return false;
             }
-            return;
+            if (
+              workspacePickerGenerationRef.current !== pickerGeneration ||
+              workspaceSurfaceNonceRef.current !== surfaceNonce
+            ) {
+              // The binding is durable. A dismissed/replaced picker cannot
+              // publish a late conflict banner into the current conversation.
+              // Controller ownership checks and uncertain-write recovery remain intact.
+              return true;
+            }
+            if ('ownerDrifted' in outcome && outcome.ownerDrifted) {
+              setChatState(store.getState());
+              setRequestFailure('E_WORKSPACE_CONFLICT');
+              return true;
+            }
+            setRequestFailure(previous => previous === 'E_WORKSPACE_CONFLICT' ? null : previous);
+            setWorkspaceNames(previous => ({
+              ...previous,
+              [outcome.workspace.workspace_id]: outcome.workspace.display_name,
+            }));
+            setWorkspaceDescriptors(previous => ({
+              ...previous,
+              [outcome.workspace.workspace_id]: outcome.workspace,
+            }));
+            setWorkspaceBindingRecoveryVisible(false);
+            closeWorkspacePicker();
+            return true;
+          })
+          .catch(error => {
+            setRequestFailure(errorText(error));
+            return false;
+          });
+
+      // A conversation's workspace is frozen into its attempts, and the
+      // store refuses to change it once there are any. Choosing a workspace
+      // for a chat with history used to fail as E_WORKSPACE_CONFLICT with the
+      // sheet left open, which read as the tap being ignored. It opens a new
+      // chat in that workspace instead -- the way opening a project does --
+      // and the chat the person was in stays exactly as it was.
+      const source = expectedConversation;
+      if (source === null || (source.attempts.length === 0 && source.messages.length === 0)) {
+        bindPicked(ensureConversation()).catch(() => undefined);
+        return;
+      }
+      if (navigationMutationInFlight.current) return;
+      navigationMutationInFlight.current = true;
+      const stillSource = () => selectActiveConversation(store.getState()) === source;
+      (async () => {
+        try {
+          if (!projectContextLifecycleController.beforeConversationChange(source.id)) return;
+          if (!(await projectContextController.beforeConversationChange(source.id)) || !stillSource()) return;
+          if (!(await completionController.beforeConversationChange(source.id)) || !stillSource()) return;
+          completionUiEpoch.current += 1;
+          const conversationId = store.createConversation(newConversationOptions());
+          setRequestFailure(null);
+          reconcileSelectedConversation(conversationId);
+          const bound = await bindPicked(conversationId);
+          if (!bound && store.getState().selectedConversationId === conversationId) {
+            const opened = store.getState().conversations[conversationId];
+            if (opened?.messages.length === 0 && opened.attempts.length === 0) {
+              store.selectConversation(source.id);
+              reconcileSelectedConversation(source.id);
+            }
           }
-          if (
-            workspacePickerGenerationRef.current !== pickerGeneration ||
-            workspaceSurfaceNonceRef.current !== surfaceNonce
-          ) {
-            // The binding is durable. A dismissed/replaced picker cannot
-            // publish a late conflict banner into the current conversation.
-            // Controller ownership checks and uncertain-write recovery remain intact.
-            return;
-          }
-          if ('ownerDrifted' in outcome && outcome.ownerDrifted) {
-            setChatState(store.getState());
-            setRequestFailure('E_WORKSPACE_CONFLICT');
-            return;
-          }
-          setRequestFailure(previous => previous === 'E_WORKSPACE_CONFLICT' ? null : previous);
-          setWorkspaceNames(previous => ({
-            ...previous,
-            [outcome.workspace.workspace_id]: outcome.workspace.display_name,
-          }));
-          setWorkspaceDescriptors(previous => ({
-            ...previous,
-            [outcome.workspace.workspace_id]: outcome.workspace,
-          }));
-          setWorkspaceBindingRecoveryVisible(false);
-          closeWorkspacePicker();
-        })
-        .catch(error => setRequestFailure(errorText(error)));
+          await persist();
+        } finally {
+          navigationMutationInFlight.current = false;
+        }
+      })().catch(error => setRequestFailure(errorText(error)));
     },
     [
       closeWorkspacePicker,
+      completionController,
       destructiveSurfaceBlocked,
       ensureConversation,
       invalidatePendingProjectSend,
+      newConversationOptions,
+      persist,
       preferences.toolPermission,
+      projectContextController,
+      projectContextLifecycleController,
+      reconcileSelectedConversation,
       store,
       workspaceBindingController,
     ],
@@ -6860,6 +6908,10 @@ export function HomeScreen({
         visible={workspaceSheetVisible}
         onClose={closeWorkspacePicker}
         onSelect={workspacePickerOnSelect}
+        startsNewChat={
+          activeConversation !== null &&
+          (activeConversation.attempts.length > 0 || activeConversation.messages.length > 0)
+        }
         onRemove={workspaceRemovalAvailable ? removeWorkspace : undefined}
       />
       <MirrorSettingsSheet
