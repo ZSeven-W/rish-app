@@ -354,6 +354,46 @@ class AndroidModelTransportStreamTest {
     }
 
     /**
+     * A relay the person configured answers for the model they chose under
+     * whatever name it uses: one it redirected to, or none at all. Refusing
+     * every name but the exact one made custom relays fail after the answer
+     * arrived -- "only Claude works" (2026-09-24). The receipt keeps the
+     * chosen model; a `model` that is not text is still refused.
+     */
+    @Test
+    fun aRelayMayReportAnotherModelNameAndTheChosenModelIsKept() {
+        assumeTrue("rish agent core is not staged in this build", RishAgentCoreNative.available)
+        for (reported in listOf("\"model\":\"deepseek-chat\",", "\"model\":\"gpt-5.6-2026-01-01\",", "")) {
+            val streamer = Streamer(
+                listOf(
+                    """data: {"id":"resp-alias",${reported}"choices":[{"delta":{"content":"Hi"},"finish_reason":"stop"}]}""" +
+                        "\n\ndata: [DONE]\n\n",
+                ),
+            )
+            val wired = wired(streamer)
+            val result = wired.transport.execute(wired.transport.prepare(wired.request().toString())) {}
+            assertEquals(reported, "Hi", result.getString("text"))
+            assertEquals(reported, "gpt-5.6", result.getString("model"))
+        }
+        val streamer = Streamer(
+            listOf(
+                // The fill-in is for a relay that never named a model, not for
+                // a stream that never said what it was: no id is still short.
+                """data: {"choices":[{"delta":{"content":"Hi"},"finish_reason":"stop"}]}""" +
+                    "\n\ndata: [DONE]\n\n",
+            ),
+        )
+        val wired = wired(streamer)
+        val code = try {
+            wired.transport.execute(wired.transport.prepare(wired.request().toString())) {}
+            "no refusal"
+        } catch (failure: tech.zseven.rish.runtime.RuntimeFailure) {
+            failure.code
+        }
+        assertTrue(code, code.startsWith("E_COMPLETION_RESPONSE"))
+    }
+
+    /**
      * The round an agent actually runs: a tool call, whose name arrives once
      * and whose arguments arrive a few characters at a time, over a socket
      * that breaks them wherever it likes. Reassembled wrongly, the round asks

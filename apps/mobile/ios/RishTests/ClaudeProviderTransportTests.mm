@@ -740,6 +740,45 @@ didCompleteWithError:(NSError *)error {
   }
 }
 
+// A relay the person configured answers for the model they chose under
+// whatever name it uses. Refusing every name but the exact one made custom
+// relays fail after the answer arrived -- "only Claude works" (2026-09-24).
+- (void)testCustomProvidersAcceptWhateverNameTheRelayReportsButRecordTheChosenModel {
+  for (NSString *protocol in @[@"messages", @"responses", @"chat-completions"]) {
+    for (id reported in @[@"deepseek-chat", @"relay-model-2025-01-01", NSNull.null, @"<absent>", @7]) {
+      [ClaudeTransportURLProtocol reset];
+      NSString *suite = [@"custom-alias-" stringByAppendingString:NSUUID.UUID.UUIDString];
+      NSUserDefaults *defaults = [[NSUserDefaults alloc] initWithSuiteName:suite];
+      DSHProviderConfigurationStore *store = [[DSHProviderConfigurationStore alloc] initWithDefaults:defaults];
+      [store saveConfiguration:[self customConfiguration:protocol endpoint:@"https://relay.example/v1"] error:nil];
+      DSHConfiguredProviderTransport *transport = [[DSHConfiguredProviderTransport alloc]
+          initWithHarness:@"claude-code" session:self.session uuidGenerator:nil monotonicClock:nil store:store];
+      [ClaudeTransportURLProtocol setHandler:^(NSURLProtocol *p, NSURLRequest *request) {
+        NSMutableDictionary *payload = nil;
+        if ([protocol isEqual:@"messages"]) {
+          payload = [@{@"id": @"response-alias", @"content": @[@{@"type": @"text", @"text": @"answer"}], @"stop_reason": @"end_turn"} mutableCopy];
+        } else if ([protocol isEqual:@"responses"]) {
+          payload = [@{@"id": @"response-alias", @"status": @"completed", @"output": @[@{@"type": @"message", @"role": @"assistant", @"content": @[@{@"type": @"output_text", @"text": @"answer"}]}]} mutableCopy];
+        } else {
+          payload = [@{@"id": @"response-alias", @"choices": @[@{@"finish_reason": @"stop", @"message": @{@"role": @"assistant", @"content": @"answer"}}]} mutableCopy];
+        }
+        if (![reported isEqual:@"<absent>"]) payload[@"model"] = reported;
+        [self respond:p request:request data:[self jsonData:payload] status:200];
+      }];
+      NSDictionary *result = nil; NSString *errorCode = nil;
+      [self startRoundWithTransport:transport model:@"claude-sonnet-5" schemaVersion:2 result:&result errorCode:&errorCode];
+      if ([reported isKindOfClass:NSNumber.class]) {
+        // Not a name at all: still refused.
+        XCTAssertEqualObjects(errorCode, @"E_COMPLETION_MODEL_MISMATCH", @"%@ %@", protocol, reported);
+      } else {
+        XCTAssertNil(errorCode, @"%@ %@", protocol, reported);
+        XCTAssertEqualObjects(result[@"model"], @"claude-sonnet-5", @"%@ %@", protocol, reported);
+      }
+      [defaults removePersistentDomainForName:suite];
+    }
+  }
+}
+
 - (void)testChangingCustomProviderRejectsTheOldInFlightResponse {
   NSString *suite = [@"custom-race-" stringByAppendingString:NSUUID.UUID.UUIDString];
   NSUserDefaults *defaults = [[NSUserDefaults alloc] initWithSuiteName:suite];

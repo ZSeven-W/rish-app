@@ -282,6 +282,7 @@ internal class AndroidModelTransport(
     internal fun assembleStream(
         stream: java.io.InputStream,
         thinkingMode: String = "off",
+        unnamedModel: String? = null,
         sink: (JSONObject) -> Unit,
     ): JSONObject {
         var state: Any = JSONObject.NULL
@@ -305,6 +306,13 @@ internal class AndroidModelTransport(
                     previews.optJSONObject(index)?.let(sink)
                 }
             }
+        }
+        // A relay may stream without ever naming a model. For a configured
+        // provider that is not a stream that stopped short: it answered the
+        // model it was asked, and the identity check that follows accepts it.
+        val assembled = state as? JSONObject
+        if (unnamedModel != null && assembled != null && (assembled.isNull("model") || assembled.optString("model").isEmpty())) {
+            assembled.put("model", unnamedModel)
         }
         // The thinking mode travels with the assembly: a turn that asked to
         // think reports the reasoning it got, even when that is none.
@@ -467,6 +475,7 @@ internal class AndroidModelTransport(
             val declared = input.optJSONArray("tools") ?: JSONArray()
             val wireModel = config.getJSONObject("model_mappings").optString(request.model, request.model)
             val streaming = sink != null && protocol == "chat-completions"
+            val custom = !config.optBoolean("official")
             // The body is the shared core's, for every dialect. What each one
             // asks for -- the ceiling that follows the round's shape, the
             // thinking vocabulary that follows the model family, `store`,
@@ -500,7 +509,7 @@ internal class AndroidModelTransport(
                 if(!http.isSuccessful) throw RuntimeFailure("E_COMPLETION_HTTP_STATUS", http.code)
                 val stream = http.body?.byteStream() ?: fail("E_COMPLETION_RESPONSE_JSON")
                 if (streaming) {
-                    assembleStream(stream, input.getString("thinking_mode"), sink!!)
+                    assembleStream(stream, input.getString("thinking_mode"), if (custom) wireModel else null, sink!!)
                 } else {
                     val bytes = ByteArrayOutputStream(); val buffer = ByteArray(8192)
                     stream.use { source ->
@@ -515,7 +524,6 @@ internal class AndroidModelTransport(
             synchronized(lock) { own(request) }
             val reported = response.optString("model", "")
             val glmWire = wireModel.startsWith("glm", ignoreCase = true)
-            val custom = !config.optBoolean("official")
             // DeepSeek's 2026-09-10 announcement routes these two retired
             // request ids to V4.1 Flash (deepseek-flash). Mirrors the closed
             // compatibility map in modules/rish/ios/Sources/DshProviderTransport.mm:
@@ -529,13 +537,11 @@ internal class AndroidModelTransport(
                     wireModel in setOf("deepseek-v4-flash", "deepseek-v4-flash-vision-exp") &&
                     reported == "deepseek-flash"
             // A configured (third-party) provider answers under the rule iOS's
-            // ConfiguredProviderTransport applies: the mapped wire model
-            // exactly, a dated form of it on the Messages protocol
-            // (`claude-sonnet-4-5` answered as `claude-sonnet-4-5-20250929`),
-            // or no model at all off Chat Completions -- relays do all three,
-            // and refusing them made every custom configuration on Android
-            // fail with E_COMPLETION_RESPONSE_MODEL after the reply had
-            // already arrived (2026-09-21).
+            // ConfiguredProviderTransport applies: any name the relay reports,
+            // or none. Relays route one requested model to another backend
+            // and report that one (`gpt-5.6` answered as `deepseek-chat`);
+            // refusing it made custom providers fail after the reply had
+            // already arrived. The chosen model is what the round records.
             val configuredMatches = custom && AndroidConfiguredModelIdentity.matches(protocol, wireModel, response.opt("model"))
             if (!(reported == wireModel || documentedLegacyAlias || configuredMatches ||
                     (glmWire && reported.all { it.code < 128 } && reported.equals(wireModel, ignoreCase = true)))
