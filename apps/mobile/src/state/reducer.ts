@@ -5442,10 +5442,10 @@ function hasProviderReceiptId(
 ): boolean {
   return Object.values(state.conversations).some(conversation =>
     conversation.attempts.some(attempt =>
+      // The request id is ours and never repeats; the response id is the
+      // provider's, and relays hand the same one back round after round.
       attempt.rounds.some(
-        round =>
-          round.providerRequestId === receipt.providerRequestId ||
-          round.providerResponseId === receipt.providerResponseId,
+        round => round.providerRequestId === receipt.providerRequestId,
       ),
     ),
   );

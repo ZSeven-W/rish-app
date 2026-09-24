@@ -2846,7 +2846,6 @@ impl Validator<'_> {
         }
         let mut lifecycle_ids: BTreeSet<String> = BTreeSet::new();
         let mut provider_request_ids: BTreeSet<String> = BTreeSet::new();
-        let mut provider_response_ids: BTreeSet<String> = BTreeSet::new();
         let text_of =
             |value: Option<&Value>| -> String { as_str(value).unwrap_or_default().to_string() };
         for conversation in array(f("conversations")) {
@@ -2872,16 +2871,13 @@ impl Validator<'_> {
                 for round in array(get(attempt, "rounds")) {
                     let round_id = text_of(get(round, "round_id"));
                     let request_id = text_of(get(round, "provider_request_id"));
-                    let response_id = text_of(get(round, "provider_response_id"));
-                    if lifecycle_ids.contains(&round_id)
-                        || provider_request_ids.contains(&request_id)
-                        || provider_response_ids.contains(&response_id)
-                    {
+                    // The response id is the provider's, and relays reuse
+                    // one; only the request id, which is ours, is unique.
+                    if lifecycle_ids.contains(&round_id) || provider_request_ids.contains(&request_id) {
                         return false;
                     }
                     lifecycle_ids.insert(round_id);
                     provider_request_ids.insert(request_id);
-                    provider_response_ids.insert(response_id);
                 }
                 let active_round = present(get(attempt, "active_round"));
                 if let Some(active_round) = active_round {
@@ -3188,7 +3184,6 @@ impl Validator<'_> {
         }
         let mut lifecycle_ids: BTreeSet<String> = BTreeSet::new();
         let mut provider_request_ids: BTreeSet<String> = BTreeSet::new();
-        let mut provider_response_ids: BTreeSet<String> = BTreeSet::new();
         let text_of =
             |value: Option<&Value>| -> String { as_str(value).unwrap_or_default().to_string() };
         for conversation in array(f("conversations")) {
@@ -3209,16 +3204,13 @@ impl Validator<'_> {
                 for round in array(get(attempt, "rounds")) {
                     let round_id = text_of(get(round, "round_id"));
                     let request_id = text_of(get(round, "provider_request_id"));
-                    let response_id = text_of(get(round, "provider_response_id"));
-                    if lifecycle_ids.contains(&round_id)
-                        || provider_request_ids.contains(&request_id)
-                        || provider_response_ids.contains(&response_id)
-                    {
+                    // The response id is the provider's, and relays reuse
+                    // one; only the request id, which is ours, is unique.
+                    if lifecycle_ids.contains(&round_id) || provider_request_ids.contains(&request_id) {
                         return false;
                     }
                     lifecycle_ids.insert(round_id);
                     provider_request_ids.insert(request_id);
-                    provider_response_ids.insert(response_id);
                 }
                 if let Some(active_round) = present(get(attempt, "active_round")) {
                     if !lifecycle_ids.insert(text_of(get(active_round, "round_id"))) {

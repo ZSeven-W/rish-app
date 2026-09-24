@@ -6150,7 +6150,6 @@ export function hydrateChatState(
 
   const lifecycleIds = new Set<string>();
   const providerRequestIds = new Set<string>();
-  const providerResponseIds = new Set<string>();
   const claimLifecycleId = (value: string, path: string) => {
     if (lifecycleIds.has(value)) invalid(path, 'must be globally unique');
     lifecycleIds.add(value);
@@ -6198,14 +6197,9 @@ export function hydrateChatState(
             'must be globally unique',
           );
         }
+        // Only the request id is ours to keep unique: relays reuse a
+        // response id across rounds.
         providerRequestIds.add(round.providerRequestId);
-        if (providerResponseIds.has(round.providerResponseId)) {
-          invalid(
-            `${roundPath}.provider_response_id`,
-            'must be globally unique',
-          );
-        }
-        providerResponseIds.add(round.providerResponseId);
       });
       if (attempt.activeRound !== null) {
         claimLifecycleId(

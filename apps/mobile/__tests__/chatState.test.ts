@@ -9632,9 +9632,15 @@ describe('schema v6 attempts and project context', () => {
     expect(store.getState()).toBe(before);
   });
 
-  test.each(['provider_request_id', 'provider_response_id'] as const)(
-    'rejects globally reused %s in reducer and hydration',
-    duplicateField => {
+  test.each([
+    ['provider_request_id', false],
+    ['provider_response_id', true],
+  ] as const)(
+    'globally reused %s: accepted is %s, in reducer and hydration',
+    (duplicateField, accepted) => {
+      // The request id is ours and must never repeat. The response id is the
+      // provider's: relays hand the same one back round after round, and
+      // refusing it failed every later round in a workspace chat.
       function populatedSecondReceipt() {
         const store = v6Store();
         const firstConversation = store.createConversation();
@@ -9691,8 +9697,8 @@ describe('schema v6 attempts and project context', () => {
               duplicateField === 'provider_response_id' ? 'resp_1' : 'resp_2',
           },
         ),
-      ).toBe(false);
-      expect(duplicate.store.getState()).toBe(before);
+      ).toBe(accepted);
+      if (!accepted) expect(duplicate.store.getState()).toBe(before);
 
       const persisted = populatedSecondReceipt();
       expect(
@@ -9718,7 +9724,8 @@ describe('schema v6 attempts and project context', () => {
         conversation.attempts.flatMap(attempt => attempt.rounds),
       );
       allReceipts[1]![duplicateField] = allReceipts[0]![duplicateField];
-      expect(() => hydrateChatState(payload)).toThrow(ChatStateValidationError);
+      if (accepted) expect(() => hydrateChatState(payload)).not.toThrow();
+      else expect(() => hydrateChatState(payload)).toThrow(ChatStateValidationError);
     },
   );
 
