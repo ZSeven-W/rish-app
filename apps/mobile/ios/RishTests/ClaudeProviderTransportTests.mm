@@ -856,6 +856,43 @@ didCompleteWithError:(NSError *)error {
   }
 }
 
+// A relay that sends no response id, or one a receipt cannot hold, is
+// answered under an id of ours rather than refused after the reply arrived.
+- (void)testARelayResponseIdThatCannotBeKeptIsReplaced {
+  NSString *longId = [@"" stringByPaddingToLength:200 withString:@"x" startingAtIndex:0];
+  for (NSString *protocol in @[@"messages", @"responses", @"chat-completions"]) {
+    for (id sent in @[@"<absent>", @"chatcmpl/with spaces", longId, @7, @"kept-id"]) {
+      [ClaudeTransportURLProtocol reset];
+      NSString *suite = [@"custom-id-" stringByAppendingString:NSUUID.UUID.UUIDString];
+      NSUserDefaults *defaults = [[NSUserDefaults alloc] initWithSuiteName:suite];
+      DSHProviderConfigurationStore *store = [[DSHProviderConfigurationStore alloc] initWithDefaults:defaults];
+      [store saveConfiguration:[self customConfiguration:protocol endpoint:@"https://relay.example/v1"] error:nil];
+      DSHConfiguredProviderTransport *transport = [[DSHConfiguredProviderTransport alloc]
+          initWithHarness:@"claude-code" session:self.session uuidGenerator:nil monotonicClock:nil store:store];
+      [ClaudeTransportURLProtocol setHandler:^(NSURLProtocol *p, NSURLRequest *request) {
+        NSMutableDictionary *payload = [protocol isEqual:@"messages"]
+            ? [@{@"model": @"relay-model", @"content": @[@{@"type": @"text", @"text": @"answer"}], @"stop_reason": @"end_turn"} mutableCopy]
+            : ([protocol isEqual:@"responses"]
+               ? [@{@"model": @"relay-model", @"status": @"completed", @"output": @[@{@"type": @"message", @"role": @"assistant", @"content": @[@{@"type": @"output_text", @"text": @"answer"}]}]} mutableCopy]
+               : [@{@"model": @"relay-model", @"choices": @[@{@"finish_reason": @"stop", @"message": @{@"role": @"assistant", @"content": @"answer"}}]} mutableCopy]);
+        if (![sent isEqual:@"<absent>"]) payload[@"id"] = sent;
+        [self respond:p request:request data:[self jsonData:payload] status:200];
+      }];
+      NSDictionary *result = nil; NSString *errorCode = nil;
+      [self startRoundWithTransport:transport model:@"claude-sonnet-5" schemaVersion:2 result:&result errorCode:&errorCode];
+      XCTAssertNil(errorCode, @"%@ %@", protocol, sent);
+      NSString *kept = result[@"provider_response_id"];
+      if ([sent isEqual:@"kept-id"]) {
+        XCTAssertEqualObjects(kept, @"kept-id", @"%@", protocol);
+      } else {
+        BOOL replaced = [kept hasPrefix:@"rish-"];
+        XCTAssertTrue(replaced, @"%@ %@ -> %@", protocol, sent, kept);
+      }
+      [defaults removePersistentDomainForName:suite];
+    }
+  }
+}
+
 - (void)testChangingCustomProviderRejectsTheOldInFlightResponse {
   NSString *suite = [@"custom-race-" stringByAppendingString:NSUUID.UUID.UUIDString];
   NSUserDefaults *defaults = [[NSUserDefaults alloc] initWithSuiteName:suite];

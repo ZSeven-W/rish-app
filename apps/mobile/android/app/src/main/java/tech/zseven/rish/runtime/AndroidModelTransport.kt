@@ -283,6 +283,7 @@ internal class AndroidModelTransport(
         stream: java.io.InputStream,
         thinkingMode: String = "off",
         unnamedModel: String? = null,
+        unnamedId: String? = null,
         sink: (JSONObject) -> Unit,
     ): JSONObject {
         var state: Any = JSONObject.NULL
@@ -314,6 +315,11 @@ internal class AndroidModelTransport(
         if (unnamedModel != null && assembled != null && (assembled.isNull("model") || assembled.optString("model").isEmpty())) {
             assembled.put("model", unnamedModel)
         }
+        // Nor an id, or one this app cannot keep: the round is named by the
+        // request instead (see `relayResponseId`).
+        if (unnamedId != null && assembled != null && !relayIdUsable(assembled.opt("id"))) {
+            assembled.put("id", unnamedId)
+        }
         // The thinking mode travels with the assembly: a turn that asked to
         // think reports the reasoning it got, even when that is none.
         return streamReduce(
@@ -327,6 +333,12 @@ internal class AndroidModelTransport(
      * into this file's own failure. A build without the core staged cannot
      * read a stream at all, and says that rather than half-reading one.
      */
+    /** A response id a receipt can hold as it is. */
+    private fun relayIdUsable(value: Any?): Boolean {
+        val text = value as? String ?: return false
+        return text.length in 1..128 && text.all { it.isLetterOrDigit() && it.code < 128 || it in "._:-" }
+    }
+
     private fun streamReduce(request: JSONObject): JSONObject {
         if (!RishAgentCoreNative.available) fail("E_COMPLETION_RESPONSE_JSON")
         val reply = RishAgentCoreNative.completionResponseReduce(request.toString())
@@ -518,7 +530,10 @@ internal class AndroidModelTransport(
                 if(!http.isSuccessful) throw RuntimeFailure("E_COMPLETION_HTTP_STATUS", http.code)
                 val stream = http.body?.byteStream() ?: fail("E_COMPLETION_RESPONSE_JSON")
                 if (streaming) {
-                    assembleStream(stream, input.getString("thinking_mode"), if (custom) wireModel else null, sink!!)
+                    assembleStream(
+                        stream, input.getString("thinking_mode"),
+                        if (custom) wireModel else null, if (custom) "rish-$providerRequestId" else null, sink!!,
+                    )
                 } else {
                     val bytes = ByteArrayOutputStream(); val buffer = ByteArray(8192)
                     stream.use { source ->
@@ -575,6 +590,14 @@ internal class AndroidModelTransport(
                     "RishRuntime",
                     "completion_model_alias harness=dsh requested_model=$wireModel reported_model=deepseek-flash",
                 )
+            }
+            if (custom && !relayIdUsable(response.opt("id"))) {
+                // A relay may send no id, or one outside what a receipt can
+                // hold (1-128 of [A-Za-z0-9._:-]). Refusing the reply over it
+                // failed the round after the answer had arrived; the round is
+                // named by our own request id instead, which is unique.
+                android.util.Log.i("RishRuntime", "completion_response_id_substituted harness=${request.harness}")
+                response.put("id", "rish-$providerRequestId")
             }
             val read = parseResponse(protocol, response)
             val text = read.getString("text")

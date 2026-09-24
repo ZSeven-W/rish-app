@@ -375,6 +375,7 @@ class AndroidModelTransportStreamTest {
             val result = wired.transport.execute(wired.transport.prepare(wired.request().toString())) {}
             assertEquals(reported, "Hi", result.getString("text"))
             assertEquals(reported, "gpt-5.6", result.getString("model"))
+            assertEquals(reported, "resp-alias", result.getString("provider_response_id"))
             // Reasoning settings are off for this relay: none go out, not
             // even a `thinking` that says disabled.
             for (key in listOf("\"thinking\"", "\"reasoning_effort\"", "\"reasoning\"")) {
@@ -383,9 +384,9 @@ class AndroidModelTransportStreamTest {
         }
         val streamer = Streamer(
             listOf(
-                // The fill-in is for a relay that never named a model, not for
-                // a stream that never said what it was: no id is still short.
-                """data: {"choices":[{"delta":{"content":"Hi"},"finish_reason":"stop"}]}""" +
+                // The fill-in is for a relay that left out a name, not for a
+                // stream that never finished: that is still short.
+                """data: {"id":"resp-alias","choices":[{"delta":{"content":"Hi"}}]}""" +
                     "\n\ndata: [DONE]\n\n",
             ),
         )
@@ -397,6 +398,26 @@ class AndroidModelTransportStreamTest {
             failure.code
         }
         assertTrue(code, code.startsWith("E_COMPLETION_RESPONSE"))
+    }
+
+    /**
+     * A relay that sends no response id, or one a receipt cannot hold, is
+     * answered under our own request id rather than refused after the reply
+     * arrived. A relay's usable id is kept as it is.
+     */
+    @Test
+    fun aRelayResponseIdThatCannotBeKeptIsReplacedByOurs() {
+        assumeTrue("rish agent core is not staged in this build", RishAgentCoreNative.available)
+        for (id in listOf("", "\"id\":\"chatcmpl/with spaces\",", "\"id\":\"${"x".repeat(200)}\",", "\"id\":7,")) {
+            val streamer = Streamer(
+                listOf("""data: {${id}"model":"gpt-5.6","choices":[{"delta":{"content":"Hi"},"finish_reason":"stop"}]}""" + "\n\ndata: [DONE]\n\n"),
+            )
+            val wired = wired(streamer)
+            val result = wired.transport.execute(wired.transport.prepare(wired.request().toString())) {}
+            assertEquals(id, "Hi", result.getString("text"))
+            val kept = result.getString("provider_response_id")
+            assertTrue("$id -> $kept", kept.startsWith("rish-") && kept.removePrefix("rish-") == result.getString("provider_request_id"))
+        }
     }
 
     /**
