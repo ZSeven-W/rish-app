@@ -280,7 +280,7 @@ test('reducer folds the end event and stops accepting afterwards', () => {
   const empty = createAgentRoundPreviewState(camelCorrelation);
   const first = reduceAgentRoundPreview(empty, delta(1, { text: 'a' }));
   const finished = reduceAgentRoundPreview(first, end(2, {}));
-  expect(finished.ended).toEqual({ status: 'validated', failureCode: null });
+  expect(finished.ended).toEqual({ status: 'validated', failureCode: null, httpStatus: null });
   expect(finished.incomplete).toBe(false);
   expect(finished.lastSeq).toBe(2);
   expect(reduceAgentRoundPreview(finished, delta(3, { text: 'late' }))).toBe(finished);
@@ -295,7 +295,7 @@ test('reducer carries failure codes and truncation from failed ends', () => {
     failure_code: 'E_COMPLETION_LENGTH',
     truncated: true,
   }));
-  expect(failed.ended).toEqual({ status: 'failed', failureCode: 'E_COMPLETION_LENGTH' });
+  expect(failed.ended).toEqual({ status: 'failed', failureCode: 'E_COMPLETION_LENGTH', httpStatus: null });
   expect(failed.incomplete).toBe(true);
 });
 

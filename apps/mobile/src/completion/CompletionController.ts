@@ -281,10 +281,24 @@ export type CompletionControllerDependencies = {
 /** Streamed previews of the active attempt's rounds, keyed by round id. */
 export type AgentRoundPreviews = Readonly<Record<string, AgentRoundPreviewState>>;
 
+/**
+ * What the transport said when an attempt's last round failed: the
+ * provider's own refusal (an HTTP status, a reply that could not be read).
+ * Display only -- the round's recorded outcome is unchanged, and a
+ * dispatched round stays ambiguous -- but "the service refused the key"
+ * is what a person configuring a relay needs to see.
+ */
+export type ProviderFailure = {
+  readonly attemptId: string;
+  readonly code: string;
+  readonly httpStatus: number | null;
+};
+
 export type CompletionController = {
   getState(): CompletionControllerState;
   subscribe(listener: (state: CompletionControllerState) => void): () => void;
   getPreviews(): AgentRoundPreviews;
+  getProviderFailure?(): ProviderFailure | null;
   subscribePreviews(listener: (previews: AgentRoundPreviews) => void): () => void;
   send(
     input: CompletionControllerInput,
@@ -776,6 +790,9 @@ export function createCompletionController(
   // Streamed round previews: ephemeral, per attempt, replaced by the
   // validated result and dropped when the run settles.
   let roundPreviews: AgentRoundPreviews = Object.freeze({});
+  // Kept past clearPreviews: a failure state clears the previews in the same
+  // publish that has to explain it.
+  let providerFailure: ProviderFailure | null = null;
   let previewAttemptId: string | null = null;
   let previewKeys = new Map<string, { readonly operationId: string }>();
   let previewUnsubscribe: (() => void) | null = null;
@@ -813,10 +830,19 @@ export function createCompletionController(
       });
     const next = reduceAgentRoundPreview(current, event);
     if (next === roundPreviews[event.roundId]) return;
+    if (next.ended?.status === 'failed' && next.ended.failureCode !== null) {
+      providerFailure = Object.freeze({
+        attemptId: event.attemptId,
+        code: next.ended.failureCode,
+        httpStatus: next.ended.httpStatus,
+      });
+    }
     publishPreviews(Object.freeze({ ...roundPreviews, [event.roundId]: next }));
   };
   const openPreview = (attemptId: string, roundId: string, operationId: string): void => {
     if (previewAttemptId !== attemptId) clearPreviews();
+    // A new round starts over: an earlier round's refusal is not its story.
+    providerFailure = null;
     previewAttemptId = attemptId;
     previewKeys.set(roundId, { operationId });
     if (previewUnsubscribe === null && dependencies.previewSource !== undefined) {
@@ -5191,6 +5217,7 @@ export function createCompletionController(
       return () => listeners.delete(listener);
     },
     getPreviews: () => roundPreviews,
+    getProviderFailure: () => providerFailure,
     subscribePreviews: listener => {
       previewListeners.add(listener);
       return () => previewListeners.delete(listener);

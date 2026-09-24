@@ -9,6 +9,7 @@ import { useTaskActions } from '../taskExperience/useTaskActions';
 import { ProviderConfigurations } from '../providers/native';
 import type { ProviderConfiguration } from '../providers/configuration';
 import { RecoveryNotice } from '../components/RecoveryNotice';
+import { providerFailureDetail, providerFailureMessage } from '../components/providerFailureMessage';
 import { completionRecoveryLabel, recoveryCode } from '../components/recoveryMessage';
 import React, {
   useCallback,
@@ -1982,6 +1983,14 @@ export function HomeScreen({
           ? 'E_ATTEMPT_INTERRUPTED'
           : t('home.responseStopped'))
       : null);
+
+  // The provider's own refusal behind a failed round of the chat on screen:
+  // read at render, since the failure that shows it is what re-renders.
+  const lastAttemptId = activeConversation?.attempts.at(-1)?.attemptId ?? null;
+  const providerFailureNow = completionController.getProviderFailure?.() ?? null;
+  const providerRefusalMessage = providerFailureNow?.attemptId === lastAttemptId
+    ? providerFailureMessage(visibleRequestFailure, providerFailureNow, t) : null;
+  const providerRefusal = providerRefusalMessage !== null ? providerFailureNow : null;
 
   const applyCompletionOutcome = useCallback(
     (result: CompletionControllerOutcome, expectedEpoch: number) => {
@@ -6438,9 +6447,11 @@ export function HomeScreen({
                   visibleRequestFailure === completionState.failureCode &&
                   completionState.failureDiagnostic !== undefined
                   ? `${visibleRequestFailure}\n${completionState.failureDiagnostic}`
-                  : visibleRequestFailure ?? storageWarning ?? ''}
-                message={recoveryCode(visibleRequestFailure ?? storageWarning ?? '') === null
-                  ? visibleRequestFailure ?? storageWarning ?? undefined : undefined}
+                  : providerRefusal !== null
+                    ? `${visibleRequestFailure}\n${providerFailureDetail(providerRefusal)}`
+                    : visibleRequestFailure ?? storageWarning ?? ''}
+                message={providerRefusalMessage ?? (recoveryCode(visibleRequestFailure ?? storageWarning ?? '') === null
+                  ? visibleRequestFailure ?? storageWarning ?? undefined : undefined)}
               />
               {sessionLoadFailure !== null && (
                 <Pressable

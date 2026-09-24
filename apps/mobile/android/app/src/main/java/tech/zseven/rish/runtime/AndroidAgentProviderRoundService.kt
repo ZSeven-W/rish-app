@@ -306,13 +306,12 @@ internal class AndroidAgentProviderRoundService(
                     preview?.invoke(JSONObject().put("kind", "end").put("status", "validated"))
                 }
             } catch (failure: Exception) {
-                preview?.invoke(
-                    JSONObject().put("kind", "end").put("status", "failed")
-                        .put(
-                            "failure_code",
-                            (failure as? RuntimeFailure)?.code ?: "E_COMPLETION_NATIVE",
-                        ),
-                )
+                val end = JSONObject().put("kind", "end").put("status", "failed")
+                    .put("failure_code", (failure as? RuntimeFailure)?.code ?: "E_COMPLETION_NATIVE")
+                // The status a provider refused with -- 401 is a key, 404 an
+                // address -- is what tells a person which setting to fix.
+                (failure as? RuntimeFailure)?.httpStatus?.takeIf { it in 100..599 }?.let { end.put("http_status", it) }
+                preview?.invoke(end)
                 throw failure
             }
         } catch (failure: Exception) {

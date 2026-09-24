@@ -37,6 +37,8 @@ export type AgentRoundPreviewEndEvent = AgentRoundPreviewCorrelation & {
   readonly seq: number;
   readonly status: 'validated' | 'failed';
   readonly failureCode?: string;
+  /** The HTTP status a provider answered with, when that is why it failed. */
+  readonly httpStatus?: number;
   readonly truncated: boolean;
 };
 
@@ -62,6 +64,7 @@ export type AgentRoundPreviewState = {
   readonly ended: null | {
     readonly status: 'validated' | 'failed';
     readonly failureCode: string | null;
+    readonly httpStatus: number | null;
   };
 };
 
@@ -184,6 +187,11 @@ function parseEndEvent(
     if (code === null) return null;
     failureCode = code;
   }
+  let httpStatus: number | undefined;
+  if (raw.http_status !== undefined) {
+    if (!isIntegerInRange(raw.http_status, 100, 599)) return null;
+    httpStatus = raw.http_status;
+  }
   return Object.freeze({
     ...correlation,
     kind: 'end' as const,
@@ -191,6 +199,7 @@ function parseEndEvent(
     status: raw.status,
     truncated: raw.truncated,
     ...(failureCode !== undefined ? { failureCode } : {}),
+    ...(httpStatus !== undefined ? { httpStatus } : {}),
   });
 }
 
@@ -277,7 +286,11 @@ export function reduceAgentRoundPreview(
     ...state,
     lastSeq: event.seq,
     incomplete: incomplete || event.truncated,
-    ended: Object.freeze({ status: event.status, failureCode: event.failureCode ?? null }),
+    ended: Object.freeze({
+      status: event.status,
+      failureCode: event.failureCode ?? null,
+      httpStatus: event.httpStatus ?? null,
+    }),
   });
 }
 
