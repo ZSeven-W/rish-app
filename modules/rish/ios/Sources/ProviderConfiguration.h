@@ -18,5 +18,9 @@ FOUNDATION_EXPORT BOOL DSHValidateProviderBinding(id value, NSString *logicalMod
 FOUNDATION_EXPORT BOOL DSHProviderBindingIsCurrent(id _Nullable value, NSString *logicalModel);
 FOUNDATION_EXPORT NSDictionary *_Nullable DSHProviderRecordWithoutConfiguration(NSDictionary *record, NSString *model);
 FOUNDATION_EXPORT NSString *_Nullable DSHEffectiveCredentialAccount(NSString *slot);
+/// The harness whose provider a credential slot belongs to, or nil.
+FOUNDATION_EXPORT NSString *_Nullable DSHConfigurableHarnessForSlot(NSString *slot);
+/// Whether the person configured a relay for this harness.
+FOUNDATION_EXPORT BOOL DSHHarnessUsesCustomProvider(NSString *harness);
 FOUNDATION_EXPORT NSString *_Nullable DSHNormalizeProviderEndpoint(NSString *value, NSString *protocol);
 NS_ASSUME_NONNULL_END

@@ -400,6 +400,55 @@ class AndroidModelTransportStreamTest {
     }
 
     /**
+     * DeepSeek and GLM through a relay, on every protocol: the testers asked
+     * for all four harnesses, not only Claude Code and Codex (2026-09-24).
+     * The key lives in the relay's own namespace and the mapped model goes
+     * out on the wire.
+     */
+    @Test
+    fun dshAndGlmGoThroughARelayOnEveryProtocol() {
+        assumeTrue("rish agent core is not staged in this build", RishAgentCoreNative.available)
+        val replies = mapOf(
+            "chat-completions" to """{"id":"r","model":"relay-model","choices":[{"index":0,"message":{"role":"assistant","content":"answer"},"finish_reason":"stop"}]}""",
+            "messages" to """{"id":"r","type":"message","role":"assistant","model":"relay-model","content":[{"type":"text","text":"answer"}],"stop_reason":"end_turn"}""",
+            "responses" to """{"id":"r","object":"response","model":"relay-model","status":"completed","output":[{"type":"message","role":"assistant","content":[{"type":"output_text","text":"answer"}]}]}""",
+        )
+        for ((harness, model) in listOf("dsh" to "deepseek-v4-flash", "glm" to "GLM-5.3")) {
+            for ((protocol, reply) in replies) {
+                val streamer = Streamer(listOf(reply))
+                val namespace = "relay-other-${UUID.randomUUID()}"
+                val configurations = AndroidProviderConfiguration(context, "$namespace.providers")
+                val transport = AndroidModelTransport(AndroidCredentialStore(context, namespace), configurations)
+                val slot = AndroidProviderConfiguration.slot(harness)
+                assertEquals(slot, configurations.effectiveAccount(slot))
+                streamer.start()
+                configurations.save(
+                    JSONObject().put("schema_version", 1).put("harness_id", harness).put("name", "Relay")
+                        .put("endpoint_url", "http://127.0.0.1:${streamer.socket.localPort}/v1/$protocol")
+                        .put("protocol", protocol).put("auth_type", "bearer")
+                        .put("model_mappings", JSONObject().put(model, "relay-model"))
+                        .put("send_reasoning", false).put("full_url", true),
+                )
+                val account = configurations.effectiveAccount(slot)
+                assertTrue(account, account.startsWith("CUSTOM_PROVIDER_${harness}_"))
+                transport.put(slot, transport.account(slot), "relay-key")
+                val request = Wired(transport, streamer.socket.localPort, UUID.randomUUID().toString()).request()
+                    .put("harness_id", harness).put("model", model)
+                val result = transport.execute(transport.prepare(request.toString()), null)
+                assertEquals("$harness $protocol", "answer", result.getString("text"))
+                assertEquals("$harness $protocol", model, result.getString("model"))
+                val sent = JSONObject(streamer.request.substringAfter("\r\n\r\n"))
+                assertEquals("$harness $protocol", "relay-model", sent.getString("model"))
+                assertFalse("$harness $protocol", sent.has("thinking"))
+                assertTrue(streamer.request, streamer.request.contains("Authorization: Bearer relay-key"))
+                assertTrue(result.has("provider_configuration"))
+                configurations.reset(harness)
+                assertEquals(slot, configurations.effectiveAccount(slot))
+            }
+        }
+    }
+
+    /**
      * A round after a tool call, over the two dialects that are not chat
      * completions. The round transcript arrives in OpenAI's shape and the
      * core rewrites it into each wire's own: tool_use and tool_result blocks

@@ -10534,7 +10534,9 @@ test.each([
       expect(claude).not.toHaveBeenCalled();
       expect(mockLocalRuntime.credentialStatusForSlot).toHaveBeenCalledWith('DEEPSEEK_API_KEY');
       expect(mockLocalRuntime.credentialStatusForSlot).not.toHaveBeenCalledWith('ANTHROPIC_API_KEY');
-      expect(provider).not.toHaveBeenCalled();
+      // DSH can go through a relay too: after hydration it reads its own
+      // provider configuration, and no other harness's.
+      expect(provider.mock.calls.every(([id]) => id === 'dsh')).toBe(true);
     } else {
       expect(claude).toHaveBeenCalled();
       expect(mockLocalRuntime.credentialStatus).not.toHaveBeenCalled();

@@ -74,7 +74,7 @@ type Props = {
   onOpenEnvironments?: () => void;
   onOpenRuntime: () => void;
   onPreferencesChanged: () => void;
-  onProviderConfigurationChanged?: (harness: ConfigurableHarness | 'glm') => void;
+  onProviderConfigurationChanged?: (harness: ConfigurableHarness) => void;
 };
 
 export function SettingsSheet(props: Props) {

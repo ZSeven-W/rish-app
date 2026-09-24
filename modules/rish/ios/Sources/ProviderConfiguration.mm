@@ -5,8 +5,10 @@
 #include <CoreFoundation/CoreFoundation.h>
 
 static NSString *const SettingsKey = @"RishCustomProviderConfigurationsV1";
+/// Every harness can go through a relay the person configured.
 static BOOL Supported(id value) {
-  return [value isEqual:@"claude-code"] || [value isEqual:@"codex"];
+  return [value isEqual:@"claude-code"] || [value isEqual:@"codex"] ||
+      [value isEqual:@"dsh"] || [value isEqual:@"glm"];
 }
 static BOOL Text(id value, NSUInteger maximum) {
   if (![value isKindOfClass:NSString.class]) return NO;
@@ -67,7 +69,8 @@ NSDictionary *DSHNormalizeProviderConfiguration(id raw) {
   NSString *endpoint = NormalizeEndpoint(raw[@"endpoint_url"], raw[@"protocol"], [fullURL boolValue]);
   if (endpoint == nil) return nil;
   NSDictionary *mappings = raw[@"model_mappings"];
-  if (mappings.count > 4) return nil;
+  // DSH's catalog holds up to 32 models, and each may be mapped.
+  if (mappings.count > 32) return nil;
   for (id model in mappings) {
     if (![DSHHarnessIdForModel(model) isEqual:raw[@"harness_id"]] || !Text(mappings[model], 128) ||
         [mappings[model] rangeOfCharacterFromSet:NSCharacterSet.whitespaceAndNewlineCharacterSet].location != NSNotFound) return nil;
@@ -100,11 +103,16 @@ NSDictionary *DSHNormalizeProviderConfiguration(id raw) {
     if (all != nil && ![all isKindOfClass:NSDictionary.class]) return nil;
     id saved = all[harness];
     if (saved != nil) return DSHNormalizeProviderConfiguration(saved);
-    NSString *protocol = [harness isEqual:@"claude-code"] ? @"messages" : @"responses";
-    NSString *endpoint = [harness isEqual:@"claude-code"]
-        ? @"https://api.anthropic.com/v1/messages" : @"https://api.openai.com/v1/responses";
-    return @{@"schema_version": @1, @"harness_id": harness, @"name": @"", @"endpoint_url": endpoint,
-             @"protocol": protocol, @"auth_type": [harness isEqual:@"claude-code"] ? @"x-api-key" : @"bearer",
+    // The official service each harness speaks to, shown as the starting
+    // point of a custom configuration.
+    NSArray *official = @{
+      @"claude-code": @[@"https://api.anthropic.com/v1/messages", @"messages", @"x-api-key"],
+      @"codex": @[@"https://api.openai.com/v1/responses", @"responses", @"bearer"],
+      @"dsh": @[@"https://api.deepseek.com/chat/completions", @"chat-completions", @"bearer"],
+      @"glm": @[@"https://open.bigmodel.cn/api/anthropic/v1/messages", @"messages", @"x-api-key"],
+    }[harness];
+    return @{@"schema_version": @1, @"harness_id": harness, @"name": @"", @"endpoint_url": official[0],
+             @"protocol": official[1], @"auth_type": official[2],
              @"model_mappings": @{}, @"send_reasoning": @YES, @"official": @YES};
   }
 }
@@ -175,9 +183,16 @@ BOOL DSHProviderBindingIsCurrent(id value, NSString *model) {
   NSDictionary *current = DSHProviderBindingForModel(model);
   return (value == nil && current == nil) || [current isEqual:value];
 }
+NSString *DSHConfigurableHarnessForSlot(NSString *slot) {
+  return @{@"ANTHROPIC_API_KEY": @"claude-code", @"OPENAI_API_KEY": @"codex",
+           @"DEEPSEEK_API_KEY": @"dsh", @"BIGMODEL_API_KEY": @"glm"}[slot];
+}
+BOOL DSHHarnessUsesCustomProvider(NSString *harness) {
+  NSDictionary *profile = Supported(harness) ? [[DSHProviderConfigurationStore sharedStore] configurationForHarness:harness] : nil;
+  return profile != nil && ![profile[@"official"] isEqual:@YES];
+}
 NSString *DSHEffectiveCredentialAccount(NSString *slot) {
-  NSString *harness = [slot isEqual:@"ANTHROPIC_API_KEY"] ? @"claude-code" :
-      ([slot isEqual:@"OPENAI_API_KEY"] ? @"codex" : nil);
+  NSString *harness = DSHConfigurableHarnessForSlot(slot);
   if (harness == nil) return slot;
   NSDictionary *profile = [[DSHProviderConfigurationStore sharedStore] configurationForHarness:harness];
   if (profile == nil) return nil;

@@ -13,6 +13,15 @@ internal class AndroidProviderConfiguration(context: Context, namespace: String 
             "codex" to setOf("gpt-5.6", "gpt-5.6-mini", "gpt-5.6-nano"),
             "claude-code" to setOf("claude-sonnet-5", "claude-opus-5", "claude-haiku-4-5-20251001", "claude-fable-5-1"),
         )
+        /** Every harness can go through a relay the person configured. */
+        val configurable = setOf("codex", "claude-code", "dsh", "glm")
+        /** DSH's slots are its catalog, which the person can add to. */
+        fun mapsModel(harness: String, model: String): Boolean =
+            if (harness == "dsh") AndroidDshModelCatalog.isKnown(model) else model in models.getValue(harness)
+        private fun harnessOfSlot(slot: String): String? = when(slot) {
+            "OPENAI_API_KEY" -> "codex"; "ANTHROPIC_API_KEY" -> "claude-code"
+            "DEEPSEEK_API_KEY" -> "dsh"; "BIGMODEL_API_KEY" -> "glm"; else -> null
+        }
         fun harness(model: String): String = if (AndroidDshModelCatalog.isKnown(model)) "dsh" else models.entries.firstOrNull { model in it.value }?.key ?: error("E_COMPLETION_MODEL_MISMATCH")
         fun slot(harness: String): String = when(harness) {
             "dsh" -> "DEEPSEEK_API_KEY"; "glm" -> "BIGMODEL_API_KEY"; "codex" -> "OPENAI_API_KEY"; "claude-code" -> "ANTHROPIC_API_KEY"
@@ -30,7 +39,7 @@ internal class AndroidProviderConfiguration(context: Context, namespace: String 
             val binding = raw as? JSONObject ?: return false
             if (binding.keys().asSequence().toSet() != bindingKeys || binding.opt("schema_version") != 1) return false
             val harness = binding.opt("harness_id") as? String ?: return false
-            if (harness !in setOf("codex", "claude-code")) return false
+            if (harness !in configurable) return false
             if (model == null || (try { harness(model) } catch (_: IllegalStateException) { null }) != harness) return false
             val wire = binding.opt("model_id") as? String ?: return false
             if (wire.isEmpty() || wire.toByteArray(Charsets.UTF_8).size > 128 || wire.any { it.isWhitespace() || it.isISOControl() }) return false
@@ -50,19 +59,23 @@ internal class AndroidProviderConfiguration(context: Context, namespace: String 
         }
     }
     fun read(harness: String): JSONObject {
-        require(harness in setOf("codex", "claude-code"))
+        require(harness in configurable)
         preferences.getString(harness, null)?.let { return normalize(JSONObject(it)).also { value -> require(value.getString("harness_id") == harness) } }
+        val (endpoint, protocol, auth) = when (harness) {
+            "codex" -> Triple("https://api.openai.com/v1/responses", "responses", "bearer")
+            "claude-code" -> Triple("https://api.anthropic.com/v1/messages", "messages", "x-api-key")
+            "glm" -> Triple("https://open.bigmodel.cn/api/anthropic/v1/messages", "messages", "x-api-key")
+            else -> Triple("https://api.deepseek.com/chat/completions", "chat-completions", "bearer")
+        }
         return JSONObject().put("schema_version", 1).put("harness_id", harness).put("name", "")
-            .put("endpoint_url", if(harness == "codex") "https://api.openai.com/v1/responses" else "https://api.anthropic.com/v1/messages")
-            .put("protocol", if(harness == "codex") "responses" else "messages")
-            .put("auth_type", if(harness == "codex") "bearer" else "x-api-key")
+            .put("endpoint_url", endpoint).put("protocol", protocol).put("auth_type", auth)
             .put("send_reasoning", true).put("model_mappings", JSONObject()).put("official", true)
     }
     fun normalize(raw: JSONObject): JSONObject {
         RuntimeJson.checkVersion(raw, 1)
         val keys = raw.keys().asSequence().toSet()
         require(keys - "full_url" == setOf("schema_version", "harness_id", "name", "endpoint_url", "protocol", "auth_type", "model_mappings", "send_reasoning"))
-        val harness = raw.getString("harness_id"); require(harness in setOf("codex", "claude-code"))
+        val harness = raw.getString("harness_id"); require(harness in configurable)
         val name = raw.getString("name"); require(name.isNotEmpty() && name.toByteArray().size <= 80 && name.none { it.isISOControl() })
         val protocol = raw.getString("protocol"); require(protocol in setOf("messages", "chat-completions", "responses"))
         require(raw.getString("auth_type") in setOf("bearer", "x-api-key", "api-key"))
@@ -81,9 +94,10 @@ internal class AndroidProviderConfiguration(context: Context, namespace: String 
             if (!knownEndpoint && !path.endsWith("/v1")) path += "/v1"
             path += "/$suffix"
         }
-        val mappings = raw.getJSONObject("model_mappings"); require(mappings.length() <= 4)
+        // DSH's catalog holds up to 32 models, and each may be mapped.
+        val mappings = raw.getJSONObject("model_mappings"); require(mappings.length() <= 32)
         for (model in mappings.keys()) {
-            require(model in models.getValue(harness)); val wire = mappings.getString(model)
+            require(mapsModel(harness, model)); val wire = mappings.getString(model)
             require(wire.length in 1..128 && wire.none { it.isWhitespace() || it.isISOControl() })
         }
         val normalized = JSONObject(raw.toString()).put("endpoint_url", url.newBuilder().encodedPath(path).build().toString()).put("full_url", raw.optBoolean("full_url", false))
@@ -95,18 +109,10 @@ internal class AndroidProviderConfiguration(context: Context, namespace: String 
         return normalized
     }
     fun reset(harness: String): JSONObject {
-        require(harness in setOf("codex", "claude-code"))
+        require(harness in configurable)
         check(preferences.edit().remove(harness).commit()); return read(harness)
     }
-    fun forModel(model: String): JSONObject {
-        val harness = harness(model)
-        if (harness in setOf("codex", "claude-code")) return read(harness)
-        return JSONObject().put("official", true).put("harness_id", harness)
-            .put("endpoint_url", if(harness == "glm") "https://open.bigmodel.cn/api/anthropic/v1/messages" else "https://api.deepseek.com/chat/completions")
-            .put("protocol", if(harness == "glm") "messages" else "chat-completions")
-            .put("auth_type", if(harness == "glm") "x-api-key" else "bearer")
-            .put("send_reasoning", true).put("model_mappings", JSONObject())
-    }
+    fun forModel(model: String): JSONObject = read(harness(model))
     fun binding(config: JSONObject, model: String): JSONObject? {
         if (config.optBoolean("official")) return null
         val binding = JSONObject().put("schema_version", 1).put("harness_id", config.getString("harness_id"))
@@ -117,7 +123,10 @@ internal class AndroidProviderConfiguration(context: Context, namespace: String 
     }
     fun previousAccount(slot: String): String {
         require(slot in AndroidCredentialStore.slots)
-        val harness = when(slot) { "OPENAI_API_KEY" -> "codex"; "ANTHROPIC_API_KEY" -> "claude-code"; else -> return slot }
+        val harness = harnessOfSlot(slot) ?: return slot
+        // DSH and GLM had no custom provider before the current identity, so
+        // there is no legacy account to carry a key over from.
+        if (harness == "dsh" || harness == "glm") return effectiveAccount(slot)
         val config = read(harness)
         if(config.optBoolean("official")) return slot
         val identity = mapOf("harness_id" to harness, "endpoint_url" to config.getString("endpoint_url"),
@@ -127,7 +136,7 @@ internal class AndroidProviderConfiguration(context: Context, namespace: String 
     }
     fun effectiveAccount(slot: String): String {
         require(slot in AndroidCredentialStore.slots)
-        val harness = when(slot) { "OPENAI_API_KEY" -> "codex"; "ANTHROPIC_API_KEY" -> "claude-code"; else -> return slot }
+        val harness = harnessOfSlot(slot) ?: return slot
         val config = read(harness)
         if(config.optBoolean("official")) return slot
         val identity = JSONObject().put("harness_id", harness).put("endpoint_url", config.getString("endpoint_url"))

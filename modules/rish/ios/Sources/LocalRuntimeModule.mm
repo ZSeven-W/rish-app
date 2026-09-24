@@ -822,6 +822,9 @@ static BOOL DSHCanConnectToMacProxy(void) {
 @property(nonatomic, strong) DSHCompletionProviderTransport *codexProviderTransport;
 @property(nonatomic, strong) CodexSubscriptionTransport *codexSubscriptionTransport;
 @property(nonatomic, strong) GlmProviderTransport *glmProviderTransport;
+/// DSH and GLM through a relay the person configured.
+@property(nonatomic, strong) DSHCompletionProviderTransport *dshConfiguredTransport;
+@property(nonatomic, strong) DSHCompletionProviderTransport *glmConfiguredTransport;
 @property(nonatomic, strong) NSURLSessionDataTask *activeCompletionTask;
 @property(nonatomic, strong) id<DSHCompletionExecution> activeCompletionExecution;
 @property(nonatomic, copy) NSString *activeCompletionRequestId;
@@ -1185,6 +1188,14 @@ RCT_EXPORT_MODULE(LocalRuntime)
         initWithHarness:@"codex" session:_modelSession
         uuidGenerator:_completionV2UUIDGenerator
         monotonicClock:_completionV2MonotonicClock store:DSHProviderConfigurationStore.sharedStore];
+    _dshConfiguredTransport = [[DSHConfiguredProviderTransport alloc]
+        initWithHarness:@"dsh" session:_modelSession
+        uuidGenerator:_completionV2UUIDGenerator
+        monotonicClock:_completionV2MonotonicClock store:DSHProviderConfigurationStore.sharedStore];
+    _glmConfiguredTransport = [[DSHConfiguredProviderTransport alloc]
+        initWithHarness:@"glm" session:_modelSession
+        uuidGenerator:_completionV2UUIDGenerator
+        monotonicClock:_completionV2MonotonicClock store:DSHProviderConfigurationStore.sharedStore];
     _codexSubscriptionTransport = [[CodexSubscriptionTransport alloc]
         initWithSession:_modelSession uuidGenerator:_completionV2UUIDGenerator
         monotonicClock:_completionV2MonotonicClock];
@@ -1219,8 +1230,10 @@ RCT_EXPORT_MODULE(LocalRuntime)
     }
   }
   if ([harnessId isEqualToString:@"codex"]) return [[self.harnessAuthService codexChatSource] isEqual:@"api_key"] ? self.codexProviderTransport : self.codexSubscriptionTransport;
-  if ([harnessId isEqualToString:@"glm"]) return self.glmProviderTransport;
-  return self.completionProviderTransport;
+  // A relay configured for GLM replaces its account and its endpoint.
+  if ([harnessId isEqualToString:@"glm"])
+    return DSHHarnessUsesCustomProvider(@"glm") ? self.glmConfiguredTransport : self.glmProviderTransport;
+  return DSHHarnessUsesCustomProvider(@"dsh") ? self.dshConfiguredTransport : self.completionProviderTransport;
 }
 
 - (NSString *)credentialAccountForHarnessId:(NSString *)harnessId {
@@ -1323,7 +1336,9 @@ RCT_EXPORT_MODULE(LocalRuntime)
             [status[@"runtime"][@"available"] boolValue])
         ? errSecSuccess : errSecItemNotFound;
   }
-  if ([account isEqual:@"BIGMODEL_API_KEY"]) {
+  // A relay configured for GLM keeps its own key; the account choice is
+  // for GLM's own service.
+  if ([account isEqual:@"BIGMODEL_API_KEY"] && !DSHHarnessUsesCustomProvider(@"glm")) {
     NSString *source = [self.glmCredentialSelection source];
     if (!source) return errSecDecode;
     if (![source isEqual:@"api_key"])
@@ -1354,7 +1369,7 @@ RCT_EXPORT_MODULE(LocalRuntime)
     // accessor, so no token or synthetic API key crosses this method.
     return nil;
   }
-  if ([account isEqual:@"BIGMODEL_API_KEY"]) {
+  if ([account isEqual:@"BIGMODEL_API_KEY"] && !DSHHarnessUsesCustomProvider(@"glm")) {
     NSString *source = [self.glmCredentialSelection source];
     if (!source) return nil;
     if (![source isEqual:@"api_key"]) return [self.glmCredentialSelection credentialWithAccountAuth:self.zcodeAccountAuthService];
@@ -1418,6 +1433,8 @@ RCT_EXPORT_MODULE(LocalRuntime)
     [self.claudeProviderTransport cancelTask:task];
     [self.codexProviderTransport cancelTask:task];
     [self.codexSubscriptionTransport cancelTask:task];
+    [self.dshConfiguredTransport cancelTask:task];
+    [self.glmConfiguredTransport cancelTask:task];
   }
   if (execution != nil) [execution cancel];
   if (strictRejecter != nil) {
@@ -2240,6 +2257,8 @@ willPerformHTTPRedirection:(__unused NSHTTPURLResponse *)response
               : ([self.codexProviderTransport handlesTask:task]
                   ? self.codexProviderTransport : nil));
   if (!owningTransport && [self.codexSubscriptionTransport handlesTask:task]) owningTransport = self.codexSubscriptionTransport;
+  if (!owningTransport && [self.dshConfiguredTransport handlesTask:task]) owningTransport = self.dshConfiguredTransport;
+  if (!owningTransport && [self.glmConfiguredTransport handlesTask:task]) owningTransport = self.glmConfiguredTransport;
   if (owningTransport != nil) {
     [owningTransport handleHTTPRedirectionForTask:task
         newRequest:request
@@ -2290,7 +2309,8 @@ static NSString *DSHCredentialPromptPlaceholder(NSString *account) {
   @synchronized(self) {
     if (self.activeCompletionRequestId != nil || [self.claudeProviderTransport hasActiveRequests] || [self.claudeSubscriptionTransport hasActiveRequests] ||
         [self.codexProviderTransport hasActiveRequests] || [self.codexSubscriptionTransport hasActiveRequests] || [self.completionProviderTransport hasActiveRequests] ||
-        [self.glmProviderTransport hasActiveRequests]) return NO;
+        [self.glmProviderTransport hasActiveRequests] || [self.dshConfiguredTransport hasActiveRequests] ||
+        [self.glmConfiguredTransport hasActiveRequests]) return NO;
   }
   NSError *error = nil;
   DSHSessionSnapshotStore *store = [[DSHSessionSnapshotStore alloc] initWithError:&error];
@@ -2348,7 +2368,7 @@ RCT_REMAP_METHOD(saveProviderConfiguration, saveProviderConfiguration:(NSDiction
 }
 RCT_REMAP_METHOD(resetProviderConfiguration, resetProviderConfigurationForHarness:(NSString *)harness
                  resolver:(RCTPromiseResolveBlock)resolve rejecter:(RCTPromiseRejectBlock)reject) {
-  if (![@[@"claude-code", @"codex"] containsObject:harness]) { reject(@"E_PROVIDER_CONFIGURATION", @"E_PROVIDER_CONFIGURATION", nil); return; }
+  if (![@[@"claude-code", @"codex", @"dsh", @"glm"] containsObject:harness]) { reject(@"E_PROVIDER_CONFIGURATION", @"E_PROVIDER_CONFIGURATION", nil); return; }
   [DSHSessionWorkspaceCoordinator.sharedCoordinator performAsync:^{
     if (![self providerConfigurationCanChange]) { reject(@"E_COMPLETION_BUSY", @"E_COMPLETION_BUSY", nil); return; }
     @synchronized(self) {
@@ -2874,7 +2894,7 @@ RCT_REMAP_METHOD(presentCredentialPromptForSlot,
   NSString *boundAccount = DSHEffectiveCredentialAccount(slot);
   NSString *title = DSHCredentialPromptTitle(slot, usesChinese);
   if (boundAccount != nil && ![boundAccount isEqual:slot]) {
-    NSString *harness = [slot isEqual:@"ANTHROPIC_API_KEY"] ? @"claude-code" : @"codex";
+    NSString *harness = DSHConfigurableHarnessForSlot(slot);
     NSDictionary *configuration = [DSHProviderConfigurationStore.sharedStore configurationForHarness:harness];
     title = [NSString stringWithFormat:@"%@ · %@", configuration[@"name"],
              [NSURL URLWithString:configuration[@"endpoint_url"]].host];
@@ -3989,7 +4009,9 @@ RCT_REMAP_METHOD(completeV2Stream,
       self.completionProviderTransport ?: (id)NSNull.null,
       self.claudeProviderTransport ?: (id)NSNull.null,
       self.codexProviderTransport ?: (id)NSNull.null,
-      self.glmProviderTransport ?: (id)NSNull.null ]) {
+      self.glmProviderTransport ?: (id)NSNull.null,
+      self.dshConfiguredTransport ?: (id)NSNull.null,
+      self.glmConfiguredTransport ?: (id)NSNull.null ]) {
     if ((id)transport != NSNull.null && [transport handlesTask:task]) return transport;
   }
   return nil;

@@ -5,7 +5,13 @@ import {
   type HarnessModelId,
 } from '../harness/types';
 
-export type ConfigurableHarness = 'claude-code' | 'codex';
+export type ConfigurableHarness = 'claude-code' | 'codex' | 'dsh' | 'glm';
+export const CONFIGURABLE_HARNESSES: readonly ConfigurableHarness[] = [
+  'claude-code',
+  'codex',
+  'dsh',
+  'glm',
+];
 export type ProviderProtocol = 'messages' | 'responses' | 'chat-completions';
 export type ProviderAuth = 'bearer' | 'x-api-key' | 'api-key';
 export type ProviderConfiguration = {
@@ -72,7 +78,7 @@ export function parseProviderBinding(
     Object.keys(raw).length !== keys.length ||
     keys.some(key => !Object.prototype.hasOwnProperty.call(raw, key)) ||
     raw.schema_version !== 1 ||
-    !['claude-code', 'codex'].includes(String(raw.harness_id)) ||
+    !(CONFIGURABLE_HARNESSES as readonly string[]).includes(String(raw.harness_id)) ||
     raw.harness_id !== harnessForModel(model) ||
     !['messages', 'responses', 'chat-completions'].includes(
       String(raw.protocol),

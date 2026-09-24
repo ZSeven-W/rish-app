@@ -950,21 +950,24 @@ export function HomeScreen({
     }
     return () => { cancelled = true; };
   }, [activeHarnessId, selectionHydrated, lifecycleBootstrapReady, nativeAvailable, providerConfigurationRevision, settingsVisible]);
-  const subscriptionNeedsAttention = activeHarnessId === 'glm' && glmSubscriptionState !== null;
   const [providerOverride, setProviderOverride] = useState<ProviderConfiguration | null>(null);
   useEffect(() => {
     let cancelled = false;
     setProviderOverride(null);
-    if (selectionHydrated && lifecycleBootstrapReady && nativeAvailable && (activeHarnessId === 'claude-code' || activeHarnessId === 'codex') && ProviderConfigurations.isAvailable()) {
+    if (selectionHydrated && lifecycleBootstrapReady && nativeAvailable && ProviderConfigurations.isAvailable()) {
       ProviderConfigurations.read(activeHarnessId).then(async value => {
         if (cancelled) return;
+        // DSH and GLM have no subscription path: a relay configured for
+        // them is what they use.
         const subscription = activeHarnessId === 'codex' ? (await codexChatSource()).source === 'subscription'
-          : (await claudeChatSource()).source === 'subscription';
+          : activeHarnessId === 'claude-code' ? (await claudeChatSource()).source === 'subscription' : false;
         if (!cancelled) setProviderOverride(subscription || value.official ? null : value);
       }).catch(() => undefined);
     }
     return () => { cancelled = true; };
   }, [activeHarnessId, selectionHydrated, lifecycleBootstrapReady, nativeAvailable, providerConfigurationRevision]);
+  // A relay configured for GLM replaces its account: nothing to sign in to.
+  const subscriptionNeedsAttention = activeHarnessId === 'glm' && glmSubscriptionState !== null && providerOverride === null;
   const providerName = (providerOverride?.harness_id === activeHarnessId ? providerOverride.name : null) ?? {
     dsh: 'DeepSeek',
     'claude-code': 'Anthropic',
@@ -6663,7 +6666,7 @@ export function HomeScreen({
             }}
             onCancel={() => cancel(completionState)}
             onChange={changeDraft}
-            onLogin={sessionLoadFailure !== null || activeHarnessId === 'dsh' ? undefined : () => {
+            onLogin={sessionLoadFailure !== null || activeHarnessId === 'dsh' || (activeHarnessId === 'glm' && providerOverride !== null) ? undefined : () => {
               if (!rootSurfaceAdmissionAllowed() || credentialBusy) return;
               presentSettingsSurface();
               setSettingsAuthOnly(true);

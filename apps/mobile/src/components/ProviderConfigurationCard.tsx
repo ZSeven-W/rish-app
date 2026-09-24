@@ -11,9 +11,11 @@ import {
 import {
   CLAUDE_MODEL_IDS,
   CODEX_MODEL_IDS,
+  GLM_MODEL_IDS,
   harnessForModel,
   type HarnessModelId,
 } from '../harness/types';
+import { getDshCatalog } from '../models/catalog';
 import { ProviderConfigurations } from '../providers/native';
 import type {
   ConfigurableHarness,
@@ -23,6 +25,14 @@ import type {
 } from '../providers/configuration';
 import { useAppPresentation } from '../presentation/AppPresentation';
 import { localizedModelDetails } from './ModelPicker';
+
+/** The model slots a relay maps for a harness: DSH's are the catalog's. */
+function mappedModels(harness: string): readonly string[] {
+  if (harness === 'claude-code') return CLAUDE_MODEL_IDS;
+  if (harness === 'codex') return CODEX_MODEL_IDS;
+  if (harness === 'glm') return GLM_MODEL_IDS;
+  return getDshCatalog().models.map(entry => entry.id);
+}
 
 export function ProviderConfigurationCard({
   model,
@@ -38,7 +48,8 @@ export function ProviderConfigurationCard({
   const { colors, t, locale } = useAppPresentation();
   const zh = locale === 'zh-CN';
   const harness = harnessForModel(model);
-  const eligible = harness === 'claude-code' || harness === 'codex';
+  // Every harness can go through a relay: DeepSeek and GLM as much as
+  // Claude Code and Codex (2026-09-24, "only Claude works").
   const [configuration, setConfiguration] =
     useState<ProviderConfiguration | null>(null);
   const [custom, setCustom] = useState(false);
@@ -56,7 +67,7 @@ export function ProviderConfigurationCard({
     setBusy(false);
     saving.current = false;
     savedConfiguration.current = null;
-    if (!visible || !eligible || !ProviderConfigurations.isAvailable()) return;
+    if (!visible || !ProviderConfigurations.isAvailable()) return;
     ProviderConfigurations.read(harness)
       .then(value => {
         if (epoch.current !== current) return;
@@ -70,8 +81,8 @@ export function ProviderConfigurationCard({
     return () => {
       epoch.current += 1;
     };
-  }, [eligible, harness, visible]);
-  if (!eligible || !ProviderConfigurations.isAvailable()) return null;
+  }, [harness, visible]);
+  if (!ProviderConfigurations.isAvailable()) return null;
   const locked = disabled || busy;
   const signature = (value: ProviderConfiguration | null) =>
     value === null
@@ -284,7 +295,7 @@ export function ProviderConfigurationCard({
               ? '模型映射：留空则使用原模型 ID。'
               : 'Model mapping: leave blank to use the original model ID.'}
           </Text>
-          {(harness === 'claude-code' ? CLAUDE_MODEL_IDS : CODEX_MODEL_IDS).map(
+          {mappedModels(harness).map(
             alias => (
               <React.Fragment key={alias}>
                 {field(

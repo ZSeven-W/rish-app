@@ -23,7 +23,7 @@ internal class AndroidCredentialStore(
     companion object {
         val slots = setOf("DEEPSEEK_API_KEY", "BIGMODEL_API_KEY", "ANTHROPIC_API_KEY", "OPENAI_API_KEY")
     }
-    private fun validAccount(slot: String) = slot in slots || Regex("CUSTOM_PROVIDER_(codex|claude-code)_[a-f0-9]{64}").matches(slot) ||
+    private fun validAccount(slot: String) = slot in slots || Regex("CUSTOM_PROVIDER_(codex|claude-code|dsh|glm)_[a-f0-9]{64}").matches(slot) ||
         (extraAccounts?.matches(slot) ?: false)
     @Synchronized private fun encryptionKey(): SecretKey {
         (keyStore.getKey(alias, null) as? SecretKey)?.let { return it }
