@@ -76,8 +76,8 @@ internal class AndroidModelTransport(
                     if (message.optString("role") != "system" || message.opt("content") !is String) fail("E_COMPLETION_CONTEXT_UNSUPPORTED")
                 }
             }
-            // The round transcript is judged in execute, where the protocol is
-            // known: only chat-completions can carry one.
+            // The round transcript's turns are judged by the core when it
+            // writes the request body, for whichever protocol carries them.
             if ((input.optJSONArray("round_transcript")?.length() ?: 0) > 64) fail("E_COMPLETION_CONTEXT_UNSUPPORTED")
             if (!RuntimeJson.uuid(input.getString("turn_id")) || !RuntimeJson.uuid(input.getString("attempt_id"))) fail("E_COMPLETION_IDENTIFIER")
             if (input.opt("round_index") !is Int || input.getInt("round_index") !in 0..7) fail("E_COMPLETION_ROUND")
@@ -427,10 +427,12 @@ internal class AndroidModelTransport(
         // What this round already did: the assistant turn that asked for a
         // tool, and the results that came back. Without it the model is
         // told nothing of the call it just made and asks for it again, so
-        // a turn with a tool in it could never finish.
+        // a turn with a tool in it could never finish. The turns go in
+        // OpenAI's shape on every protocol: the core's request body rewrites
+        // them into tool_use/tool_result blocks for Messages and
+        // function_call items for Responses, as it does for iOS.
         val round = input.optJSONArray("round_transcript") ?: JSONArray()
         if (round.length() != 0) {
-            if (request.configuration.getString("protocol") != "chat-completions") fail("E_COMPLETION_CONTEXT_UNSUPPORTED")
             for (index in 0 until round.length()) {
                 messages.put(roundMessage(round.getJSONObject(index)))
             }
@@ -486,6 +488,13 @@ internal class AndroidModelTransport(
                 config.getBoolean("send_reasoning"), streaming,
                 messages, functionTools(declared),
             )
+            if (custom && !config.getBoolean("send_reasoning")) {
+                // What iOS's ConfiguredProviderTransport strips: a relay the
+                // person told not to receive reasoning settings gets none, not
+                // `"thinking":{"type":"disabled"}` -- a strict OpenAI-compatible
+                // endpoint answers an unknown parameter with 400.
+                for (key in listOf("thinking", "reasoning", "reasoning_effort", "output_config")) body.remove(key)
+            }
             val encoded = RuntimeJson.receiptJson(body)
             val providerRequestId = UUID.randomUUID().toString()
             val httpCall: Call = synchronized(lock) {

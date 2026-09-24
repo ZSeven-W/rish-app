@@ -5,6 +5,7 @@ import androidx.test.filters.SmallTest
 import androidx.test.platform.app.InstrumentationRegistry
 import org.json.JSONObject
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Assert.fail
 import org.junit.Assume.assumeTrue
@@ -374,6 +375,11 @@ class AndroidModelTransportStreamTest {
             val result = wired.transport.execute(wired.transport.prepare(wired.request().toString())) {}
             assertEquals(reported, "Hi", result.getString("text"))
             assertEquals(reported, "gpt-5.6", result.getString("model"))
+            // Reasoning settings are off for this relay: none go out, not
+            // even a `thinking` that says disabled.
+            for (key in listOf("\"thinking\"", "\"reasoning_effort\"", "\"reasoning\"")) {
+                assertFalse(streamer.request, streamer.request.contains(key))
+            }
         }
         val streamer = Streamer(
             listOf(
@@ -391,6 +397,77 @@ class AndroidModelTransportStreamTest {
             failure.code
         }
         assertTrue(code, code.startsWith("E_COMPLETION_RESPONSE"))
+    }
+
+    /**
+     * A round after a tool call, over the two dialects that are not chat
+     * completions. The round transcript arrives in OpenAI's shape and the
+     * core rewrites it into each wire's own: tool_use and tool_result blocks
+     * for Messages, function_call and function_call_output items for
+     * Responses. Refusing it made every agent turn with a tool in it fail at
+     * its second round on Android, for official Claude Code, Codex and GLM
+     * as much as for a relay (E_COMPLETION_CONTEXT_UNSUPPORTED).
+     */
+    @Test
+    fun aRoundAfterAToolCallGoesOutInEveryDialect() {
+        assumeTrue("rish agent core is not staged in this build", RishAgentCoreNative.available)
+        val replies = mapOf(
+            "messages" to """{"id":"msg_after","type":"message","role":"assistant","model":"gpt-5.6",""" +
+                """"content":[{"type":"text","text":"Done"}],"stop_reason":"end_turn","usage":{"input_tokens":1,"output_tokens":1}}""",
+            "responses" to """{"id":"resp_after","object":"response","model":"gpt-5.6","status":"completed",""" +
+                """"output":[{"type":"message","role":"assistant","content":[{"type":"output_text","text":"Done"}]}]}""",
+        )
+        for ((protocol, reply) in replies) {
+            val streamer = Streamer(listOf(reply))
+            val namespace = "round-dialect-${UUID.randomUUID()}"
+            val configurations = AndroidProviderConfiguration(context, "$namespace.providers")
+            val transport = AndroidModelTransport(AndroidCredentialStore(context, namespace), configurations)
+            streamer.start()
+            configurations.save(
+                JSONObject().put("schema_version", 1).put("harness_id", "codex")
+                    .put("name", "Local relay")
+                    .put("endpoint_url", "http://127.0.0.1:${streamer.socket.localPort}/v1/$protocol")
+                    .put("protocol", protocol).put("auth_type", "bearer")
+                    .put("model_mappings", JSONObject().put("gpt-5.6", "gpt-5.6"))
+                    .put("send_reasoning", false).put("full_url", true),
+            )
+            transport.put("OPENAI_API_KEY", transport.account("OPENAI_API_KEY"), "local-test-key")
+            val request = Wired(transport, streamer.socket.localPort, UUID.randomUUID().toString()).request()
+                .put("round_index", 1)
+                .put(
+                    "round_transcript",
+                    JSONArray()
+                        .put(
+                            JSONObject().put("role", "assistant").put("content", JSONObject.NULL).put(
+                                "tool_calls",
+                                JSONArray().put(
+                                    JSONObject().put("id", "call_1").put("type", "function").put(
+                                        "function",
+                                        JSONObject().put("name", "list_dir").put("arguments", """{"path":"."}"""),
+                                    ),
+                                ),
+                            ),
+                        )
+                        .put(JSONObject().put("role", "tool").put("tool_call_id", "call_1").put("content", "README.md")),
+                )
+            val result = transport.execute(transport.prepare(request.toString()), null)
+            assertEquals(protocol, "Done", result.getString("text"))
+            val sent = streamer.request.substringAfter("\r\n\r\n")
+            val body = JSONObject(sent)
+            if (protocol == "messages") {
+                val turns = body.getJSONArray("messages")
+                val asked = turns.getJSONObject(1).getJSONArray("content").getJSONObject(0)
+                assertEquals(sent, "tool_use", asked.getString("type"))
+                assertEquals(sent, "call_1", asked.getString("id"))
+                val answered = turns.getJSONObject(2).getJSONArray("content").getJSONObject(0)
+                assertEquals(sent, "tool_result", answered.getString("type"))
+                assertEquals(sent, "call_1", answered.getString("tool_use_id"))
+            } else {
+                val items = body.getJSONArray("input")
+                val types = (0 until items.length()).map { items.getJSONObject(it).optString("type") }
+                assertTrue(sent, "function_call" in types && "function_call_output" in types)
+            }
+        }
     }
 
     /**
