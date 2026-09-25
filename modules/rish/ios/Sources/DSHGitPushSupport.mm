@@ -878,7 +878,9 @@ NSString *DSHGitCanonicalProxyURL(id value, BOOL *invalid) {
   }
   NSURLComponents *canonical = [[NSURLComponents alloc] init];
   canonical.scheme = scheme;
-  canonical.host = host;
+  // Lower-case, as Android's AndroidGitProxyUrl spells it: one proxy, one
+  // string, whichever host reads it.
+  canonical.host = host.lowercaseString;
   canonical.port = port;
   canonical.path = @"/";
   NSString *proxyURL = canonical.URL.absoluteString;
@@ -887,6 +889,16 @@ NSString *DSHGitCanonicalProxyURL(id value, BOOL *invalid) {
     return nil;
   }
   return proxyURL;
+}
+
+NSString *DSHCommittedGitProxyURL(NSDictionary *loaded) {
+  id json = [loaded isKindOfClass:NSDictionary.class] ? loaded[@"session_json"] : nil;
+  if (![json isKindOfClass:NSString.class]) return nil;
+  NSData *bytes = [(NSString *)json dataUsingEncoding:NSUTF8StringEncoding];
+  id session = bytes == nil ? nil : [NSJSONSerialization JSONObjectWithData:bytes options:0 error:nil];
+  id preferences = [session isKindOfClass:NSDictionary.class] ? session[@"preferences"] : nil;
+  id raw = [preferences isKindOfClass:NSDictionary.class] ? preferences[@"git_https_proxy_url"] : nil;
+  return DSHGitCanonicalProxyURL(raw, nil);
 }
 
 BOOL DSHGitProxyFailed(NSString *proxyURL) {

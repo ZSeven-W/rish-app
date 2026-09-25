@@ -2,6 +2,7 @@
 
 #import "../../../../modules/rish/ios/Sources/AgentExecutionLedger.h"
 #import "../../../../modules/rish/ios/Sources/AgentGitToolExecutor.h"
+#import "../../../../modules/rish/ios/Sources/DSHGitPushSupport.h"
 #import "../../../../modules/rish/ios/Sources/AgentNativeWAL.h"
 #import "../../../../modules/rish/ios/Sources/AgentPreparedAttemptStore.h"
 #import "../../../../modules/rish/ios/Sources/AgentRootResolver.h"
@@ -3297,6 +3298,25 @@ static NSDictionary *AgentEffectsProxyControl(NSString *base, NSString *method, 
   NSDictionary *pushed = [executor executeToolNamed:@"git_push" arguments:@{}
       root:fixture[@"root"] precondition:precondition error:&error];
   XCTAssertEqualObjects([self feedbackObject:pushed][@"payload"][@"reason"], @"origin_unsafe");
+}
+
+// The agent's proxy is the one the committed session holds, in the one
+// spelling libgit2 is handed; nothing committed, or no proxy, is none.
+- (void)testTheCommittedSessionsProxyIsTheAgentsProxy {
+  NSDictionary *(^loaded)(id) = ^NSDictionary *(id proxy) {
+    NSMutableDictionary *preferences = [@{ @"schema_version" : @1 } mutableCopy];
+    if (proxy != nil) preferences[@"git_https_proxy_url"] = proxy;
+    NSData *json = [NSJSONSerialization dataWithJSONObject:@{ @"preferences" : preferences } options:0 error:nil];
+    return @{ @"status" : @"present",
+              @"session_json" : [[NSString alloc] initWithData:json encoding:NSUTF8StringEncoding] };
+  };
+  XCTAssertEqualObjects(DSHCommittedGitProxyURL(loaded(@"http://127.0.0.1:7897")), @"http://127.0.0.1:7897/");
+  XCTAssertEqualObjects(DSHCommittedGitProxyURL(loaded(@"HTTPS://Proxy.Example:443/")), @"https://proxy.example:443/");
+  XCTAssertNil(DSHCommittedGitProxyURL(loaded(nil)));
+  XCTAssertNil(DSHCommittedGitProxyURL(loaded(NSNull.null)));
+  XCTAssertNil(DSHCommittedGitProxyURL(loaded(@"proxy:3128")));
+  XCTAssertNil(DSHCommittedGitProxyURL(@{ @"status" : @"missing", @"session_json" : NSNull.null }));
+  XCTAssertNil(DSHCommittedGitProxyURL(nil));
 }
 
 @end

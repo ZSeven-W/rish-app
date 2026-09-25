@@ -86,6 +86,12 @@ BOOL DSHGitProxyFailed(NSString *_Nullable proxyURL);
 /// preferences are judged by the same rule.
 NSString *_Nullable DSHGitCanonicalProxyURL(id _Nullable value, BOOL *_Nullable invalid);
 
+/// The Git proxy a loaded session snapshot holds
+/// (`preferences.git_https_proxy_url`, canonical), or nil for none: no
+/// snapshot, no proxy, or a value that no longer reads. `loaded` is what
+/// DSHSessionSnapshotStore's loadSessionSnapshotWithError: answers.
+NSString *_Nullable DSHCommittedGitProxyURL(NSDictionary *_Nullable loaded);
+
 /// Cancellation token polled by the bounded push runner.
 @interface DSHGitPushCancelToken : NSObject
 @property(nonatomic, readonly) BOOL cancelled;
