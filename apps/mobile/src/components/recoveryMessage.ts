@@ -39,6 +39,17 @@ const reasons: Readonly<Record<string, TranslationKey>> = {
   E_COMPLETION_CONTEXT_UNSUPPORTED: 'recovery.attachmentUnsupported',
   E_COMPLETION_CONTEXT_INVALID: 'recovery.attachmentUnreadable',
   E_COMPLETION_HISTORY: 'recovery.history',
+  // What a provider -- often a relay -- answered, in a plain chat as much as
+  // behind an agent round (where providerFailureMessage adds the status).
+  E_COMPLETION_HTTP_STATUS: 'recovery.provider.statusUnknown',
+  E_COMPLETION_REDIRECT: 'recovery.provider.statusUnknown',
+  E_COMPLETION_RESPONSE_JSON: 'recovery.provider.unreadableUnknown',
+  E_COMPLETION_RESPONSE_MODEL: 'recovery.provider.unreadableUnknown',
+  E_COMPLETION_MODEL_MISMATCH: 'recovery.provider.unreadableUnknown',
+  E_COMPLETION_PROVIDER_RESPONSE_ID: 'recovery.provider.unreadableUnknown',
+  E_COMPLETION_EMPTY_RESPONSE: 'recovery.provider.unreadableUnknown',
+  E_COMPLETION_TOOL_CALL_INVALID: 'recovery.provider.unreadableUnknown',
+  E_COMPLETION_FINISH_RELATION: 'recovery.provider.unreadableUnknown',
 };
 
 export function recoveryCode(error: string): string | null {

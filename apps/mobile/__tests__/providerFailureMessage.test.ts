@@ -39,3 +39,14 @@ test('a preview end carries the status a provider refused with, and only a real 
   expect(parseAgentRoundPreviewEvent({ ...base, http_status: 99 })).toBeNull();
   expect(parseAgentRoundPreviewEvent({ ...base, http_status: '401' })).toBeNull();
 });
+
+// A plain chat has no round preview to read a status from; the code alone
+// still says whether to look at the relay's address or at its protocol.
+test('a plain chat says what the provider answered, in words', () => {
+  const { recoveryMessage } = jest.requireActual('../src/components/recoveryMessage');
+  expect(recoveryMessage('E_COMPLETION_HTTP_STATUS', t)).toBe(t('recovery.provider.statusUnknown'));
+  expect(recoveryMessage('E_COMPLETION_RESPONSE_JSON', t)).toBe(t('recovery.provider.unreadableUnknown'));
+  expect(recoveryMessage('E_COMPLETION_RESPONSE_MODEL', t)).toBe(t('recovery.provider.unreadableUnknown'));
+  expect(recoveryMessage('E_COMPLETION_CREDENTIAL_UNAVAILABLE', t)).toBe(t('recovery.credential'));
+  expect(t('recovery.provider.statusUnknown')).not.toBe(t('recovery.generic'));
+});
