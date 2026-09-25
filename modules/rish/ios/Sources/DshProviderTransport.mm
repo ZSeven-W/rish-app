@@ -99,7 +99,7 @@ static NSString * const DSHCompletionTransportErrorDomain = @"DSHCompletionTrans
 }
 
 - (NSTimeInterval)providerTimeoutIntervalForStreaming:(BOOL)streaming {
-  return streaming ? 120 : 90;
+  return streaming ? 120 : 600;
 }
 
 - (NSString *)providerHarnessId {

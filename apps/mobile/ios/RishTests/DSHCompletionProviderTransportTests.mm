@@ -810,7 +810,7 @@ static NSString *const DSHTransportProviderRequestId =
 #endif
 
 - (void)testGenericExecutionRetainsRealHTTPTaskRoutingAndCancellation {
-  XCTAssertEqual(self.transport.executionTimeoutInterval, 120);
+  XCTAssertEqual(self.transport.executionTimeoutInterval, 900);
   [DSHTransportURLProtocol setHandler:^(NSURLProtocol *protocol, NSURLRequest *request) {}];
   __block NSURLSessionDataTask *boundTask = nil;
   __block BOOL markedRedirected = NO;

@@ -933,8 +933,11 @@ static NSString *DSHCompletionTransportDiagnosticKind(NSError *error,
   return NO;
 }
 
+// Silence, not length, is what times out: 120 s without a byte on a stream,
+// 600 s for a reply that only arrives whole. A round that thinks at the
+// highest setting and writes a whole file takes minutes.
 - (NSTimeInterval)providerTimeoutIntervalForStreaming:(BOOL)streaming {
-  return streaming ? 120 : 90;
+  return streaming ? 120 : 600;
 }
 
 - (NSString *)providerHarnessId {
@@ -944,7 +947,10 @@ static NSString *DSHCompletionTransportDiagnosticKind(NSError *error,
 
 - (BOOL)isReadyWithCredential:(NSString *)credential { return [credential isKindOfClass:NSString.class] && credential.length > 0; }
 - (BOOL)supportsTools { return YES; }
-- (NSTimeInterval)executionTimeoutInterval { return 120; }
+// The whole round: 15 minutes, as the subscription transport has. 120 s cut
+// long replies off while they were still arriving, and a dispatched round
+// cut off is an ambiguous one (beta report, 2026-09-25).
+- (NSTimeInterval)executionTimeoutInterval { return 900; }
 - (id<DSHCompletionExecution>)startExecutionWithSchemaVersion:(NSInteger)schemaVersion
                                                            roundId:(NSString *)roundId
                                                           generation:(NSUInteger)generation

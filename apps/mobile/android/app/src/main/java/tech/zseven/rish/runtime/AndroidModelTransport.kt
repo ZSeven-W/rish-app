@@ -24,8 +24,18 @@ internal class AndroidModelTransport(
     private val lock = Any()
     private var revision = 0L
     private val active = mutableMapOf<String, Prepared>()
+    // How long a reply may take is not how long it may stay silent. A round
+    // that thinks at the highest setting and writes a whole file streams for
+    // minutes; the old 150 s ceiling on the whole call cut such replies off
+    // while they were still arriving, and a dispatched round cut off is an
+    // ambiguous one (beta report, 2026-09-25). The call now has 15 minutes --
+    // the ceiling iOS's subscription transport and round wait already use --
+    // and silence is what times out: 120 s without a byte on a stream, 600 s
+    // for a reply that only arrives whole.
     private val client = OkHttpClient.Builder().followRedirects(false).followSslRedirects(false)
-        .retryOnConnectionFailure(false).connectTimeout(20, TimeUnit.SECONDS).readTimeout(120, TimeUnit.SECONDS).callTimeout(150, TimeUnit.SECONDS).build()
+        .retryOnConnectionFailure(false).connectTimeout(20, TimeUnit.SECONDS).readTimeout(120, TimeUnit.SECONDS)
+        .callTimeout(900, TimeUnit.SECONDS).build()
+    private val wholeReplyClient = client.newBuilder().readTimeout(600, TimeUnit.SECONDS).build()
     @Volatile var sentRequestCount = 0
         private set
     fun activeRequestCount(): Int = synchronized(lock) { active.size }
@@ -522,7 +532,8 @@ internal class AndroidModelTransport(
                     "api-key" -> builder.header("api-key", secret)
                 }
                 if(protocol == "messages") builder.header("anthropic-version", "2023-06-01")
-                client.newCall(builder.build()).also { request.call = it; sentRequestCount += 1 }
+                (if (streaming) client else wholeReplyClient).newCall(builder.build())
+                    .also { request.call = it; sentRequestCount += 1 }
             }
             val response = httpCall.execute().use { http ->
                 if(http.code in 300..399) fail("E_COMPLETION_REDIRECT")
