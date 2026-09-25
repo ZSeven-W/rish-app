@@ -14,6 +14,10 @@
 #import "../../../../modules/rish/ios/Sources/LocalWorkspaceAccess.h"
 
 #include <git2.h>
+#include <unistd.h>
+#include <netinet/in.h>
+#include <sys/socket.h>
+#include <arpa/inet.h>
 #import "../../../../modules/rish/ios/Sources/DSHAgentGuestCgiToolExecutor.h"
 #import "../../../../modules/rish/ios/Sources/DSHCompletionV2.h"
 #import "../../../../modules/rish/ios/Sources/AgentProviderRoundServiceInternals.h"
@@ -3211,6 +3215,88 @@
   XCTAssertEqual(error.code, DSHAgentNativeStoreErrorInvalidArgument);
   [NSFileManager.defaultManager setAttributes:
       @{NSFilePosixPermissions : @0700} ofItemAtPath:blocked.path error:nil];
+}
+
+/// One control request to scripts/git-test-proxy.py over a raw socket.
+static NSDictionary *AgentEffectsProxyControl(NSString *base, NSString *method, NSString *path) {
+  NSURLComponents *url = [NSURLComponents componentsWithString:base];
+  int fd = socket(AF_INET, SOCK_STREAM, 0);
+  if (fd < 0) return nil;
+  struct sockaddr_in address = {};
+  address.sin_family = AF_INET;
+  address.sin_port = htons((uint16_t)url.port.integerValue);
+  inet_pton(AF_INET, url.host.UTF8String, &address.sin_addr);
+  NSMutableData *reply = [NSMutableData data];
+  if (connect(fd, (struct sockaddr *)&address, sizeof(address)) == 0) {
+    NSString *request = [NSString stringWithFormat:@"%@ %@ HTTP/1.1\r\nHost: proxy\r\nContent-Length: 0\r\n\r\n", method, path];
+    (void)write(fd, request.UTF8String, strlen(request.UTF8String));
+    char buffer[4096];
+    ssize_t count = 0;
+    while ((count = read(fd, buffer, sizeof(buffer))) > 0) [reply appendBytes:buffer length:(NSUInteger)count];
+  }
+  close(fd);
+  NSString *text = [[NSString alloc] initWithData:reply encoding:NSUTF8StringEncoding];
+  NSRange split = [text rangeOfString:@"\r\n\r\n"];
+  if (split.location == NSNotFound) return nil;
+  id value = [NSJSONSerialization JSONObjectWithData:[[text substringFromIndex:NSMaxRange(split)]
+      dataUsingEncoding:NSUTF8StringEncoding] options:0 error:nil];
+  return [value isKindOfClass:NSDictionary.class] ? value : nil;
+}
+
+// The agent's remote traffic goes through the person's proxy, as the
+// panel's does (TEST_RUNNER_RISH_PROXY_BASE=http://127.0.0.1:N/; start the
+// proxy with --upstream where github.com needs one). A proxy that refuses
+// the tunnel is not gone around, and a plain-http origin with a proxy is
+// refused before any connection.
+- (void)testTheAgentsRemoteTrafficGoesThroughTheProxy {
+  NSString *proxy = NSProcessInfo.processInfo.environment[@"RISH_PROXY_BASE"];
+  if (proxy.length == 0) XCTSkip(@"no test proxy: set TEST_RUNNER_RISH_PROXY_BASE");
+  if (AgentEffectsProxyControl(proxy, @"POST", @"/__rish_mode?mode=tunnel") == nil) {
+    XCTSkip(@"the test proxy does not answer");
+  }
+  NSDictionary *fixture = [self realGitExecutorFixtureNamed:@"agent-proxy"
+      projectID:@"77777777-7777-4777-8777-777777777771"];
+  XCTAssertNotNil(fixture);
+  if (fixture == nil) return;
+  git_repository *repository = nullptr;
+  XCTAssertEqual(git_repository_open(&repository,
+      [fixture[@"repository_url"] fileSystemRepresentation]), 0);
+  XCTAssertEqual(git_remote_set_url(repository, "origin",
+      "https://github.com/octocat/Hello-World.git"), 0);
+  DSHAgentGitToolExecutor *executor = fixture[@"executor"];
+  executor.proxyProvider = ^NSString * { return proxy; };
+  NSInteger (^tunnels)(void) = ^NSInteger {
+    return [AgentEffectsProxyControl(proxy, @"GET", @"/__rish_stats")[@"connects"][@"github.com:443"] integerValue];
+  };
+  // Preparing asks the remote what it holds -- through the proxy.
+  NSInteger before = tunnels();
+  NSError *error = nil;
+  NSDictionary *prepared = [executor prepareToolNamed:@"git_push" arguments:@{}
+      root:fixture[@"root"] error:&error];
+  XCTAssertNotNil(prepared, @"%@", error);
+  XCTAssertGreaterThan(tunnels(), before, @"the probe did not go through the proxy");
+  NSDictionary *precondition = prepared[@"precondition"];
+  // Recovery asks the same way.
+  NSInteger beforeRecovery = tunnels();
+  NSDictionary *recovered = [executor recoverToolNamed:@"git_push" arguments:@{}
+      root:fixture[@"root"] precondition:precondition error:&error];
+  XCTAssertEqualObjects(recovered[@"status"], @"not_dispatched", @"%@", error);
+  XCTAssertGreaterThan(tunnels(), beforeRecovery, @"recovery did not go through the proxy");
+  // A proxy that refuses the tunnel is not gone around.
+  AgentEffectsProxyControl(proxy, @"POST", @"/__rish_mode?mode=refuse");
+  NSInteger refusedBefore = [AgentEffectsProxyControl(proxy, @"GET", @"/__rish_stats")[@"refused"] integerValue];
+  error = nil;
+  XCTAssertNil([executor prepareToolNamed:@"git_push" arguments:@{} root:fixture[@"root"] error:&error]);
+  XCTAssertGreaterThan([AgentEffectsProxyControl(proxy, @"GET", @"/__rish_stats")[@"refused"] integerValue], refusedBefore);
+  AgentEffectsProxyControl(proxy, @"POST", @"/__rish_mode?mode=tunnel");
+  // A plain-http origin with a proxy: refused before any connection.
+  XCTAssertEqual(git_remote_set_url(repository, "origin", "http://127.0.0.1:1/demo.git"), 0);
+  git_repository_free(repository);
+  error = nil;
+  XCTAssertNil([executor prepareToolNamed:@"git_push" arguments:@{} root:fixture[@"root"] error:&error]);
+  NSDictionary *pushed = [executor executeToolNamed:@"git_push" arguments:@{}
+      root:fixture[@"root"] precondition:precondition error:&error];
+  XCTAssertEqualObjects([self feedbackObject:pushed][@"payload"][@"reason"], @"origin_unsafe");
 }
 
 @end

@@ -163,6 +163,7 @@ NSDictionary *DSHAgentGitPushFailure(NSString *name,
 
 BOOL DSHAgentGitRemoteOID(git_repository *repository,
                                  NSString *remoteRef,
+                                 NSString *proxyURL,
                                  NSString **oidOut,
                                  NSError **error) {
   git_remote *remote = nullptr;
@@ -170,7 +171,8 @@ BOOL DSHAgentGitRemoteOID(git_repository *repository,
   git_proxy_options proxy = {};
   callbacks.version = GIT_REMOTE_CALLBACKS_VERSION;
   proxy.version = GIT_PROXY_OPTIONS_VERSION;
-  proxy.type = GIT_PROXY_NONE;
+  proxy.type = proxyURL.length > 0 ? GIT_PROXY_SPECIFIED : GIT_PROXY_NONE;
+  proxy.url = proxyURL.length > 0 ? proxyURL.UTF8String : nullptr;
   int code = git_remote_lookup(&remote, repository, "origin");
   if (code == 0) {
     code = git_remote_connect(remote, GIT_DIRECTION_FETCH, &callbacks, &proxy,

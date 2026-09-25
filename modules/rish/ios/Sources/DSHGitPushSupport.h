@@ -78,6 +78,14 @@ typedef NS_ENUM(NSInteger, DSHGitPushOutcome) {
 /// GIT_EAUTH as the repository turning a credential away.
 BOOL DSHGitProxyFailed(NSString *_Nullable proxyURL);
 
+/// The one spelling libgit2 is handed for a person's HTTPS proxy,
+/// `scheme://host:port/`: an http or https proxy with a host and an explicit
+/// port and nothing else (no path, credentials, query or fragment). nil for
+/// nil, NSNull or an empty string (no proxy); nil with `*invalid = YES` for
+/// anything else. The panel's options and the committed session's
+/// preferences are judged by the same rule.
+NSString *_Nullable DSHGitCanonicalProxyURL(id _Nullable value, BOOL *_Nullable invalid);
+
 /// Cancellation token polled by the bounded push runner.
 @interface DSHGitPushCancelToken : NSObject
 @property(nonatomic, readonly) BOOL cancelled;

@@ -11,7 +11,11 @@ to the proxy itself as plain HTTP:
   POST /__rish_reset            counters to zero
 
 Usage:
-  git-test-proxy.py --port 18734 [--bind 127.0.0.1]
+  git-test-proxy.py --port 18734 [--bind 127.0.0.1] [--upstream http://127.0.0.1:7897]
+
+--upstream chains every tunnel through another HTTP proxy, for a network
+that cannot reach the remote directly; the count is still of this proxy's
+tunnels.
 
 The Android emulator reaches it at http://10.0.2.2:PORT/, the iOS simulator
 at http://127.0.0.1:PORT/. Bind to loopback only: it is an open proxy.
@@ -24,6 +28,22 @@ import sys
 from urllib.parse import parse_qs, urlparse
 
 STATE = {"connects": {}, "upstream_failed": {}, "refused": 0, "mode": "tunnel"}
+UPSTREAM = None  # (host, port) of an HTTP proxy to chain through, or None
+
+
+async def open_upstream(target, host, port):
+    """A connection to target, direct or through the upstream proxy's CONNECT."""
+    if UPSTREAM is None:
+        return await asyncio.open_connection(host, port)
+    reader, writer = await asyncio.open_connection(*UPSTREAM)
+    writer.write(f"CONNECT {target} HTTP/1.1\r\nHost: {target}\r\n\r\n".encode())
+    await writer.drain()
+    head = await reader.readuntil(b"\r\n\r\n")
+    status = head.split(b"\r\n", 1)[0].split(b" ")
+    if len(status) < 2 or status[1] != b"200":
+        writer.close()
+        raise ConnectionError("upstream refused: " + head.split(b"\r\n", 1)[0].decode("latin-1"))
+    return reader, writer
 
 
 async def pipe(reader, writer):
@@ -70,7 +90,7 @@ async def handle(reader, writer):
         host, _, port = target.rpartition(":")
         try:
             upstream_reader, upstream_writer = await asyncio.wait_for(
-                asyncio.open_connection(host.strip("[]"), int(port)), timeout=60)
+                open_upstream(target, host.strip("[]"), int(port)), timeout=60)
         except Exception as error:  # noqa: BLE001 - reported to the client
             # Counted apart: a tunnel that never opened carried nothing, and
             # a test counting it as traffic would prove less than it claims.
@@ -104,7 +124,12 @@ async def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--port", type=int, required=True)
     parser.add_argument("--bind", default="127.0.0.1")
+    parser.add_argument("--upstream", default=None)
     args = parser.parse_args()
+    global UPSTREAM
+    if args.upstream:
+        upstream = urlparse(args.upstream)
+        UPSTREAM = (upstream.hostname, upstream.port)
     server = await asyncio.start_server(handle, args.bind, args.port)
     print(f"git-test-proxy listening on {args.bind}:{args.port}", flush=True)
     async with server:

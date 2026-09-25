@@ -94,6 +94,19 @@ internal class AndroidSessionStore(context: Context, name: String = "rish.sessio
     @Synchronized fun load(): JSONObject = load(readableDatabase)
 
     /**
+     * The Git HTTPS proxy in the last committed session's preferences, in the
+     * one spelling libgit2 is handed, or null for none. The core validated it
+     * when it was committed; a value that no longer reads is treated as none
+     * rather than guessed at.
+     */
+    fun committedGitProxy(): String? {
+        val loaded = try { load() } catch (_: Exception) { return null }
+        val session = loaded.opt("session_json") as? String ?: return null
+        val raw = try { JSONObject(session).optJSONObject("preferences")?.opt("git_https_proxy_url") } catch (_: Exception) { null }
+        return try { AndroidGitProxyUrl.canonical(raw) } catch (_: AndroidGitProxyUrl.Invalid) { null }
+    }
+
+    /**
      * The state as the core reads it: the current snapshot and the whole
      * commit chain. SQLite keeps every commit, so the chain is never evicted
      * and a query can always prove an operation's absence.

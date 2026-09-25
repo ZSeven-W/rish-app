@@ -841,6 +841,54 @@ NSArray<NSDictionary *> *DSHGitPushLoadReceipts(int directoryDescriptor,
   return DSHGitPushLoadReceiptsInternal(directoryDescriptor, projectId, error);
 }
 
+NSString *DSHGitCanonicalProxyURL(id value, BOOL *invalid) {
+  if (invalid != nullptr) *invalid = NO;
+  if (value == nil || value == NSNull.null) return nil;
+  if (![value isKindOfClass:NSString.class]) {
+    if (invalid != nullptr) *invalid = YES;
+    return nil;
+  }
+  NSString *input = value;
+  if (input.length == 0) return nil;
+  BOOL (^fail)(void) = ^BOOL {
+    if (invalid != nullptr) *invalid = YES;
+    return NO;
+  };
+  NSCharacterSet *controls = NSCharacterSet.controlCharacterSet;
+  if (input.length > 2048 || [input rangeOfCharacterFromSet:controls].location != NSNotFound ||
+      ![input isEqualToString:[input stringByTrimmingCharactersInSet:
+          NSCharacterSet.whitespaceAndNewlineCharacterSet]]) {
+    fail();
+    return nil;
+  }
+  NSURLComponents *components = [NSURLComponents componentsWithString:input];
+  NSString *scheme = components.scheme.lowercaseString;
+  NSString *host = components.host;
+  NSNumber *port = components.port;
+  NSString *path = components.path;
+  BOOL valid = ([scheme isEqualToString:@"http"] || [scheme isEqualToString:@"https"]) &&
+      host.length > 0 && [host rangeOfCharacterFromSet:controls].location == NSNotFound &&
+      port != nil && port.integerValue >= 1 && port.integerValue <= 65535 &&
+      (path.length == 0 || [path isEqualToString:@"/"]) &&
+      components.user == nil && components.password == nil &&
+      components.query == nil && components.fragment == nil && components.URL != nil;
+  if (!valid) {
+    fail();
+    return nil;
+  }
+  NSURLComponents *canonical = [[NSURLComponents alloc] init];
+  canonical.scheme = scheme;
+  canonical.host = host;
+  canonical.port = port;
+  canonical.path = @"/";
+  NSString *proxyURL = canonical.URL.absoluteString;
+  if (proxyURL.length == 0 || proxyURL.length > 2048) {
+    fail();
+    return nil;
+  }
+  return proxyURL;
+}
+
 BOOL DSHGitProxyFailed(NSString *proxyURL) {
   if (proxyURL.length == 0) return NO;
   const git_error *last = git_error_last();

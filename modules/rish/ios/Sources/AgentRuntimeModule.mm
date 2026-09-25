@@ -23,6 +23,7 @@
 #import "LocalWorkspaceAccess.h"
 #import "ProjectContextService.h"
 #import "SessionSnapshotStore.h"
+#import "DSHGitPushSupport.h"
 #import "SessionWorkspaceCoordinator.h"
 
 typedef NSDictionary *_Nullable (^DSHRuntimeModuleInvoke)(
@@ -436,6 +437,21 @@ RCT_EXPORT_MODULE(AgentRuntime)
       [[DSHAgentWorkspaceToolExecutor alloc] initWithRootResolver:rootResolver];
   DSHAgentGitToolExecutor *gitExecutor = [[DSHAgentGitToolExecutor alloc]
       initWithRootResolver:rootResolver];
+  // The agent's remote traffic goes where the panel's does: through the
+  // proxy in the last committed session's preferences, which the core
+  // validated when it was committed. A value that no longer reads is none.
+  __weak DSHSessionSnapshotStore *weakSessions = sessions;
+  gitExecutor.proxyProvider = ^NSString *{
+    NSDictionary *loaded = [weakSessions loadSessionSnapshotWithError:nil];
+    id json = loaded[@"session_json"];
+    if (![json isKindOfClass:NSString.class]) return nil;
+    NSDictionary *session = [NSJSONSerialization
+        JSONObjectWithData:[(NSString *)json dataUsingEncoding:NSUTF8StringEncoding]
+                   options:0 error:nil];
+    id preferences = [session isKindOfClass:NSDictionary.class] ? session[@"preferences"] : nil;
+    id raw = [preferences isKindOfClass:NSDictionary.class] ? preferences[@"git_https_proxy_url"] : nil;
+    return DSHGitCanonicalProxyURL(raw, nil);
+  };
   DSHAgentToolBatchService *batch = [[DSHAgentToolBatchService alloc]
       initWithWAL:wal ledger:ledger preparedStore:prepared
       transcripts:transcripts workspaceExecutor:workspaceExecutor

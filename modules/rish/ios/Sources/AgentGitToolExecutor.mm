@@ -239,8 +239,14 @@
     DSHSetAgentNativeStoreError(error, DSHAgentNativeStoreErrorConflict);
     return nil;
   }
+  NSString *proxyURL = [self proxyForOrigin:DSHAgentGitRawOriginURL(repository)];
+  if (proxyURL == (id)NSNull.null) {
+    // A proxy with a plain-http origin: libgit2 would go straight past it.
+    DSHSetAgentNativeStoreError(error, DSHAgentNativeStoreErrorConflict);
+    return nil;
+  }
   NSString *preRemote = nil;
-  if (!DSHAgentGitRemoteOID(repository, remoteRef, &preRemote, error)) return nil;
+  if (!DSHAgentGitRemoteOID(repository, remoteRef, proxyURL, &preRemote, error)) return nil;
   return @{
     @"schema_version" : @1,
     @"precondition" : @{
@@ -465,6 +471,13 @@ static NSString *const DSHAgentGitActiveCancelTokenKey =
     return DSHAgentGitPushFailure(name, @"E_AGENT_TOOL_FAILED",
                                   @"origin_unsafe", NO, error);
   }
+  // A proxy with a plain-http origin is refused before anything else, as
+  // the panel refuses it: libgit2 would send that origin past the proxy.
+  NSString *proxyURL = localPathOrigin ? nil : [self proxyForOrigin:rawOrigin];
+  if (proxyURL == (id)NSNull.null) {
+    return DSHAgentGitPushFailure(name, @"E_AGENT_TOOL_FAILED",
+                                  @"origin_unsafe", NO, error);
+  }
   NSString *host = validatedOrigin.host.lowercaseString;
   NSDictionary *credential = nil;
   if (validatedOrigin != nil) {
@@ -491,7 +504,7 @@ static NSString *const DSHAgentGitActiveCancelTokenKey =
   pushRequest.localOID = headOID;
   pushRequest.username = credential[@"username"];
   pushRequest.token = credential[@"token"];
-  pushRequest.proxyURL = nil;
+  pushRequest.proxyURL = proxyURL;
   pushRequest.expectedRemoteOID = precondition[@"pre_remote_oid"];
   pushRequest.cancelToken = cancelToken;
   pushRequest.timeout = 60.0;
@@ -530,9 +543,15 @@ static NSString *const DSHAgentGitActiveCancelTokenKey =
                                    @"cancelled", YES, error)
           : DSHAgentGitPushFailure(name, @"E_AGENT_CANCELLED", @"cancelled",
                                    NO, error);
-    // The agent sends no proxy yet; a proxy failure would read as any other
-    // transport failure, with the same rule about what may have happened.
+    // The person's proxy refused or could not reach the remote: named apart,
+    // so the model points at the proxy, with the same rule about what may
+    // have happened.
     case DSHGitPushOutcomeProxyFailed:
+      return pushResult.effectMayHaveOccurred
+          ? DSHAgentGitPushFailure(name, @"E_AGENT_EXECUTION_AMBIGUOUS",
+                                   @"proxy", YES, error)
+          : DSHAgentGitPushFailure(name, @"E_AGENT_TOOL_FAILED", @"proxy",
+                                   NO, error);
     case DSHGitPushOutcomeFailed:
       // Once the request went out, a lost response cannot prove that the
       // server rejected the update.
@@ -630,8 +649,12 @@ static NSString *const DSHAgentGitActiveCancelTokenKey =
   }
   if ([name isEqualToString:@"git_push"]) {
     NSString *remoteRef = precondition[@"remote_ref"];
+    NSString *proxyURL = [self proxyForOrigin:DSHAgentGitRawOriginURL(repository)];
+    if (proxyURL == (id)NSNull.null) {
+      return @{ @"schema_version" : @1, @"status" : @"ambiguous" };
+    }
     NSString *actual = nil;
-    if (!DSHAgentGitRemoteOID(repository, remoteRef, &actual, error)) {
+    if (!DSHAgentGitRemoteOID(repository, remoteRef, proxyURL, &actual, error)) {
       return nil;
     }
     if ([actual isEqual:precondition[@"target_oid"]]) {
@@ -645,6 +668,15 @@ static NSString *const DSHAgentGitActiveCancelTokenKey =
     return @{ @"schema_version" : @1, @"status" : @"ambiguous" };
   }
   return @{ @"schema_version" : @1, @"status" : @"not_dispatched" };
+}
+
+/// The proxy the remote step goes through: nil for none (or a local-path
+/// origin, which has no network), NSNull when a proxy is set but the origin
+/// is not https -- libgit2 would send that one straight past the proxy.
+- (id)proxyForOrigin:(NSString *)rawOrigin {
+  NSString *proxy = self.proxyProvider != nil ? self.proxyProvider() : nil;
+  if (proxy.length == 0 || [rawOrigin hasPrefix:@"/"]) return nil;
+  return [rawOrigin.lowercaseString hasPrefix:@"https://"] ? proxy : (id)NSNull.null;
 }
 
 @end

@@ -328,43 +328,11 @@ static NSString *LPValidatedHTTPSProxyURL(id optionsValue, NSError **error) {
     if (error != nil) *error = LPError(3003, @"HTTPS proxy options are invalid");
     return nil;
   }
-  id proxyValue = options[@"httpsProxyUrl"];
-  if (proxyValue == nil || proxyValue == NSNull.null) return nil;
-  NSString *input = LPString(proxyValue);
-  if (input == nil) {
-    if (error != nil) *error = LPError(3003, @"HTTPS proxy URL is invalid");
-    return nil;
-  }
-  if (input.length == 0) return nil;
-  if (input.length > 2048 || LPHasControlCharacter(input)
-    || ![input isEqualToString:[input stringByTrimmingCharactersInSet:
-      NSCharacterSet.whitespaceAndNewlineCharacterSet]]) {
-    if (error != nil) *error = LPError(3003, @"HTTPS proxy URL is invalid");
-    return nil;
-  }
-  NSURLComponents *components = [NSURLComponents componentsWithString:input];
-  NSString *scheme = components.scheme.lowercaseString;
-  NSString *host = components.host;
-  NSNumber *port = components.port;
-  NSString *path = components.path;
-  BOOL valid = ([scheme isEqualToString:@"http"] || [scheme isEqualToString:@"https"])
-    && host.length > 0 && !LPHasControlCharacter(host)
-    && port != nil && port.integerValue >= 1 && port.integerValue <= 65535
-    && (path.length == 0 || [path isEqualToString:@"/"])
-    && components.user == nil && components.password == nil
-    && components.query == nil && components.fragment == nil
-    && components.URL != nil;
-  if (!valid) {
-    if (error != nil) *error = LPError(3003, @"HTTPS proxy URL is invalid");
-    return nil;
-  }
-  NSURLComponents *canonical = [[NSURLComponents alloc] init];
-  canonical.scheme = scheme;
-  canonical.host = host;
-  canonical.port = port;
-  canonical.path = @"/";
-  NSString *proxyURL = canonical.URL.absoluteString;
-  if (proxyURL.length == 0 || proxyURL.length > 2048) {
+  // The rule is shared with the agent's remote traffic, which reads the
+  // proxy from the committed session instead of from these options.
+  BOOL invalid = NO;
+  NSString *proxyURL = DSHGitCanonicalProxyURL(options[@"httpsProxyUrl"], &invalid);
+  if (invalid) {
     if (error != nil) *error = LPError(3003, @"HTTPS proxy URL is invalid");
     return nil;
   }

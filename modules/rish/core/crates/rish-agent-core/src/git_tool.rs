@@ -40,6 +40,9 @@ pub const PUSH_REASONS: &[&str] = &[
     "timeout",
     "cancelled",
     "transport",
+    // The person's HTTPS proxy refused the tunnel or could not reach the
+    // remote: named apart so the model points at the proxy, not the remote.
+    "proxy",
 ];
 
 /// SHA-1, needed only to reproduce Git's object id.
@@ -351,6 +354,8 @@ mod tests {
             ("timeout", true),
             ("cancelled", true),
             ("transport", true),
+            ("proxy", false),
+            ("proxy", true),
         ] {
             let result = failure_result("git_push", "E_AGENT_TOOL_FAILED", Some(reason), ambiguous)
                 .unwrap_or_else(|_| panic!("host reason {reason} was refused"));

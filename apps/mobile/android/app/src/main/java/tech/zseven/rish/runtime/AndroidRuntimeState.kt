@@ -48,7 +48,7 @@ internal class AndroidRuntimeState private constructor(val app: Application) {
     val executionLedger = AndroidAgentExecutionLedger(agentWal, liveTasks, agentOperations)
     val workspaceTools = AndroidWorkspaceToolExecutor(workspaces, roots)
     /// The agent's git_status, git_commit and git_push, over an attached project.
-    val gitTools = AndroidAgentGitToolExecutor(workspaceProjects, workspaces, roots, gitCredentials)
+    val gitTools = AndroidAgentGitToolExecutor(workspaceProjects, workspaces, roots, gitCredentials) { sessions.committedGitProxy() }
     val agentPolicy = AndroidAgentPolicyService(roots, AndroidAgentToolRegistry)
     val agentRounds = AndroidAgentRoundJournal(agentWal, liveTasks)
     val agentTranscripts = AndroidAgentTranscriptStore(agentWal)

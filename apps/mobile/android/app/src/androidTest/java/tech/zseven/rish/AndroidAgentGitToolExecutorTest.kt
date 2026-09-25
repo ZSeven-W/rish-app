@@ -35,7 +35,9 @@ class AndroidAgentGitToolExecutorTest {
         val projects = AndroidWorkspaceProjects(workspaces)
         val roots = AndroidAgentRootResolver(workspaces, projects)
         val credentials = AndroidGitCredentials(context, "rish.git-credentials.test-${UUID.randomUUID()}")
-        val tools = AndroidAgentGitToolExecutor(projects, workspaces, roots, credentials)
+        /** The proxy the committed session would hold; null for none. */
+        var proxy: String? = null
+        val tools = AndroidAgentGitToolExecutor(projects, workspaces, roots, credentials) { proxy }
         val workspaceId: String = workspaces.create("Scratch").getString("workspace_id")
         val workDir: File = workspaces.rootFor(workspaceId)!!
         val projectId: String = projects.attach(
@@ -260,6 +262,61 @@ class AndroidAgentGitToolExecutorTest {
         // Preparing needs the remote's answer; a remote that cannot be asked is not a push to prepare.
         assertEquals("E_AGENT_CONFLICT", refusal { prepush(f) })
         assertEquals("ambiguous", recoverPush(f, precondition).getString("status"))
+        f.scratch.deleteRecursively()
+    }
+
+    /**
+     * The agent's remote traffic goes through the person's proxy, as the
+     * panel's does: counted by scripts/git-test-proxy.py (pass
+     * rish_proxy_base=http://10.0.2.2:N/), against github.com. A plain-http
+     * origin with a proxy is refused before connecting, and a proxy that
+     * refuses the tunnel is named as the reason.
+     */
+    @Test
+    fun theAgentsRemoteTrafficGoesThroughTheProxy() {
+        val base = InstrumentationRegistry.getArguments().getString("rish_proxy_base")
+        // github.com is reached through the proxy alone (start it with
+        // --upstream where the network needs one); a direct probe from the
+        // emulator says nothing about that path.
+        assumeTrue("no test proxy: pass rish_proxy_base", base != null)
+        assertTrue(tech.zseven.rish.runtime.AndroidGitCertificates.ensure(context) != null)
+        val f = fixture()
+        val proxyUri = java.net.URI(base)
+        fun control(method: String, path: String): JSONObject {
+            java.net.Socket(proxyUri.host, proxyUri.port).use { socket ->
+                socket.soTimeout = 10_000
+                socket.getOutputStream().write("$method $path HTTP/1.1\r\nHost: proxy\r\nContent-Length: 0\r\n\r\n".toByteArray())
+                val text = socket.getInputStream().readBytes().toString(Charsets.UTF_8)
+                return JSONObject(text.substringAfter("\r\n\r\n"))
+            }
+        }
+        fun tunnels(): Int = control("GET", "/__rish_stats").getJSONObject("connects").optInt("github.com:443", 0)
+        f.proxy = "http://${proxyUri.host}:${proxyUri.port}/"
+        val head = f.agentCommit("a.txt", "one\n", "first")
+        assertEquals("ok", RishLibgit2Native.setRemote(f.gitDir.absolutePath, f.workDir.absolutePath, "https://github.com/octocat/Hello-World.git"))
+        f.credentials.store(f.projectId, "github.com", "rish-test", "not-a-token", 3600)
+        // Preparing asks the remote what it holds -- through the proxy.
+        val before = tunnels()
+        val precondition = prepush(f)
+        assertEquals(head, precondition.getString("target_oid"))
+        assertTrue("the probe did not go through the proxy", tunnels() > before)
+        // Recovery asks the same way.
+        val beforeRecovery = tunnels()
+        assertEquals("not_dispatched", recoverPush(f, precondition).getString("status"))
+        assertTrue("recovery did not go through the proxy", tunnels() > beforeRecovery)
+        // A proxy that refuses the tunnel is the reason, and nothing was sent.
+        control("POST", "/__rish_mode?mode=refuse")
+        try {
+            val refused = push(f, precondition)
+            assertEquals("failed", refused.getString("status"))
+            assertEquals("proxy", payload(refused).getString("reason"))
+            assertEquals(false, refused.getBoolean("effect_may_have_occurred"))
+        } finally {
+            control("POST", "/__rish_mode?mode=tunnel")
+        }
+        // A plain-http origin with a proxy is refused before any connection.
+        assertEquals("ok", RishLibgit2Native.setRemote(f.gitDir.absolutePath, f.workDir.absolutePath, "http://10.0.2.2:1/demo.git"))
+        assertEquals("origin_unsafe", payload(push(f, precondition)).getString("reason"))
         f.scratch.deleteRecursively()
     }
 

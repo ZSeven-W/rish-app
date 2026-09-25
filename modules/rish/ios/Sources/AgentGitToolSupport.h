@@ -12,7 +12,10 @@ NSString *DSHAgentGitBranchReference(git_repository *repository, NSString **bran
 NSString *DSHAgentGitHeadReferenceName(git_repository *repository);
 NSString *DSHAgentGitRawOriginURL(git_repository *repository);
 NSDictionary *DSHAgentGitPushFailure(NSString *name, NSString *failureCode, NSString *reason, BOOL ambiguous, NSError **error);
-BOOL DSHAgentGitRemoteOID(git_repository *repository, NSString *remoteRef, NSString **oidOut, NSError **error);
+/// What origin advertises for `remoteRef`, asked through `proxyURL` when
+/// one is given (the canonical spelling from DSHGitCanonicalProxyURL).
+BOOL DSHAgentGitRemoteOID(git_repository *repository, NSString *remoteRef, NSString *_Nullable proxyURL,
+                          NSString **oidOut, NSError **error);
 NSDictionary *DSHAgentGitStatus(git_repository *repository, NSError **error);
 NSString *DSHAgentGitIndexDigest(git_index *index, NSError **error);
 git_index *DSHAgentGitStageAll(git_repository *repository, git_oid *treeOID, NSString **indexDigest, NSError **error);

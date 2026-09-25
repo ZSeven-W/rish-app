@@ -29,13 +29,19 @@ internal class AndroidAgentGitToolExecutor(
     private val workspaces: AndroidWorkspaceRegistry,
     private val roots: AndroidAgentRootResolver,
     private val credentials: AndroidGitCredentials? = null,
+    /**
+     * The HTTPS proxy the person set for Git, as the last committed session
+     * holds it -- the commit that approved the call is in it -- or null for
+     * none. The agent's remote traffic goes where the panel's does.
+     */
+    private val proxy: () -> String? = { null },
 ) {
     val tools: List<String> = listOf("git_status", "git_commit", "git_push")
 
     private class Opened(val gitDir: String, val workDir: String, val projectId: String)
 
     /** Where a push goes: a validated network URL with its credential, or an absolute local path with none. */
-    private class Origin(val url: String, val host: String, val username: String, val token: String)
+    private class Origin(val url: String, val host: String, val username: String, val token: String, val proxy: String = "")
 
     /** Runs [body] holding the workspace the root names, so a removal waits for it. */
     private inline fun <T> held(root: JSONObject, crossinline body: () -> T): T {
@@ -183,6 +189,7 @@ internal class AndroidAgentGitToolExecutor(
                         RishLibgit2Native.push(
                             opened.gitDir, opened.workDir, java.util.UUID.randomUUID().toString(), origin.url, origin.host,
                             reference, target, origin.username, origin.token, PUSH_TIMEOUT_SECONDS, true, expected ?: "",
+                            origin.proxy,
                         ),
                         Charsets.UTF_8,
                     ),
@@ -196,6 +203,10 @@ internal class AndroidAgentGitToolExecutor(
                     "rejected" -> return failure(name, "E_AGENT_TOOL_FAILED", ambiguous = false, reason = "rejected")
                     "auth_failure" -> return failure(name, "E_AGENT_TOOL_FAILED", ambiguous = false, reason = "auth_failed")
                     "timed_out" -> return failure(name, "E_AGENT_EXECUTION_AMBIGUOUS", ambiguous = true, reason = "timeout")
+                    // The proxy refused or could not reach the remote: named
+                    // apart, so the person looks at the proxy, not the remote.
+                    "proxy_failed" -> return if (sent) failure(name, "E_AGENT_EXECUTION_AMBIGUOUS", ambiguous = true, reason = "proxy")
+                        else failure(name, "E_AGENT_TOOL_FAILED", ambiguous = false, reason = "proxy")
                     "cancelled" -> return if (sent) failure(name, "E_AGENT_EXECUTION_AMBIGUOUS", ambiguous = true, reason = "cancelled")
                         else failure(name, "E_AGENT_CANCELLED", ambiguous = false, reason = "cancelled")
                     // Once the request went out, a lost response cannot prove
@@ -312,7 +323,11 @@ internal class AndroidAgentGitToolExecutor(
         AndroidGitRemoteUrl.validated(raw)?.let { url ->
             val host = AndroidGitRemoteUrl.hostOf(url)
             val credential = credentials?.read(opened.projectId, host)
-            return Origin(url, host, credential?.username ?: "", credential?.token ?: "")
+            // A proxy with a plain-http remote is refused, as the panel refuses
+            // it: libgit2 would send that remote straight past the proxy.
+            val via = proxy()
+            if (!AndroidGitProxyUrl.usableWith(via, url)) return null
+            return Origin(url, host, credential?.username ?: "", credential?.token ?: "", via ?: "")
         }
         return if (raw.startsWith("/")) Origin("", "", "", "") else null
     }
@@ -325,7 +340,7 @@ internal class AndroidAgentGitToolExecutor(
             String(
                 RishLibgit2Native.remoteRefOid(
                     opened.gitDir, opened.workDir, origin.url, origin.host, reference, origin.username, origin.token,
-                    PUSH_TIMEOUT_SECONDS,
+                    PUSH_TIMEOUT_SECONDS, origin.proxy,
                 ),
                 Charsets.UTF_8,
             ),

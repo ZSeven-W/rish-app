@@ -37,6 +37,10 @@ NS_ASSUME_NONNULL_BEGIN
                                       error:(NSError **)error;
 
 @property(nonatomic, strong, readonly) DSHAgentRootResolver *rootResolver;
+/// The person's HTTPS proxy for Git, as the last committed session holds it
+/// (canonical, or nil for none). Read at each remote step; the commit that
+/// approved the call is in that session. nil provider = no proxy.
+@property(nonatomic, copy, nullable) NSString *_Nullable (^proxyProvider)(void);
 
 @end
 
