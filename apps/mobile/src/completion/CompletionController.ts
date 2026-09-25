@@ -4790,8 +4790,16 @@ export function createCompletionController(
       committed_checkpoint: authorityCheckpoint,
       target,
       action: 'reconcile',
+      // The revision the durable row has now, as the query just read it. A
+      // round stopped mid-reply is moved twice -- by the cancellation, then
+      // by its own call ending -- and the journal only heard the first, so
+      // resuming it with the journal's revision was always a conflict
+      // (beta report, 2026-09-25). The CAS still holds against any change
+      // after this read.
       expected_round_revision: target.kind === 'round'
-        ? journal.round_lineage?.native_row_revision ?? 0
+        ? (queried.attempt.round_id === target.round_id && queried.attempt.round_revision !== null
+          ? queried.attempt.round_revision
+          : journal.round_lineage?.native_row_revision ?? 0)
         : null,
       expected_execution_revision: target.kind === 'tool'
         ? journal.batch[target.call_index]?.native_row_revision ?? 0
@@ -4812,15 +4820,17 @@ export function createCompletionController(
       publish(stateFor('resume_available', { conversationId, turnId: attempt.turnId, attemptId, failureCode: 'E_AGENT_CONFLICT' }));
       return outcome('retryable', state);
     }
-    if (recovered.status === 'manual_reconciliation') {
-      publish(stateFor('resume_available', { conversationId, turnId: attempt.turnId, attemptId, failureCode: 'E_AGENT_EXECUTION_AMBIGUOUS' }));
-      return outcome('retryable', state);
-    }
     if (recovered.status === 'retryable') {
       publish(stateFor('retryable', { conversationId, turnId: attempt.turnId, attemptId, failureCode: 'E_AGENT_PERSISTENCE' }));
       return outcome('retryable', state);
     }
-    if (recovered.completed_round !== null && recovered.completed_round.kind === 'final') {
+    if (recovered.status === 'manual_reconciliation' &&
+        recovered.attempt.phase !== 'ambiguous' && recovered.attempt.phase !== 'unknown') {
+      // Nothing the journal can take: say which uncertainty it is and wait.
+      publish(stateFor('resume_available', { conversationId, turnId: attempt.turnId, attemptId, failureCode: agentAmbiguityCode(journal) }));
+      return outcome('retryable', state);
+    }
+    if (recovered.status !== 'manual_reconciliation' && recovered.completed_round !== null && recovered.completed_round.kind === 'final') {
       return await finishRecoveredFinal(conversationId, attemptId, runEpoch, recoveryRequest, recovered, evidence, events);
     }
     const recoveredProjection = agentJournalFromProjection(
@@ -4900,6 +4910,19 @@ export function createCompletionController(
       }
       if (recoveredJournal.phase === 'ready_for_round' || recoveredJournal.phase === 'tool_result_pending') return await runAgentRound(conversationId, attemptId, runEpoch);
       if (recoveredJournal.phase === 'batch_frozen' || recoveredJournal.phase === 'approval_pending') return await runAgentBatch(conversationId, attemptId, runEpoch);
+      if (recovered.status === 'manual_reconciliation') {
+        // The native row is ambiguous and now the journal says so too, which
+        // is what offers "Retry this turn". Which uncertainty it is decides
+        // the words: a tool that may have run sends the person to their files
+        // first; a round whose reply never came -- a reply stopped mid-way,
+        // above all -- only may have cost a call. Before, the journal kept its
+        // older phase, "a tool may already have run" was said over a round
+        // that called none, and "Continue response" led back to the same
+        // notice (beta report, 2026-09-25).
+        const ambiguity = agentAmbiguityCode(recoveredJournal);
+        publish(stateFor('resume_available', { conversationId, turnId: attempt.turnId, attemptId, roundId: recoveredJournal.round_lineage?.round_id ?? null, transportSchemaVersion: agentTransportSchema(attempt), failureCode: ambiguity }));
+        return outcome('retryable', state);
+      }
       publish(stateFor('retryable', { conversationId, turnId: attempt.turnId, attemptId, failureCode: 'E_AGENT_PERSISTENCE' }));
       return outcome('retryable', state);
     }, runEpoch, { conversationId, turnId: attempt.turnId, attemptId });

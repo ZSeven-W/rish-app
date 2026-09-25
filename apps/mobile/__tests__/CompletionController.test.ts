@@ -2739,7 +2739,9 @@ describe('project Agent completion controller', () => {
     expect(runtime.queryAgentAttempt).toHaveBeenCalledTimes(1);
     expect(runtime.recoverAgentAttempt).toHaveBeenCalledTimes(1);
     const retried = await restarted.retry(conversationId, attempt.attemptId);
-    expect(retried).toMatchObject({ status: 'retryable', code: 'E_AGENT_EXECUTION_AMBIGUOUS' });
+    // A round with no tool in its batch is ambiguous as a round, not as an
+    // execution: nothing may have changed the person's files.
+    expect(retried).toMatchObject({ status: 'retryable', code: 'E_AGENT_ROUND_AMBIGUOUS' });
     expect(runtime.queryAgentAttempt).toHaveBeenCalledTimes(2);
     expect(runtime.recoverAgentAttempt).toHaveBeenCalledTimes(2);
     expect(await restarted.beforeConversationChange(conversationId)).toBe(true);
