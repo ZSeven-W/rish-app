@@ -19,6 +19,7 @@ const BUILTIN_DESCRIPTION_KEYS: Readonly<Record<string, TranslationKey>> = {
 
 export function HarnessPicker({
   disabled = false,
+  notice = null,
   manifests,
   selectedId,
   visible,
@@ -26,6 +27,8 @@ export function HarnessPicker({
   onSelect,
 }: {
   disabled?: boolean;
+  /** Why a switch is not possible right now; tapping a card did nothing, silently. */
+  notice?: string | null;
   manifests: readonly HarnessManifest[];
   selectedId: string;
   visible: boolean;
@@ -68,6 +71,9 @@ export function HarnessPicker({
 
         <ScrollView contentContainerStyle={styles.content}>
           <Text style={styles.description}>{t('harness.description')}</Text>
+          {notice !== null && (
+            <Text accessibilityRole="alert" style={styles.notice}>{notice}</Text>
+          )}
           {manifests.map(manifest => {
             const descriptionKey = manifest.builtin ? BUILTIN_DESCRIPTION_KEYS[manifest.id] : undefined;
             const selected = manifest.id === selectedId;
@@ -180,6 +186,7 @@ const createStyles = (colors: ThemePalette) =>
     },
     content: { paddingTop: 8, paddingBottom: 34 },
     description: { color: colors.muted, fontSize: 13, lineHeight: 19 },
+    notice: { color: colors.danger, fontSize: 13, lineHeight: 19 },
     card: {
       borderRadius: 20,
       borderWidth: StyleSheet.hairlineWidth,

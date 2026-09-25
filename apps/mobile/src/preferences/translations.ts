@@ -664,6 +664,10 @@ const enUS = {
   'harness.description':
     'DSH, Claude Code, Codex, and GLM connect through built-in API adapters, not installed official CLIs. Model requests go to the selected service; files and conversations stay on this device.',
   'harness.builtin': 'Built in',
+  'harness.blocked.unfinished': "This chat has a turn that did not finish. Resume, retry or cancel it first, or start a new chat, then switch.",
+  'harness.blocked.elsewhere': "Another chat has a turn that is not settled. Go back to it and resume, retry or cancel that turn, then switch.",
+  'harness.blocked.approval': "A tool call is waiting for your approval. Approve or decline it first, then switch.",
+  'harness.blocked.busy': "A response is in progress. Wait for it to finish or stop it, then switch.",
   'harness.selected': 'Current harness',
   'harness.use': 'Use {harness}',
   'harness.manifestTitle': 'Harness manifest v1',
@@ -1709,6 +1713,10 @@ const zhCN: Readonly<Record<TranslationKey, string>> = {
   'harness.description':
     'DSH、Claude Code、Codex 和 GLM 通过内置 API 适配器接入，并非在手机安装了官方 CLI。模型请求发送至所选服务，文件与会话保存在设备上。',
   'harness.builtin': '内置',
+  'harness.blocked.unfinished': "这个对话里有一轮还没结束。请先恢复、重试或取消它，或者新建对话，再切换智能体。",
+  'harness.blocked.elsewhere': "另一个对话里有一轮还没结束。请回到那个对话恢复、重试或取消它，再切换智能体。",
+  'harness.blocked.approval': "有一个工具调用在等待你批准。请先批准或拒绝，再切换智能体。",
+  'harness.blocked.busy': "正在生成回答。请等它结束或先停止，再切换智能体。",
   'harness.selected': '当前 Harness',
   'harness.use': '使用 {harness}',
   'harness.manifestTitle': 'Harness Manifest v1',

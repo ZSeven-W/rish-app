@@ -159,3 +159,30 @@ test.each(['light', 'dark'] as const)(
     }
   },
 );
+
+// Tapping a card while a turn was unsettled did nothing and said nothing
+// (beta report, 2026-09-24). The picker now says why, and the cards are
+// inert with it.
+test('the picker says why a switch is not possible', async () => {
+  const onSelect = jest.fn();
+  const store = createPreferencesStore({
+    initialPreferences: { ...createDefaultPreferences(), locale: 'en-US' },
+  });
+  const notice = 'This chat has a turn that did not finish.';
+  const renderer = await render(
+    <AppPresentationProvider store={store}>
+      <HarnessPicker
+        disabled
+        notice={notice}
+        manifests={BUILTIN_HARNESSES.list()}
+        onClose={jest.fn()}
+        onSelect={onSelect}
+        selectedId="glm"
+        visible
+      />
+    </AppPresentationProvider>,
+  );
+  expect(renderer.root.findAll(node => node.props.accessibilityRole === 'alert' && node.props.children === notice).length).toBeGreaterThan(0);
+  const card = renderer.root.findAll(node => node.props.accessibilityLabel === 'Use DSH' && typeof node.props.onPress === 'function')[0];
+  expect(card.props.disabled).toBe(true);
+});

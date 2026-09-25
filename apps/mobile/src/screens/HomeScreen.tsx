@@ -6032,6 +6032,18 @@ export function HomeScreen({
     store,
   ]);
 
+  // A switch the completion refuses used to be a tap that did nothing; the
+  // picker says why instead (beta report, 2026-09-24).
+  const harnessSwitchNotice = !completionBusy(completionState)
+    ? null
+    : completionState.conversationId !== null && completionState.conversationId !== activeConversation?.id
+      ? t('harness.blocked.elsewhere')
+      : completionState.phase === 'resume_available'
+      ? t('harness.blocked.unfinished')
+      : completionState.phase === 'approval_pending'
+        ? t('harness.blocked.approval')
+        : t('harness.blocked.busy');
+
   const selectHarness = useCallback(
     (harnessId: string) => {
       if (
@@ -6970,7 +6982,9 @@ export function HomeScreen({
         }}
       />
       <HarnessPicker
+        notice={harnessSwitchNotice}
         disabled={
+          harnessSwitchNotice !== null ||
           requestState === 'sending' ||
           attachmentBusy ||
           previewingAttachmentId !== null ||
