@@ -1658,7 +1658,29 @@ pub fn cancel_plan(state: &Value, request: &Value) -> Value {
             owned(latest.and_then(|round| get(round, "locator")))
         };
         let revision = if kind == "round" {
-            owned(get(request, "expected_round_revision"))
+            // A controller that cancels a round still in flight has not yet
+            // heard the row's revision back -- the reply that carries it is
+            // the one being stopped -- and says 0, which no row ever has.
+            // The round the target names is then taken at the revision the
+            // WAL holds, as an attempt cancellation already is. Without
+            // this, every cancellation of a running round was refused as a
+            // malformed selector (leaving the app mid-reply, 2026-09-25).
+            let requested = get(request, "expected_round_revision");
+            if requested == Some(&json!(0)) {
+                owned(
+                    array(get(state, "rounds"))
+                        .iter()
+                        .find(|candidate| {
+                            let locator = get(candidate, "locator");
+                            at(locator, "task_id") == task_id
+                                && at(locator, "attempt_id") == attempt_id
+                                && at(locator, "round_id") == at(target, "round_id")
+                        })
+                        .and_then(|round| get(round, "row_revision")),
+                )
+            } else {
+                owned(requested)
+            }
         } else {
             owned(latest.and_then(|round| get(round, "row_revision")))
         };
@@ -2455,4 +2477,52 @@ fn reduce_json_inner(input: &str) -> Result<Value, StoreError> {
         _ => return Err(StoreError::InvalidArgument),
     }
     Ok(Value::Object(reply))
+}
+
+#[cfg(test)]
+mod cancel_plan_tests {
+    use super::cancel_plan;
+    use serde_json::json;
+
+    const TASK: &str = "11111111-1111-4111-8111-111111111111";
+    const ATTEMPT: &str = "22222222-2222-4222-8222-222222222222";
+    const ROUND: &str = "33333333-3333-4333-8333-333333333333";
+
+    fn state() -> serde_json::Value {
+        json!({ "rounds": [
+            { "locator": { "task_id": TASK, "attempt_id": ATTEMPT, "round_id": ROUND, "round_index": 0 },
+              "row_revision": 3, "state": "in_flight" },
+        ] })
+    }
+
+    fn request(revision: u64) -> serde_json::Value {
+        json!({
+            "target": { "schema_version": 2, "kind": "round", "task_id": TASK, "attempt_id": ATTEMPT,
+                        "round_id": ROUND, "round_index": 0 },
+            "expected_round_revision": revision,
+        })
+    }
+
+    // A controller cancelling a round still in flight has not heard its row
+    // revision yet and says 0; the plan takes the round at the WAL's revision.
+    #[test]
+    fn a_running_round_is_cancelled_at_the_revision_the_wal_holds() {
+        let plan = cancel_plan(&state(), &request(0));
+        assert_eq!(plan["plan"], json!("round"));
+        assert_eq!(plan["expected_round_revision"], json!(3));
+    }
+
+    // A revision the controller did hear is kept: a stale one still conflicts
+    // where the selector compares it with the row.
+    #[test]
+    fn a_known_revision_is_kept_as_asked() {
+        assert_eq!(cancel_plan(&state(), &request(2))["expected_round_revision"], json!(2));
+    }
+
+    // Nothing in the WAL for that round and nothing known: no round plan.
+    #[test]
+    fn an_unknown_round_with_no_revision_is_not_a_round_plan() {
+        let empty = json!({ "rounds": [] });
+        assert_ne!(cancel_plan(&empty, &request(0))["plan"], json!("round"));
+    }
 }
