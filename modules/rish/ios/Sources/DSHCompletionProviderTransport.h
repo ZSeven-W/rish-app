@@ -227,6 +227,11 @@ typedef void (^DSHCompletionProviderTransportPreviewBlock)(
                                                 thinkingMode:(NSString *)thinkingMode
                                                       error:(NSError **)error;
 
+/// The HTTP status the provider refused a request with, taken once: the
+/// completion carries only a code, and "401" is what tells a person which
+/// setting to fix. 0 when the request did not end on a status.
+- (NSInteger)takeRefusalHTTPStatusForProviderRequestId:(NSString *)providerRequestId;
+
 /// Maps a non-2xx HTTP status to a stable error code.
 - (NSString *)providerErrorCodeForHTTPStatus:(NSInteger)statusCode
                                          data:(NSData * _Nullable)data;

@@ -159,6 +159,10 @@ static const int64_t DSHAgentRoundPreviewCoalesceNanoseconds = 50 * NSEC_PER_MSE
 }
 
 - (void)finishWithStatus:(NSString *)status failureCode:(NSString *)failureCode {
+  [self finishWithStatus:status failureCode:failureCode httpStatus:0];
+}
+
+- (void)finishWithStatus:(NSString *)status failureCode:(NSString *)failureCode httpStatus:(NSInteger)httpStatus {
   dispatch_sync(self.queue, ^{
     if (self.finished) return;
     [self flushLocked];
@@ -172,6 +176,7 @@ static const int64_t DSHAgentRoundPreviewCoalesceNanoseconds = 50 * NSEC_PER_MSE
     if ([failureCode isKindOfClass:NSString.class] && failureCode.length > 0) {
       fields[@"failure_code"] = failureCode;
     }
+    if (httpStatus >= 100 && httpStatus <= 599) fields[@"http_status"] = @(httpStatus);
     fields[@"truncated"] = @(self.truncated);
     [self emitLocked:fields];
   });
@@ -1234,11 +1239,16 @@ static const int64_t DSHAgentRoundPreviewCoalesceNanoseconds = 50 * NSEC_PER_MSE
       [providerResult[@"request_body_sha256"] isEqual:actualBodyDigest];
   if (!signaled || providerResult == nil || providerErrorCode != nil ||
       !providerCorrelationMatches || !providerDigestsMatch) {
+    // The transport's own code, as Android sends it: what the provider said
+    // (E_COMPLETION_HTTP_STATUS and its status) is what the notice explains,
+    // where the round's code alone says only that the round is ambiguous.
+    NSInteger refusalStatus = [providerTransport takeRefusalHTTPStatusForProviderRequestId:providerRequestId];
     [previewPublisher finishWithStatus:@"failed"
-                           failureCode:DSHProviderFailureCode(
+                           failureCode:providerErrorCode ?: DSHProviderFailureCode(
                                providerErrorCode,
                                providerResult != nil &&
-                                   (!providerDigestsMatch || !providerCorrelationMatches))];
+                                   (!providerDigestsMatch || !providerCorrelationMatches))
+                            httpStatus:refusalStatus];
     NSSet *knownProviderErrors = [NSSet setWithArray:@[@"E_COMPLETION_RESPONSE_MODEL", @"E_COMPLETION_MODEL_MISMATCH", @"E_COMPLETION_PROVIDER_RESPONSE_ID", @"E_COMPLETION_RESPONSE_JSON", @"E_COMPLETION_EMPTY_RESPONSE", @"E_COMPLETION_TOOL_CALL_INVALID", @"E_COMPLETION_FINISH_RELATION", @"E_COMPLETION_HTTP_STATUS", @"E_COMPLETION_HTTP_429", @"E_COMPLETION_CREDENTIAL_CHANGED", @"E_COMPLETION_REDIRECT", @"E_AGENT_CANCELLED"]];
     NSString *safeProviderError = providerErrorCode == nil ? @"none" : ([knownProviderErrors containsObject:providerErrorCode] ? providerErrorCode : @"other");
     os_log_error(OS_LOG_DEFAULT, "agent_round_validation signaled=%{public}d result_present=%{public}d provider_error=%{public}@ correlation_matches=%{public}d digests_match=%{public}d", signaled, providerResult != nil, safeProviderError, providerCorrelationMatches, providerDigestsMatch);

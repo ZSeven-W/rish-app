@@ -156,6 +156,7 @@ static NSString *DSHCompletionTransportParserErrorCode(NSError *error) {
 @property(nonatomic, copy) NSString *(^uuidGenerator)(void);
 @property(nonatomic, copy) NSTimeInterval (^monotonicClock)(void);
 @property(nonatomic, strong) NSMutableDictionary<NSNumber *, DSHCompletionProviderTransportContext *> *contexts;
+@property(nonatomic, strong) NSMutableDictionary<NSString *, NSNumber *> *refusalStatuses;
 @end
 
 @interface DSHHTTPCompletionExecution : NSObject <DSHCompletionExecution>
@@ -585,6 +586,14 @@ static NSString *DSHCompletionTransportDiagnosticKind(NSError *error,
                           responseStatus:@(http.statusCode)
                        callbackSignaled:owned.completion != nil];
 #endif
+        if (owned.providerRequestId.length > 0) {
+          @synchronized (self) {
+            if (self.refusalStatuses == nil) self.refusalStatuses = [NSMutableDictionary dictionary];
+            // Bounded: a status nobody takes is dropped with the oldest.
+            if (self.refusalStatuses.count >= 16) [self.refusalStatuses removeAllObjects];
+            self.refusalStatuses[owned.providerRequestId] = @(http.statusCode);
+          }
+        }
         if (owned.completion != nil) {
           owned.completion(nil, [self providerErrorCodeForHTTPStatus:http.statusCode
                                                                  data:data]);
@@ -884,6 +893,15 @@ static NSString *DSHCompletionTransportDiagnosticKind(NSError *error,
                                  @"E_COMPLETION_RESPONSE_JSON"}];
   }
   return nil;
+}
+
+- (NSInteger)takeRefusalHTTPStatusForProviderRequestId:(NSString *)providerRequestId {
+  if (providerRequestId.length == 0) return 0;
+  @synchronized (self) {
+    NSNumber *status = self.refusalStatuses[providerRequestId];
+    [self.refusalStatuses removeObjectForKey:providerRequestId];
+    return status.integerValue;
+  }
 }
 
 - (NSString *)providerErrorCodeForHTTPStatus:(NSInteger)statusCode

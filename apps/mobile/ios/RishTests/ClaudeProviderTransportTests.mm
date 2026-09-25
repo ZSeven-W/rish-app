@@ -893,6 +893,32 @@ didCompleteWithError:(NSError *)error {
   }
 }
 
+// The status a relay refused a request with is kept for the round to show:
+// "HTTP 401" tells a person to check the key, where the round's code alone
+// says only that the round is ambiguous. Taken once.
+- (void)testARelayRefusalKeepsItsHTTPStatusForTheRound {
+  for (NSNumber *status in @[@401, @404, @502]) {
+    [ClaudeTransportURLProtocol reset];
+    NSString *suite = [@"custom-status-" stringByAppendingString:NSUUID.UUID.UUIDString];
+    NSUserDefaults *defaults = [[NSUserDefaults alloc] initWithSuiteName:suite];
+    DSHProviderConfigurationStore *store = [[DSHProviderConfigurationStore alloc] initWithDefaults:defaults];
+    [store saveConfiguration:[self customConfiguration:@"chat-completions" endpoint:@"https://relay.example/v1"] error:nil];
+    DSHConfiguredProviderTransport *transport = [[DSHConfiguredProviderTransport alloc]
+        initWithHarness:@"claude-code" session:self.session uuidGenerator:nil monotonicClock:nil store:store];
+    [ClaudeTransportURLProtocol setHandler:^(NSURLProtocol *p, NSURLRequest *request) {
+      [self respond:p request:request data:[self jsonData:@{@"error": @{@"message": @"no"}}] status:status.integerValue];
+    }];
+    NSDictionary *result = nil; NSString *errorCode = nil;
+    [self startRoundWithTransport:transport model:@"claude-sonnet-5" schemaVersion:2 result:&result errorCode:&errorCode];
+    XCTAssertNil(result);
+    XCTAssertNotNil(errorCode);
+    NSString *providerId = @"44444444-4444-4444-8444-444444444444";
+    XCTAssertEqual([transport takeRefusalHTTPStatusForProviderRequestId:providerId], status.integerValue);
+    XCTAssertEqual([transport takeRefusalHTTPStatusForProviderRequestId:providerId], 0);
+    [defaults removePersistentDomainForName:suite];
+  }
+}
+
 - (void)testChangingCustomProviderRejectsTheOldInFlightResponse {
   NSString *suite = [@"custom-race-" stringByAppendingString:NSUUID.UUID.UUIDString];
   NSUserDefaults *defaults = [[NSUserDefaults alloc] initWithSuiteName:suite];
