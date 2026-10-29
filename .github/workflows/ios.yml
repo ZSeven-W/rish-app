@@ -1,0 +1,146 @@
+name: Rish iOS Unsigned IPA
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - main
+    paths:
+      - ".github/workflows/ios.yml"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: rish-ios-unsigned-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build-ios:
+    name: Build iOS device IPA
+    runs-on: macos-26
+    timeout-minutes: 180
+
+    steps:
+      - name: Checkout source
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Show Apple build environment
+        run: |
+          set -e
+          sw_vers
+          uname -m
+          xcodebuild -version
+          xcodebuild -showsdks
+          xcrun --sdk iphoneos --show-sdk-version
+
+      - name: Check required source files
+        run: |
+          set -euo pipefail
+          test -f package.json
+          test -f apps/mobile/package.json
+          test -f apps/mobile/ios/Rish.xcworkspace/contents.xcworkspacedata
+          test -f scripts/prepare-rish-ios.sh
+          test -f scripts/prepare-rish-agent-core.sh
+          test -f scripts/prepare-libgit2-ios.sh
+          node scripts/verify-source-checkout.mjs
+
+      - name: Install build tools
+        run: |
+          set -euo pipefail
+          brew install cmake cocoapods jq
+          brew list --versions cmake cocoapods jq
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22.11.0"
+          cache: npm
+          cache-dependency-path: apps/mobile/package-lock.json
+
+      - name: Set up pinned Rust
+        run: |
+          set -euo pipefail
+          rustup toolchain install 1.94.1 --profile minimal
+          rustup default 1.94.1
+          rustup target add aarch64-apple-ios
+          rustup target add aarch64-apple-ios-sim
+          rustc --version
+          cargo --version
+
+      - name: Install JavaScript dependencies
+        run: npm ci --prefix apps/mobile
+
+      - name: Prepare Rish native framework
+        run: ./scripts/prepare-rish-ios.sh
+
+      - name: Prepare Agent Core framework
+        run: ./scripts/prepare-rish-agent-core.sh
+
+      - name: Prepare libgit2 and dependencies
+        run: ./scripts/prepare-libgit2-ios.sh
+
+      - name: Install CocoaPods
+        working-directory: apps/mobile/ios
+        run: pod install
+
+      - name: Build unsigned iPhone app
+        run: |
+          set -euo pipefail
+
+          xcodebuild \
+            -workspace apps/mobile/ios/Rish.xcworkspace \
+            -scheme Rish \
+            -configuration Release \
+            -sdk iphoneos \
+            -destination 'generic/platform=iOS' \
+            -derivedDataPath "$RUNNER_TEMP/RishDerivedData" \
+            CODE_SIGNING_ALLOWED=NO \
+            CODE_SIGNING_REQUIRED=NO \
+            build
+
+      - name: Package unsigned IPA
+        run: |
+          set -euo pipefail
+
+          APP="$RUNNER_TEMP/RishDerivedData/Build/Products/Release-iphoneos/Rish.app"
+          OUT="$RUNNER_TEMP/ipa-output"
+
+          test -d "$APP"
+          test -f "$APP/Info.plist"
+
+          rm -rf "$OUT"
+          mkdir -p "$OUT/Payload"
+          ditto "$APP" "$OUT/Payload/Rish.app"
+
+          /usr/libexec/PlistBuddy \
+            -c 'Print :CFBundleIdentifier' \
+            "$OUT/Payload/Rish.app/Info.plist"
+
+          ditto -c -k --sequesterRsrc --keepParent \
+            "$OUT/Payload" \
+            "$GITHUB_WORKSPACE/Rish-unsigned.ipa"
+
+          test -s "$GITHUB_WORKSPACE/Rish-unsigned.ipa"
+          ls -lh "$GITHUB_WORKSPACE/Rish-unsigned.ipa"
+
+      - name: Upload unsigned IPA
+        if: success()
+        uses: actions/upload-artifact@v4
+        with:
+          name: Rish-unsigned-IPA
+          path: Rish-unsigned.ipa
+          if-no-files-found: error
+          retention-days: 7
+
+      - name: Upload build diagnostics
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: Rish-iOS-build-logs
+          path: |
+            ${{ runner.temp }}/RishDerivedData/Logs/
+          if-no-files-found: ignore
+          retention-days: 3
