@@ -114,12 +114,20 @@ buffers. Request IDs route replies, and native credentials remain outside the
 Rust UI. iOS dispatch uses a reviewed export registry with argument/signature
 validation; Android routes to retained Kotlin services and JNI reducers.
 
-`rish-shell-core` retains schema 9 session JSON and delegates validation to
+`rish-shell-core` reads schema 9/10 session JSON and delegates validation to
 `rish-agent-core`. It preserves Agent journals and extension fields. Writes
 carry generation, digest and operation ID. Conflicts require an authoritative
 reload; uncertain writes query their outcome before retrying or issuing another
 provider request. User turns must be durably stored before provider execution.
 There is no second UI-owned conversation store.
+
+Schema 10 stores bounded unsent composer text in `composer_drafts`. Existing
+schema-9 snapshots remain readable without a write; the first draft mutation
+upgrades them through the same native CAS and v3 envelope. Both native core
+archives must include the schema-10 reader. Unsupported versions are preserved
+and refused, and older app builds cannot reopen a schema-10 snapshot. See the
+[session contract](development.md#session-and-native-bridge-rules) for bounds and
+the downgrade restriction.
 
 The shared Agent controller now drives native prepare, provider rounds, frozen
 tool batches, one-time approvals, execution, cancellation, reconciliation and

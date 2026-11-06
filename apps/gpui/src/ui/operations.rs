@@ -137,6 +137,10 @@ impl Shell {
         } else {
             self.aux_busy = false;
         }
+        let draft_save = matches!(reply, Reply::Persist) && self.composer_drafts.saving;
+        if draft_save {
+            self.composer_drafts.saving = false;
+        }
         let value = match result {
             Ok(v) => v,
             Err(error) => {
@@ -144,6 +148,10 @@ impl Shell {
                     self.settle_failure(&error, cx);
                 } else if primary {
                     self.state.record_error(error.clone());
+                }
+                if draft_save || (primary && self.state.has_unsaved_composer_drafts()) {
+                    self.composer_drafts.error = Some(error.clone());
+                    self.composer_drafts.send_after_save = None;
                 }
                 self.notice = Some(error);
                 cx.notify();
@@ -178,7 +186,7 @@ impl Shell {
                     Ok(())
                 })
             }
-            Reply::Load => self.state.load_snapshot(value).map(|_| {
+            Reply::Load => self.load_snapshot_preserving_composer(value, cx).map(|_| {
                 match self.state.preferences()["locale"].as_str() {
                     Some("zh-CN") => self.locale = Locale::Zh,
                     Some("en-US") => self.locale = Locale::En,
@@ -196,6 +204,11 @@ impl Shell {
                 }
             }),
             Reply::Persist => self.state.accept_persist(value).map(|next| {
+                if !self.state.has_unsaved_composer_drafts() && !self.composer_drafts.rejected_text
+                {
+                    self.composer_drafts.error = None;
+                }
+                self.align_inline_session(true, cx);
                 if let Some(next) = next {
                     if self.state.may_clear_sent_draft() {
                         self.clear_sent_inline_draft(cx);
@@ -259,7 +272,12 @@ impl Shell {
                 Ok(())
             }
         };
+        let succeeded = outcome.is_ok();
         if let Err(error) = outcome {
+            if persisting && self.state.has_unsaved_composer_drafts() {
+                self.composer_drafts.error = Some(error.clone());
+                self.composer_drafts.send_after_save = None;
+            }
             if persisting && !self.state.is_busy() {
                 self.send_after_create = false;
                 self.cancel_inline_send_intent();
@@ -269,6 +287,22 @@ impl Shell {
                 self.state.record_error(error.clone());
             }
             self.notice = Some(error);
+        }
+        if succeeded {
+            self.schedule_composer_draft_save(cx);
+        }
+        if draft_save {
+            if let Some((key, text)) = self.composer_drafts.send_after_save.take() {
+                if succeeded
+                    && key == self.inline_conversation_key()
+                    && text == self.composer.read(cx).text()
+                    && self.navigation_flow.pending.is_none()
+                    && !self.model_picker
+                {
+                    self.freeze_inline_send(text);
+                    self.send(cx);
+                }
+            }
         }
         self.sync_transcript(cx);
         self.enter_assistant_conversation(cx);

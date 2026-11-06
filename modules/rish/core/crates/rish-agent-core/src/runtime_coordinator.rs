@@ -155,7 +155,7 @@ pub fn session_proof(
     facts: &Value,
     expectations: &Value,
 ) -> Result<Value, StoreError> {
-    if get(session, "schema_version") != Some(&json!(9))
+    if !crate::session_schema::supported_session_version(get(session, "schema_version"))
         || !get(session, "conversations").is_some_and(Value::is_array)
         || !get(session, "session_events").is_some_and(Value::is_array)
     {
@@ -685,7 +685,9 @@ pub fn query_attempt_projection(
 /// to hold exactly this cleanup, described exactly as the request describes it.
 pub fn cleanup_outbox_proof(session: &Value, request: &Value) -> bool {
     let outbox = get(session, "agent_transcript_cleanup_outbox");
-    if get(session, "schema_version") != Some(&json!(9)) || !outbox.is_some_and(Value::is_array) {
+    if !crate::session_schema::supported_session_version(get(session, "schema_version"))
+        || !outbox.is_some_and(Value::is_array)
+    {
         return false;
     }
     let mut matched: Option<&Value> = None;
@@ -764,7 +766,9 @@ pub fn cancel_source_proof(session: &Value, request: &Value) -> bool {
         )
         && at(token, "task_id") == at(target, "task_id")
         && at(token, "attempt_id") == at(target, "attempt_id");
-    if get(session, "schema_version") != Some(&json!(9)) || !token_shape {
+    if !crate::session_schema::supported_session_version(get(session, "schema_version"))
+        || !token_shape
+    {
         return false;
     }
     let conversation_id = at(get(request, "controller_cas"), "conversation_id");
@@ -946,7 +950,7 @@ fn settle_request(op: &str, request: &Value) -> Result<(), StoreError> {
 pub fn interruption_proof(session: &Value, facts: &Value, request: &Value) -> bool {
     if get(facts, "session_generation") != get(request, "expected_session_generation")
         || get(facts, "session_sha256") != get(request, "expected_session_sha256")
-        || get(session, "schema_version") != Some(&json!(9))
+        || !crate::session_schema::supported_session_version(get(session, "schema_version"))
     {
         return false;
     }

@@ -11,6 +11,9 @@ mod agent_results;
 mod agent_types;
 mod assistant_chat;
 pub mod assistant_store;
+mod composer_drafts;
+#[cfg(test)]
+mod composer_drafts_tests;
 mod controller;
 mod custom_provider_catalog;
 mod provider_catalog;
@@ -46,6 +49,7 @@ pub(crate) struct PendingCommit {
     next: Option<RuntimeCommand>,
     finish_turn: bool,
     retryable: bool,
+    drafts: composer_drafts::DraftCommit,
 }
 #[derive(Clone, Debug)]
 pub(crate) struct Sending {
@@ -83,6 +87,7 @@ pub struct ShellState {
     pub(crate) assistant_conversation: Option<String>,
     pub(crate) assistant_profile: Option<assistant_store::AssistantProfile>,
     conflicted_answer: Option<ConflictedAnswer>,
+    composer_drafts: composer_drafts::DraftState,
 }
 impl Default for ShellState {
     fn default() -> Self {
@@ -114,6 +119,7 @@ impl ShellState {
             assistant_conversation: None,
             assistant_profile: None,
             conflicted_answer: None,
+            composer_drafts: Default::default(),
         }
     }
     /// Tests which need provider choices must opt in to an explicit fixture.
@@ -161,7 +167,7 @@ impl ShellState {
                     .ok_or("Missing native session bytes")?;
                 let s: Value =
                     serde_json::from_str(raw).map_err(|_| "Invalid native session JSON")?;
-                if s["schema_version"] != 9 {
+                if s["schema_version"] != 9 && s["schema_version"] != 10 {
                     return Err(
                         "This session requires migration by the existing mobile application".into(),
                     );
@@ -396,13 +402,23 @@ impl ShellState {
     }
     pub(crate) fn commit(
         &mut self,
+        candidate: Value,
+        next: Option<RuntimeCommand>,
+        finish_turn: bool,
+    ) -> Result<RuntimeCommand> {
+        self.commit_with_draft_effect(candidate, next, finish_turn, Default::default())
+    }
+    pub(crate) fn commit_with_draft_effect(
+        &mut self,
         mut candidate: Value,
         next: Option<RuntimeCommand>,
         finish_turn: bool,
+        draft_effect: composer_drafts::DraftEffect,
     ) -> Result<RuntimeCommand> {
         if self.pending.is_some() {
             return Err("A session commit is already pending".into());
         }
+        let drafts = self.merge_composer_drafts(&mut candidate, draft_effect)?;
         candidate["messages"] = candidate["active_conversation_id"]
             .as_str()
             .and_then(|id| {
@@ -432,6 +448,7 @@ impl ShellState {
             next,
             finish_turn,
             retryable: false,
+            drafts,
         });
         self.error = None;
         Ok(command)
@@ -454,6 +471,7 @@ impl ShellState {
                     return Err("Native commit proof does not match the pending session".into());
                 }
                 let p = self.pending.take().unwrap();
+                self.acknowledge_composer_drafts(&p.candidate, &p.drafts);
                 self.session = p.candidate;
                 self.authority =
                     json!({"schema_version":1,"kind":"present","snapshot":v["snapshot"]});

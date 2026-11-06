@@ -6,6 +6,9 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use wgpu::TextureFormat;
 
+#[path = "wgpu_backend_policy.rs"]
+pub(crate) mod backend_policy;
+
 pub struct WgpuContext {
     pub instance: wgpu::Instance,
     pub adapter: wgpu::Adapter,
@@ -236,9 +239,9 @@ impl WgpuContext {
     async fn create_device(
         adapter: &wgpu::Adapter,
     ) -> anyhow::Result<(wgpu::Device, wgpu::Queue, bool, TextureFormat)> {
-        let dual_source_blending = adapter
-            .features()
-            .contains(wgpu::Features::DUAL_SOURCE_BLENDING);
+        let backend = adapter.get_info().backend;
+        let dual_source_blending =
+            backend_policy::dual_source_blending(backend, adapter.features());
 
         let mut required_features = wgpu::Features::empty();
         if dual_source_blending {
@@ -251,20 +254,7 @@ impl WgpuContext {
         }
 
         let color_atlas_texture_format = Self::select_color_texture_format(adapter)?;
-        #[cfg(target_family = "wasm")]
-        let required_limits = if adapter.get_info().backend == wgpu::Backend::Gl {
-            wgpu::Limits::downlevel_webgl2_defaults()
-                .using_resolution(adapter.limits())
-                .using_alignment(adapter.limits())
-        } else {
-            wgpu::Limits::downlevel_defaults()
-                .using_resolution(adapter.limits())
-                .using_alignment(adapter.limits())
-        };
-        #[cfg(not(target_family = "wasm"))]
-        let required_limits = wgpu::Limits::downlevel_defaults()
-            .using_resolution(adapter.limits())
-            .using_alignment(adapter.limits());
+        let required_limits = backend_policy::required_limits(backend, adapter.limits());
 
         let (device, queue) = adapter
             .request_device(&wgpu::DeviceDescriptor {
@@ -294,7 +284,9 @@ impl WgpuContext {
         #[cfg(target_os = "android")]
         let flags = flags.difference(wgpu::InstanceFlags::DEBUG);
         wgpu::Instance::new(wgpu::InstanceDescriptor {
-            backends: wgpu::Backends::VULKAN | wgpu::Backends::GL,
+            // Apply WGPU_BACKEND before surface creation: Android Vulkan can
+            // acquire the native window even when its adapter is not selected.
+            backends: backend_policy::native_instance_backends(),
             flags,
             backend_options: wgpu::BackendOptions::default(),
             memory_budget_thresholds: wgpu::MemoryBudgetThresholds::default(),
@@ -508,7 +500,6 @@ impl WgpuContext {
         let required_usages = wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST;
         let bgra_features = adapter.get_texture_format_features(wgpu::TextureFormat::Bgra8Unorm);
         let rgba_features = adapter.get_texture_format_features(wgpu::TextureFormat::Rgba8Unorm);
-        #[cfg(target_family = "wasm")]
         if adapter.get_info().backend == wgpu::Backend::Gl
             && rgba_features.allowed_usages.contains(required_usages)
         {
@@ -547,7 +538,12 @@ impl WgpuContext {
     }
 
     pub fn uses_webgl_instance_data(&self) -> bool {
-        matches!(self.backend, WgpuBackend::Gl) && cfg!(target_family = "wasm")
+        let backend = match self.backend {
+            WgpuBackend::Gl => wgpu::Backend::Gl,
+            WgpuBackend::BrowserWebGpu => wgpu::Backend::BrowserWebGpu,
+            WgpuBackend::Native(backend) => backend,
+        };
+        backend_policy::uses_texture_instances(backend)
     }
 
     pub fn supports_dual_source_blending(&self) -> bool {

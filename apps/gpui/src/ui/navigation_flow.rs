@@ -52,7 +52,12 @@ impl Shell {
     }
     pub(super) fn navigation_block_reason(&self) -> Option<&'static str> {
         let copy = |en, zh| assistant_copy::copy(self.locale, en, zh);
-        if self.has_file_draft() {
+        if self.composer_drafts.rejected_text {
+            Some(copy(
+                "This draft is too large. Shorten or copy it before switching.",
+                "当前草稿过长，请先缩短或复制，再切换会话。",
+            ))
+        } else if self.has_file_draft() {
             Some(copy(
                 "Your file changes are kept. Save or discard them before switching.",
                 "文件修改已保留，请先保存或放弃修改，再切换。",
@@ -110,6 +115,7 @@ impl Shell {
         cx: &mut Context<Self>,
     ) -> bool {
         self.clear_navigation_feedback();
+        self.composer_drafts.send_after_save = None;
         if let Some(reason) = self.navigation_block_reason() {
             self.navigation_flow.pending = None;
             self.navigation_flow.feedback = Some(reason.into());

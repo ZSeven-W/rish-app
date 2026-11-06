@@ -1,4 +1,4 @@
-//! The schema-9 acceptance graph and the legacy (2..=8) root validator,
+//! The schema-9/10 acceptance graph and the legacy (2..=8) root validator,
 //! ported function for function from `SessionSnapshotStore.mm`. Every
 //! function mirrors the ObjC check order so the same input is refused at the
 //! same place; catalogue answers come from [`Env`].
@@ -2815,8 +2815,8 @@ impl Validator<'_> {
     // MARK: roots
 
     #[allow(clippy::too_many_lines)]
-    pub(super) fn schema9_root(&self, session: &Value) -> bool {
-        let keys = [
+    pub(super) fn session_root(&self, session: &Value) -> bool {
+        let mut keys = vec![
             "schema_version",
             "workspace_authority_outbox",
             "agent_transcript_cleanup_outbox",
@@ -2829,8 +2829,14 @@ impl Validator<'_> {
             "preferences",
         ];
         let f = |key: &str| get(session, key);
+        if exact_schema(f("schema_version"), 10) {
+            keys.push("composer_drafts");
+            if !f("composer_drafts").is_some_and(super::validate_composer_drafts) {
+                return false;
+            }
+        }
         if !exact_keys(session, &keys)
-            || !exact_schema(f("schema_version"), 9)
+            || !super::supported_session_version(f("schema_version"))
             || !is_array(f("workspace_authority_outbox"))
             || len(f("workspace_authority_outbox")) > MAX_OUTBOX
             || !is_array(f("agent_transcript_cleanup_outbox"))

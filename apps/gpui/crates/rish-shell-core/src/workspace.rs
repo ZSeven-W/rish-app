@@ -100,7 +100,18 @@ impl ShellState {
         model: &str,
         thinking: &str,
     ) -> Result<RuntimeCommand> {
-        self.create_conversation_with_title(id, now, model, thinking, None)
+        self.create_conversation_with_title(id, now, model, thinking, None, false)
+    }
+    /// Only the ordinary chat UI may adopt its unbound composer. Assistant
+    /// identity creation must not move the person's unrelated new-chat text.
+    pub fn create_conversation_from_draft(
+        &mut self,
+        id: &str,
+        now: &str,
+        model: &str,
+        thinking: &str,
+    ) -> Result<RuntimeCommand> {
+        self.create_conversation_with_title(id, now, model, thinking, None, true)
     }
     /// An assistant task already has a user-chosen name. Save it with the
     /// conversation's initial workspace CAS so the first contextual prompt
@@ -112,7 +123,7 @@ impl ShellState {
         model: &str,
         title: &str,
     ) -> Result<RuntimeCommand> {
-        self.create_conversation_with_title(id, now, model, "high", Some(title))
+        self.create_conversation_with_title(id, now, model, "high", Some(title), false)
     }
     fn create_conversation_with_title(
         &mut self,
@@ -121,6 +132,7 @@ impl ShellState {
         model: &str,
         thinking: &str,
         title: Option<&str>,
+        adopt_draft: bool,
     ) -> Result<RuntimeCommand> {
         self.ready()?;
         let binding = workspace_binding(
@@ -155,7 +167,14 @@ impl ShellState {
             "workspace_bootstrap_state":"none","agent_grants":[]
         }));
         candidate["active_conversation_id"] = json!(id);
-        self.commit(candidate, None, false)
+        let effect = if adopt_draft && self.active_conversation_id().is_none() {
+            crate::composer_drafts::DraftEffect::Adopt {
+                target: id.to_owned(),
+            }
+        } else {
+            Default::default()
+        };
+        self.commit_with_draft_effect(candidate, None, false, effect)
     }
 }
 

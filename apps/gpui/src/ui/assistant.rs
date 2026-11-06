@@ -57,7 +57,7 @@ impl Shell {
             if initial.owns_writer {
                 self.assistant_writer_lease = true;
                 if let Some(state) = &initial.state {
-                    self.state = state.clone();
+                    self.retain_composer_drafts(state.clone(), cx);
                     self.assistant_handoff_state = Some(state.clone());
                 }
             }
@@ -175,13 +175,16 @@ impl Shell {
                 if snapshot.owns_writer {
                     self.assistant_writer_lease = true;
                     if let Some(state) = &snapshot.state {
-                        self.state = state.clone();
-                        self.assistant_handoff_state = Some(state.clone());
-                        if self
+                        let answer_committed = self
                             .assistant_answer
                             .as_ref()
-                            .is_some_and(|answer| answer.is_committed(&snapshot))
-                        {
+                            .is_some_and(|answer| answer.is_committed(&snapshot));
+                        if answer_committed {
+                            self.acknowledge_actor_sent_draft();
+                        }
+                        self.retain_composer_drafts(state.clone(), cx);
+                        self.assistant_handoff_state = Some(state.clone());
+                        if answer_committed {
                             self.clear_sent_inline_draft(cx);
                             self.assistant_answer = None;
                         }
@@ -216,7 +219,7 @@ impl Shell {
                 self.try_assistant_handoff(cx);
             }
             RunnerEvent::Returned { state } => {
-                self.state = state;
+                self.retain_composer_drafts(state, cx);
                 self.bind_assistant_chat_snapshot();
                 self.assistant_writer_lease = false;
                 self.assistant_handoff_state = None;
@@ -258,6 +261,8 @@ impl Shell {
                 }
             }
         }
+        self.align_inline_session(true, cx);
+        self.schedule_composer_draft_save(cx);
         self.sync_transcript(cx);
         cx.notify();
     }
@@ -275,6 +280,8 @@ impl Shell {
             || self.conversation_workspace.intent.is_some()
             || !self.state.is_loaded()
             || self.state.is_busy()
+            || self.state.has_unsaved_composer_drafts()
+            || self.composer_drafts.rejected_text
             || self.native_form_active
             || self.has_file_draft()
             || !self.inline_allows_assistant_handoff()
@@ -352,7 +359,7 @@ impl Shell {
             .and_then(|runner| runner.snapshot().state)
             .or_else(|| self.assistant_handoff_state.clone())
         {
-            self.state = state;
+            self.retain_composer_drafts(state, cx);
             self.sync_transcript(cx);
         }
         cx.notify();

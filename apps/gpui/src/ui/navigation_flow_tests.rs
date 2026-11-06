@@ -198,6 +198,10 @@ fn queued_navigation_and_creating_keep_the_session_writer_out_of_due_task_handof
         let (handle, mut commands) =
             crate::assistant_runtime::RunnerHandle::test_client(RunnerSnapshot::default());
         f.update(|s, cx| {
+            // Isolate the navigation guards from the independent unsaved-draft
+            // writer barrier. A real CAS receipt preserves the fixture text.
+            let save = s.state.persist_composer_drafts().unwrap().unwrap();
+            test_fixture::persist(&mut s.state, save);
             s.assistant_runner = Some(handle);
             s.assistant.snapshot.foreground = true;
             s.assistant_handoff = Some("task-waiting-for-writer".into());
@@ -223,6 +227,29 @@ fn queued_navigation_and_creating_keep_the_session_writer_out_of_due_task_handof
             assert!(matches!(commands.try_recv(), Ok(crate::assistant_runtime::RunnerCommand::Grant { task_id, .. }) if task_id == "task-waiting-for-writer"));
         });
     }
+}
+
+#[test]
+fn unsaved_composer_draft_keeps_writer_until_its_native_receipt_arrives() {
+    let mut f = Fixture::new();
+    let (handle, mut commands) =
+        crate::assistant_runtime::RunnerHandle::test_client(RunnerSnapshot::default());
+    f.update(|s, cx| {
+        s.assistant_runner = Some(handle);
+        s.assistant.snapshot.foreground = true;
+        s.assistant_handoff = Some("task-waiting-for-draft".into());
+        s.try_assistant_handoff(cx);
+        assert!(!s.assistant_writer_lease);
+        assert!(commands.try_recv().is_err());
+        let save = s.state.persist_composer_drafts().unwrap().unwrap();
+        s.try_assistant_handoff(cx);
+        assert!(!s.assistant_writer_lease, "A dispatched save is not a receipt");
+        test_fixture::persist(&mut s.state, save);
+        s.try_assistant_handoff(cx);
+        assert!(s.assistant_writer_lease);
+        assert!(matches!(commands.try_recv(), Ok(crate::assistant_runtime::RunnerCommand::Grant { state, .. }) if state.saved_composer_draft(test_fixture::CHAT) == DRAFT));
+        assert_eq!(s.composer.read(cx).text(), DRAFT);
+    });
 }
 
 #[test]

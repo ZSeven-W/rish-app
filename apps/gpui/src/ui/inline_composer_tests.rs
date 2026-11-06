@@ -1,9 +1,9 @@
 use super::*;
 use gpui::{TestAppContext, px, size};
 use rish_shell_core::{RuntimeCommand, ShellState};
-const CHAT: &str = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
-const OTHER: &str = "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb";
-fn with_shell(test: impl FnOnce(&mut Shell, &mut Context<Shell>)) {
+pub(super) const CHAT: &str = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
+pub(super) const OTHER: &str = "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb";
+pub(super) fn with_shell(test: impl FnOnce(&mut Shell, &mut Context<Shell>)) {
     let mut cx = TestAppContext::single();
     let window = cx.open_window(size(px(390.), px(844.)), |_, cx| Shell::new(cx));
     window
@@ -21,7 +21,7 @@ fn with_shell(test: impl FnOnce(&mut Shell, &mut Context<Shell>)) {
         })
         .unwrap();
 }
-fn snapshot(shell: &Shell, revision: u64, text: &str) -> Value {
+pub(super) fn snapshot(shell: &Shell, revision: u64, text: &str) -> Value {
     json!({"session_id":shell.inline_composer.state.session_id().unwrap(),"status":"ready","revision":revision,"applied_text_revision":shell.inline_composer.state.text_revision(),"text":text,"composing":false,"focused":true,"keyboard_bottom":300.,"content_height":80.})
 }
 fn command_payload(shell: &Shell) -> Value {
@@ -41,11 +41,11 @@ fn command_payload(shell: &Shell) -> Value {
         )
         .unwrap()
 }
-fn commit(state: &mut ShellState, command: RuntimeCommand, generation: u64) {
+pub(super) fn commit(state: &mut ShellState, command: RuntimeCommand, generation: u64) {
     let raw = command.args[0]["candidate_json"].as_str().unwrap();
     state.accept_persist(json!({"status":"committed","snapshot":{"schema_version":1,"generation":generation,"session_sha256":rish_agent_core::session_schema::candidate_digest(raw.as_bytes()).unwrap()}})).unwrap();
 }
-fn install_chats(shell: &mut Shell) {
+pub(super) fn install_chats(shell: &mut Shell) {
     shell.state = ShellState::with_test_models();
     shell
         .state
@@ -69,7 +69,7 @@ fn action(shell: &Shell, kind: InlineAction) -> ActionRequest {
         conversation: shell.inline_conversation_key(),
     }
 }
-fn sent(shell: &Shell) -> SentDraft {
+pub(super) fn sent(shell: &Shell) -> SentDraft {
     SentDraft {
         session: shell.inline_composer.state.session_id().unwrap().into(),
         text_revision: shell.inline_composer.state.text_revision(),
@@ -318,11 +318,27 @@ fn old_session_closed_callback_cannot_disable_a_newer_live_editor() {
 #[test]
 fn first_conversation_adopts_live_unsaved_editor_without_losing_ime_or_uuid() {
     with_shell(|shell, cx| {
+        shell.state = ShellState::with_test_models();
+        shell
+            .state
+            .load_snapshot(json!({"schema_version":1,"status":"missing"}))
+            .unwrap();
+        shell.state.set_default_workspace(json!({"schema_version":2,"workspace_id":"845d980b-8acd-4710-a54c-7975b6839024","binding_revision":1,"display_name":"Default","status":"ok","capabilities":{"read":true,"write":true,"git":true}})).unwrap();
+        shell.align_inline_session(true, cx);
         let session = shell.inline_composer.state.session_id().unwrap().to_owned();
         let mut composing = snapshot(shell, 2, "创建中输入");
         composing["composing"] = json!(true);
         shell.apply_inline_snapshot(&composing, cx).unwrap();
-        install_chats(shell);
+        let command = shell
+            .state
+            .create_conversation_from_draft(
+                CHAT,
+                "2026-11-06T00:00:00.000Z",
+                "deepseek-v4-flash",
+                "high",
+            )
+            .unwrap();
+        commit(&mut shell.state, command, 1);
         shell.align_inline_session(false, cx);
         assert_eq!(
             shell.inline_composer.state.session_id(),

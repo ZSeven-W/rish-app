@@ -117,6 +117,16 @@ test('renderer provenance must match its locked package and retain the archive c
   edit(root, 'apps/gpui/vendor/gpui-pre-wgpu/UPSTREAM.toml', text => text.replace('version = "0.3.6"', 'version = "0.3.7"'));
   assert.ok(auditSource(root).some(error => error.includes('renderer provenance does not match')));
 });
+test('the local renderer policy must be shipped with its patch provenance', t => {
+  const root = fixture(t);
+  edit(root, 'apps/gpui/vendor/gpui-pre-wgpu/UPSTREAM.toml', text => text.replace(', "src/wgpu_renderer.rs"', ''));
+  assert.ok(auditSource(root).some(error => error.includes('renderer backend policy patch must be recorded')));
+  edit(root, 'apps/gpui/vendor/gpui-pre-wgpu/UPSTREAM.toml', text => text.replace(/^added_local_files.*\n/m, ''));
+  assert.ok(auditSource(root).some(error => error.includes('renderer backend policy patch must be recorded')));
+  const policy = 'apps/gpui/vendor/gpui-pre-wgpu/src/wgpu_backend_policy.rs';
+  fs.unlinkSync(path.join(root, policy));
+  assert.ok(auditSource(root).some(error => error.includes(`${policy}: required source file is missing`)));
+});
 test('malformed vendored Git provenance is rejected without crashing the audit', t => {
   const root = fixture(t);
   edit(root, 'apps/gpui/vendor/gpui-mobile/UPSTREAM.json', () => '{');

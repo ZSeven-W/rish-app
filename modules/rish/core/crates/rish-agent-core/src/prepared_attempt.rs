@@ -251,7 +251,7 @@ pub fn checkpoint_relation(request: &Value) -> bool {
 
 /// `DSHPreparedParseSessionJSON` + `DSHPreparedFindConversation`: the
 /// loaded session's conversation for the request. `Err(Corrupt)` when the
-/// text is not a schema-9 object in canonical form; `Ok(None)` when the
+/// text is not a supported session object in canonical form; `Ok(None)` when the
 /// conversation is absent.
 pub fn session_conversation(
     session_json: &[u8],
@@ -261,7 +261,9 @@ pub fn session_conversation(
         return Err(StoreError::Corrupt);
     }
     let parsed: Value = serde_json::from_slice(session_json).map_err(|_| StoreError::Corrupt)?;
-    if !parsed.is_object() || get(&parsed, "schema_version") != Some(&json!(9)) {
+    if !parsed.is_object()
+        || !crate::session_schema::supported_session_version(get(&parsed, "schema_version"))
+    {
         return Err(StoreError::Corrupt);
     }
     let canonical = canonical_json(&parsed).map_err(|_| StoreError::Corrupt)?;

@@ -233,6 +233,24 @@ Android platform services and native dependencies live under
 Guest or official CLI payloads. Availability is determined by native
 capabilities, not by the presence of a tab or button.
 
+For the isolated API 33 phone emulator, the tested GLES route uses emulator
+`-gpu host -feature -Vulkan` and a process-local `WGPU_BACKEND=gl`. Disabling
+Vulkan adapters alone is insufficient: creating a Vulkan surface can still
+claim the native window before GLES configures it. The default app backend
+selection remains unchanged; SwiftShader Vulkan popup corruption is still open.
+After building/installing the app and test APK on a fresh portrait phone in
+light mode, run the pixel and background/resume regression with:
+
+```sh
+adb shell am instrument -w -r -e backend gl \
+  -e class tech.zseven.rish.gpui.ModelPickerRendererTest \
+  tech.zseven.rish.gpui.test/androidx.test.runner.AndroidJUnitRunner
+```
+
+The test sets the override before creating the Activity and restores the prior
+environment afterward. Omitting `-e backend gl` exercises the default backend.
+It never sends a message; screenshots are saved in the target app's cache.
+
 ## Input and persistence
 
 On phones, `ShellInput.inlineSync` keeps UIKit/Android text editing inside the
@@ -244,10 +262,27 @@ single-line form with explicit theme, localized hints and validation before
 submission. Cancellation leaves the current state unchanged.
 The GPUI macOS input uses UTF-16 ranges and grapheme-aware editing.
 
-Session state remains schema 9 JSON validated by the existing Rust agent core.
+Session state uses schema 9/10 JSON validated by the existing Rust agent core.
 Writes use native generation/digest compare-and-swap and operation IDs.
 Conflicts and uncertain writes are resolved before subsequent mutations or
 provider requests; there is no second local history store in the shell.
+Loading schema 9 preserves its bytes and digest. The first saved composer draft
+upgrades to schema 10 through the same CAS; schema 10 requires a bounded
+`composer_drafts` map. Older binaries cannot reopen upgraded snapshots, and
+unknown versions are refused without replacing stored data. Native core archives
+must be rebuilt with the matching reader; see the
+[session contract](../../docs/development.md#session-and-native-bridge-rules).
+Ordinary chat and personal-assistant input drafts share this snapshot. Native
+input observations are coalesced into the current writer; the UI shows waiting,
+saving or failed status until the matching receipt arrives. While a task owns
+the writer or input is composing, the latest text can still be pending in memory;
+keep the app open until that status clears. Confirmed user-turn and question
+answer checkpoints consume only their corresponding draft. Group drafts remain
+process-only because group submissions belong to BotStore; the composer labels
+that limit explicitly. Model-editor changes and conversation switching retain
+ordinary drafts independently. A conflicting saved draft requires an explicit
+choice; refused oversized input is kept and cannot be silently left behind.
+
 The development bundle ID does not migrate data or credentials from older
 installations. Removing the old source does not delete installed app data.
 

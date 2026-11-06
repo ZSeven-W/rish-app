@@ -1,3 +1,4 @@
+use crate::wgpu_context::backend_policy::supported_present_mode;
 use crate::{CompositorGpuHint, WgpuAtlas, WgpuContext};
 use anyhow::{Context as _, Result};
 use bytemuck::{Pod, Zeroable};
@@ -416,10 +417,10 @@ impl WgpuRenderer {
             format: surface_format,
             width: clamped_width.max(1),
             height: clamped_height.max(1),
-            present_mode: config
-                .preferred_present_mode
-                .filter(|mode| surface_caps.present_modes.contains(mode))
-                .unwrap_or(wgpu::PresentMode::Fifo),
+            present_mode: supported_present_mode(
+                config.preferred_present_mode,
+                &surface_caps.present_modes,
+            ),
             desired_maximum_frame_latency: 2,
             alpha_mode,
             view_formats: vec![],
@@ -2005,6 +2006,22 @@ impl WgpuRenderer {
 
         let surface = create_surface(instance, window_handle.as_raw())?;
 
+        // Android supplies Mailbox again on resume, but a GLES surface may
+        // support only Fifo. Recheck the new surface, just as on initial setup.
+        let surface_caps = {
+            let context = self
+                .context
+                .as_ref()
+                .context("Missing native GPU context")?;
+            let context = context.borrow();
+            let context = context.as_ref().context("Missing native GPU adapter")?;
+            surface.get_capabilities(&context.adapter)
+        };
+        anyhow::ensure!(
+            !surface_caps.present_modes.is_empty(),
+            "Replacement surface reports no supported presentation modes"
+        );
+
         let width = (config.size.width.0 as u32).max(1);
         let height = (config.size.height.0 as u32).max(1);
 
@@ -2017,9 +2034,12 @@ impl WgpuRenderer {
         self.surface_config.width = width;
         self.surface_config.height = height;
         self.surface_config.alpha_mode = alpha_mode;
-        if let Some(mode) = config.preferred_present_mode {
-            self.surface_config.present_mode = mode;
-        }
+        self.surface_config.present_mode = supported_present_mode(
+            config
+                .preferred_present_mode
+                .or(Some(self.surface_config.present_mode)),
+            &surface_caps.present_modes,
+        );
 
         {
             let res = self

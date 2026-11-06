@@ -20,6 +20,9 @@ export const requiredFiles = [
   'apps/gpui/vendor/gpui-pre-wgpu/UPSTREAM.toml',
   'apps/gpui/vendor/gpui-pre-wgpu/RISH-PATCHES.txt',
   'apps/gpui/vendor/gpui-pre-wgpu/LICENSE-APACHE',
+  'apps/gpui/vendor/gpui-pre-wgpu/src/wgpu_context.rs',
+  'apps/gpui/vendor/gpui-pre-wgpu/src/wgpu_renderer.rs',
+  'apps/gpui/vendor/gpui-pre-wgpu/src/wgpu_backend_policy.rs',
   'apps/gpui/src/main.rs',
   'apps/gpui/src/lib.rs',
   'apps/gpui/ios/project.yml',
@@ -250,6 +253,12 @@ export function auditSource(sourceRoot) {
         !/^[a-f0-9]{64}$/.test(field(renderer, 'archive_sha256') || '') ||
         !/^[a-f0-9]{40}$/.test(field(renderer, 'zed_revision') || '')) {
       errors.push('apps/gpui/vendor/gpui-pre-wgpu/UPSTREAM.toml: renderer provenance does not match the locked path patch');
+    }
+    const modified = renderer.match(/^modified_upstream_files\s*=\s*\[([^\]]*)\]/m)?.[1] || '';
+    const added = renderer.match(/^added_local_files\s*=\s*\[([^\]]*)\]/m)?.[1] || '';
+    if (!modified.includes('"src/wgpu_context.rs"') || !modified.includes('"src/wgpu_renderer.rs"') ||
+        !added.includes('"src/wgpu_backend_policy.rs"')) {
+      errors.push('apps/gpui/vendor/gpui-pre-wgpu/UPSTREAM.toml: renderer backend policy patch must be recorded');
     }
   }
   return errors;

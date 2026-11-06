@@ -278,7 +278,7 @@ impl Shell {
             self.stop_agent_task(cx);
         } else if let Some(command) = self.state.cancel_command() {
             self.run(Reply::Cancel, command, cx);
-        } else if !self.state.is_busy() {
+        } else if !self.state.is_busy() || self.composer_drafts.saving {
             self.send(cx);
         }
     }

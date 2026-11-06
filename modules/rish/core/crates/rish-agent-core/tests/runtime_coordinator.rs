@@ -322,6 +322,12 @@ fn a_recorded_interruption_proof_answers_as_it_did() {
         // the interruption.
         if golden.fact(step, "started").is_some() {
             assert!(interruption_proof(&session, &facts, &request));
+            let mut with_drafts = session.clone();
+            with_drafts["schema_version"] = json!(10);
+            with_drafts["composer_drafts"] = json!({"new-draft":"unsent"});
+            assert!(interruption_proof(&with_drafts, &facts, &request));
+            with_drafts["schema_version"] = json!(11);
+            assert!(!interruption_proof(&with_drafts, &facts, &request));
             checked += 1;
         }
     }

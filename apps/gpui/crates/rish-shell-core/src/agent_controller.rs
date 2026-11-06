@@ -16,11 +16,8 @@ impl ShellState {
             return Err("Message exceeds the Agent input limit".into());
         }
         self.prepare_send(body, ids, now)?;
-        let mut candidate = self
-            .pending
-            .take()
-            .ok_or("Missing user checkpoint")?
-            .candidate;
+        let pending = self.pending.take().ok_or("Missing user checkpoint")?;
+        let mut candidate = pending.candidate;
         let sending = self.sending.take().ok_or("Missing prepared turn")?;
         let c = conversation_mut(&mut candidate, &sending.conversation_id)?;
         let visible: Vec<Value> = rows(c, "messages")
@@ -67,7 +64,12 @@ impl ShellState {
             preview_ended: false,
             preview_incomplete: false,
         });
-        match self.commit(candidate, Some(agent_marker()), false) {
+        match self.commit_with_draft_effect(
+            candidate,
+            Some(agent_marker()),
+            false,
+            pending.drafts.effect,
+        ) {
             Ok(c) => Ok(c),
             Err(e) => {
                 self.agent_run = None;
@@ -174,6 +176,23 @@ impl ShellState {
         now: &str,
     ) -> Result<Option<RuntimeCommand>> {
         let run = self.agent_run.as_ref().ok_or("No Agent task")?.clone();
+        let draft_effect = journal["call_index"]
+            .as_u64()
+            .and_then(|index| journal["batch"].as_array()?.get(index as usize))
+            .filter(|call| {
+                run.answer_draft_pending
+                    && call["name"] == "ask_user"
+                    && call["receipt"]["outcome"] == "ok"
+                    && run.decision["user_response"]["status"] == "answered"
+            })
+            .and_then(|_| run.decision["user_response"]["answer"].as_str())
+            .map(
+                |answer| crate::composer_drafts::DraftEffect::ConsumeAnswer {
+                    key: run.conversation_id.clone(),
+                    text: answer.to_owned(),
+                },
+            )
+            .unwrap_or_default();
         let mut candidate = self.session.clone();
         let c = conversation_mut(&mut candidate, &run.conversation_id)?;
         let a = c["attempts"]
@@ -200,7 +219,8 @@ impl ShellState {
         a["agent"] = journal;
         c["updated_at"] = json!(now);
         append_events(&mut candidate, events);
-        let command = self.commit(candidate, Some(agent_marker()), false)?;
+        let command =
+            self.commit_with_draft_effect(candidate, Some(agent_marker()), false, draft_effect)?;
         self.agent_run.as_mut().unwrap().action = action.into();
         Ok(Some(command))
     }

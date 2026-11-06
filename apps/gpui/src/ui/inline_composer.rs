@@ -210,7 +210,7 @@ impl Shell {
             });
         });
     }
-    fn inline_conversation_key(&self) -> String {
+    pub(super) fn inline_conversation_key(&self) -> String {
         if self.assistant_group_visible() {
             return format!(
                 "assistant-group-{}",
@@ -236,7 +236,7 @@ impl Shell {
     pub(super) fn test_align_inline_session(&mut self, force: bool, cx: &mut Context<Self>) {
         self.align_inline_session(force, cx);
     }
-    fn align_inline_session(&mut self, force: bool, cx: &mut Context<Self>) {
+    pub(super) fn align_inline_session(&mut self, force: bool, cx: &mut Context<Self>) {
         let key = self.inline_conversation_key();
         let personal = self.assistant_group_visible()
             || self.state.assistant_conversation_id() == Some(key.as_str());
@@ -246,9 +246,39 @@ impl Shell {
             .current_conversation_key()
             .map(str::to_owned);
         let entity_text = self.composer.read(cx).text();
-        if current.as_deref() == Some("new-draft")
+        let from_snapshot = self.composer_drafts.restoring_snapshot;
+        let restoring = self.state.is_loaded() && (!self.composer_drafts.hydrated || from_snapshot);
+        if restoring {
+            // Initial empty transport state is not an intentional deletion.
+            // Input typed while loading stays attached to its original key.
+            if !from_snapshot && !entity_text.is_empty() {
+                let old = current.as_deref().unwrap_or(&key);
+                self.record_composer_draft(old, &entity_text, cx);
+            }
+            self.composer_drafts.hydrated = true;
+            self.composer_drafts.restoring_snapshot = false;
+        }
+        if self.composer_drafts.rejected_text && current.as_deref() != Some(&key) {
+            // A load may discover another active chat before an oversized
+            // early input has a durable home. Keep its original editor/key.
+            if current.is_none() {
+                self.inline_composer.state.begin_session(&key, &entity_text);
+            }
+            self.inline_composer
+                .state
+                .observe_external_text(&entity_text);
+            self.remember_inline_draft(cx);
+            if self.composer_drafts.rejected_text {
+                return;
+            }
+        }
+        if !restoring
+            && current.as_deref() == Some("new-draft")
             && key != "new-draft"
             && !personal
+            && (!self.state.is_loaded()
+                || (self.state.composer_draft("new-draft").is_empty()
+                    && self.state.composer_draft(&key) == entity_text))
             && !self.inline_composer.state.is_closed()
         {
             self.inline_composer
@@ -256,35 +286,75 @@ impl Shell {
                 .observe_external_text(&entity_text);
             if self.inline_composer.state.adopt_initial_conversation(&key) {
                 self.inline_composer.drafts.remove("new-draft");
-                self.remember_inline_draft();
+                self.remember_inline_draft(cx);
                 return;
             }
         }
         if self.inline_composer.state.is_closed() && !self.inline_composer.visible && !force {
             return;
         }
-        if current.as_deref() == Some(&key) && !self.inline_composer.state.is_closed() {
+        let awaiting_clear = self.inline_composer.sent.as_ref().is_some_and(|sent| {
+            Some(sent.session.as_str()) == self.inline_composer.state.session_id()
+                && sent.text_revision == self.inline_composer.state.text_revision()
+                && sent.text == entity_text
+        });
+        if (!restoring
+            || entity_text == self.state.composer_draft(&key)
+            || awaiting_clear
+            || self.composer_drafts.rejected_text)
+            && current.as_deref() == Some(&key)
+            && !self.inline_composer.state.is_closed()
+        {
             self.inline_composer
                 .state
                 .observe_external_text(&entity_text);
-            self.remember_inline_draft();
+            self.remember_inline_draft(cx);
+            return;
+        }
+        if restoring && current.as_deref() == Some(&key) && !self.inline_composer.state.is_closed()
+        {
+            let text = if key.starts_with("assistant-group-") {
+                entity_text
+            } else {
+                self.state.composer_draft(&key).to_owned()
+            };
+            self.inline_composer.state.observe_external_text(&text);
+            self.composer
+                .update(cx, |input, cx| input.set_text(text, cx));
+            self.remember_inline_draft(cx);
             return;
         }
         let mut text = entity_text;
+        if current.as_deref() == Some(&key)
+            && self.inline_composer.state.is_closed()
+            && awaiting_clear
+            && self.state.composer_draft(&key).is_empty()
+        {
+            // A terminal editor may be replaced after its sent text was
+            // consumed durably, even if the earlier clear reply was lost.
+            text.clear();
+        }
         if let Some(old) = current.as_ref() {
-            self.inline_composer.state.observe_external_text(&text);
-            self.remember_inline_draft();
-            if old != &key && (old != "new-draft" || personal) {
-                text = self
-                    .inline_composer
-                    .drafts
-                    .get(&key)
-                    .map(|d| d.text.clone())
-                    .unwrap_or_default();
+            if !restoring {
+                self.inline_composer.state.observe_external_text(&text);
+                self.remember_inline_draft(cx);
+            }
+            if restoring || old != &key {
+                text = if self.state.is_loaded() && !key.starts_with("assistant-group-") {
+                    self.state.composer_draft(&key).to_owned()
+                } else {
+                    self.inline_composer
+                        .drafts
+                        .get(&key)
+                        .map(|d| d.text.clone())
+                        .unwrap_or_default()
+                };
             }
             if let Some(session) = self.inline_composer.state.session_id() {
                 self.inline_composer.closing.push(session.to_owned());
             }
+        } else if restoring && !key.starts_with("assistant-group-") {
+            text = self.state.composer_draft(&key).to_owned();
         }
         self.inline_composer.state.begin_session(&key, &text);
         self.inline_composer.wait_cursor = 0;
@@ -302,13 +372,26 @@ impl Shell {
             self.composer
                 .update(cx, |input, cx| input.set_text(text, cx));
         }
-        self.remember_inline_draft();
+        self.remember_inline_draft(cx);
     }
-    fn remember_inline_draft(&mut self) {
+    fn remember_inline_draft(&mut self, cx: &mut Context<Self>) {
         let state = &self.inline_composer.state;
         if let (Some(key), Some(session)) = (state.current_conversation_key(), state.session_id()) {
+            let key = key.to_owned();
+            let text = state.text().to_owned();
+            let awaiting_clear = self.inline_composer.sent.as_ref().is_some_and(|sent| {
+                sent.session == session
+                    && sent.text_revision == state.text_revision()
+                    && sent.text == text
+            });
+            if self.inline_composer.sent.as_ref().is_some_and(|sent| {
+                sent.session == session
+                    && (sent.text_revision != state.text_revision() || sent.text != text)
+            }) {
+                self.inline_composer.sent = None;
+            }
             self.inline_composer.drafts.insert(
-                key.into(),
+                key.clone(),
                 Draft {
                     text: state.text().into(),
                     session: session.into(),
@@ -316,13 +399,17 @@ impl Shell {
                     native_revision: state.native_revision(),
                 },
             );
+            if !awaiting_clear {
+                self.record_composer_draft(&key, &text, cx);
+            }
+            self.schedule_composer_draft_save(cx);
         }
     }
     fn update_inline_composer(&mut self, cx: &mut Context<Self>) {
+        self.align_inline_session(false, cx);
         if !self.runtime.is_native() {
             return;
         }
-        self.align_inline_session(false, cx);
         let geometry = InputGeometry::new(
             self.inline_composer.rect,
             self.inline_composer.viewport,
@@ -357,9 +444,10 @@ impl Shell {
                         if this.inline_composer.confirm_closed(&snapshot) {
                             cx.notify();
                         }
-                        this.remember_closed_inline(snapshot);
+                        this.remember_closed_inline(snapshot, cx);
                     }
                     this.start_inline_action(cx);
+                    this.schedule_composer_draft_save(cx);
                 });
             })
             .detach();
@@ -507,18 +595,6 @@ impl Shell {
             self.start_inline_action(cx);
         }
     }
-    fn remember_closed_inline(&mut self, snapshot: Snapshot) {
-        for draft in self.inline_composer.drafts.values_mut() {
-            if draft.session == snapshot.session_id
-                && draft.text_revision == snapshot.applied_text_revision
-                && snapshot.revision >= draft.native_revision
-            {
-                draft.text = snapshot.text.clone();
-                draft.native_revision = snapshot.revision;
-                break;
-            }
-        }
-    }
     fn apply_inline_snapshot(
         &mut self,
         value: &Value,
@@ -529,11 +605,11 @@ impl Shell {
             != Some(self.inline_conversation_key().as_str())
         {
             self.align_inline_session(false, cx);
-            self.remember_closed_inline(snapshot);
+            self.remember_closed_inline(snapshot, cx);
             return Ok(SnapshotAcceptance::StaleSession);
         }
         if self.inline_composer.state.is_closed() {
-            self.remember_closed_inline(snapshot);
+            self.remember_closed_inline(snapshot, cx);
             return Ok(SnapshotAcceptance::SessionClosed);
         }
         self.inline_composer
@@ -560,12 +636,12 @@ impl Shell {
                 self.composer
                     .update(cx, |input, cx| input.set_text(text, cx));
             }
-            self.remember_inline_draft();
+            self.remember_inline_draft(cx);
             if outcome != SnapshotAcceptance::Unchanged {
                 cx.notify();
             }
         } else if outcome == SnapshotAcceptance::StaleSession {
-            self.remember_closed_inline(snapshot);
+            self.remember_closed_inline(snapshot, cx);
         }
         Ok(outcome)
     }
@@ -574,6 +650,9 @@ impl Shell {
             .queued_send
             .clone()
             .unwrap_or_else(|| self.composer.read(cx).text())
+    }
+    pub(super) fn freeze_inline_send(&mut self, text: String) {
+        self.inline_composer.queued_send = Some(text);
     }
     pub(super) fn cancel_inline_send_intent(&mut self) {
         self.inline_composer.queued_send = None;
@@ -591,6 +670,8 @@ impl Shell {
     }
     pub(super) fn clear_sent_inline_draft(&mut self, cx: &mut Context<Self>) {
         if !self.runtime.is_native() {
+            self.inline_composer.state.observe_external_text("");
+            self.remember_inline_draft(cx);
             self.composer
                 .update(cx, |input, cx| input.set_text(String::new(), cx));
             return;
@@ -629,7 +710,6 @@ impl Shell {
         cx: &mut Context<Self>,
     ) {
         self.inline_composer.clear_inflight = false;
-        self.inline_composer.sent = None;
         self.inline_composer
             .state
             .observe_external_text(&self.composer.read(cx).text());
@@ -657,6 +737,7 @@ impl Shell {
             cleared,
         );
         if outcome.is_accepted() {
+            self.inline_composer.sent = None;
             self.inline_composer.wait_cursor =
                 self.inline_composer.wait_cursor.max(snapshot.revision);
             let text = self.inline_composer.state.text().to_owned();
@@ -664,7 +745,7 @@ impl Shell {
                 self.composer
                     .update(cx, |input, cx| input.set_text(text, cx));
             }
-            self.remember_inline_draft();
+            self.remember_inline_draft(cx);
             cx.notify();
         }
         self.update_inline_composer(cx);
@@ -703,3 +784,7 @@ pub(super) fn native_form_reply(reply: &Reply) -> bool {
 #[cfg(all(test, not(any(target_os = "ios", target_os = "android"))))]
 #[path = "inline_composer_tests.rs"]
 mod tests;
+
+#[cfg(all(test, not(any(target_os = "ios", target_os = "android"))))]
+#[path = "composer_drafts_tests.rs"]
+mod draft_tests;

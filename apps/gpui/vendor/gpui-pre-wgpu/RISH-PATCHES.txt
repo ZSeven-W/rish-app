@@ -10,11 +10,22 @@ metadata. Its Cargo.lock is preserved as upstream package content; the
 application resolves dependencies through apps/gpui/mobile/Cargo.lock.
 
 Change
-Only src/wgpu_context.rs is modified. In the native instance constructor,
+Only src/wgpu_context.rs and src/wgpu_renderer.rs are modified from the upstream
+snapshot. The local
+src/wgpu_backend_policy.rs module centralizes and tests backend policy.
+In the native instance constructor,
 Android removes InstanceFlags::DEBUG from the default flags. VALIDATION,
 VALIDATION_INDIRECT_CALL and all other default flags are unchanged. Other
 platforms keep the original default flags. The mobile workspace selects this
 copy with its crates.io path patch; no global Cargo cache is modified.
+
+Both browser WebGL and native OpenGL ES use downlevel_webgl2_defaults limits
+and the existing texture-based instance transport. Native(Gl) no longer uses
+storage-buffer shaders merely because the target is not wasm. GL does not
+request dual-source blending, which this transport does not use, and prefers
+RGBA atlas textures when supported, as the browser GL path already did.
+Vulkan, Metal, DX12 and browser WebGPU keep their existing downlevel limits
+and storage transport. No shader algorithms or adapter priority are changed.
 
 Reason
 wgpu-hal 29.0.4 uses DEBUG to request Naga SPIR-V debug records whose OpSource
@@ -27,8 +38,64 @@ validation, changing rendering shaders, or bypassing lifecycle acknowledgments.
 
 Validation boundary
 The package checksum, copied files, license, Android-only flag difference and
-source formatting have been checked. A new Android renderer build and the two
-real Activity lifecycle tests remain required. This compatibility patch alone
-is not proof that the observed ANR is fixed. If pipeline creation still blocks
-the event loop, renderer initialization must be addressed separately while
-preserving normal NativeActivity lifecycle handling.
+source formatting have been checked. Emulator acceptance for the added GLES
+path is recorded below. This compatibility patch does not establish that the
+earlier Vulkan ANR or the API 33 SwiftShader Vulkan corruption is fixed.
+
+Native GLES compatibility
+On the Android API 33 GLES emulator, the GL adapter reports no compute support
+(max_compute_workgroups_per_dimension = 0). The old native path requested
+downlevel_defaults (65535), so device creation failed before the first frame.
+The same adapter cannot use the storage-buffer instance path. Limits and
+transport must be selected together by actual backend, not compilation target.
+
+The backend-policy unit tests cover an adapter without compute/storage buffers,
+adapter resolution/alignment, unchanged non-GL policy, and dual-source feature
+selection. Run them against the same wgpu-types 29.0.4 version as the mobile
+lockfile; they do not require a GPU. Actual GLES rendering and input/lifecycle
+checks still require an APK running on a device or emulator. This fallback does
+not establish that artifacts observed with the Vulkan renderer are fixed.
+
+Explicit backend selection
+The native instance now honors wgpu's standard WGPU_BACKEND override, using
+Backends::with_env before creating any surface. With no override it still
+enables Vulkan and GL and retains the existing adapter priority. An explicit
+WGPU_BACKEND=gl creates only the GL surface. This is needed on Android because
+creating a Vulkan surface can acquire the native window before GL configures
+its EGL surface; filtering Vulkan adapters afterward does not release that
+connection. The override is opt-in and process-scoped, not a device-wide
+emulator configuration or an automatic fallback after a renderer failure.
+
+The backend policy test exercises the actual wgpu environment parser in child
+processes (unset, gl, vulkan), without mutating the parallel test runner's
+environment. Pixel and lifecycle acceptance remains a device/emulator check.
+
+Surface replacement on resume
+Android supplies a preferred Mailbox presentation mode both at startup and
+after recreating its native window. Initial renderer setup already checked
+surface capabilities and chose Fifo on a Fifo-only GLES surface, but
+replace_surface copied Mailbox unconditionally. Resume then failed surface
+configuration and attempted to acquire a texture from an unconfigured surface.
+
+Initial setup and replacement now share a supported-present-mode policy.
+Replacement queries the new surface with the existing context's adapter and
+uses the preferred mode only if supported; otherwise it selects Fifo. Without
+a new preference, the previous mode is retained only when the new surface
+supports it. Supported Mailbox configurations on other backends are preserved.
+Pure policy tests cover the Fifo-only startup/resume case and a change in
+surface capabilities. Actual background/resume and pixel verification must
+still be run on the resulting APK; this policy test is not lifecycle evidence.
+
+2026-11-06 emulator evidence
+The new ModelPickerRendererTest injects a real tap and checks that an empty
+model panel is opaque in three captured frames, including after an Activity
+CREATED -> RESUMED transition. On Pixel XL API 33 / arm64 with host GLES and
+process-local WGPU_BACKEND=gl it passes after this patch; the resumed screenshot
+was also inspected. Before the present-mode fix it failed after resume with
+Mailbox unsupported on a Fifo-only surface. Before the GL path fixes, creation
+failed on compute limits and then on the native-window connection.
+
+The same popup test fails on the emulator's SwiftShader Vulkan path. This
+remains a separate, unresolved rendering defect; no automatic backend switch
+or physical-device compatibility claim is made. Run the test with the explicit
+backend argument described in apps/gpui/README.md.

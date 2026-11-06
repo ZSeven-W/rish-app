@@ -2,6 +2,88 @@
 use super::*;
 
 impl Shell {
+    pub(super) fn remember_closed_inline(&mut self, snapshot: Snapshot, cx: &mut Context<Self>) {
+        let mut changed = None;
+        for (key, draft) in &mut self.inline_composer.drafts {
+            if draft.session == snapshot.session_id
+                && draft.text_revision == snapshot.applied_text_revision
+                && snapshot.revision >= draft.native_revision
+            {
+                draft.text = snapshot.text.clone();
+                draft.native_revision = snapshot.revision;
+                changed = Some((key.clone(), draft.text.clone()));
+                break;
+            }
+        }
+        if let Some((key, text)) = changed {
+            let awaiting_clear = self.inline_composer.sent.as_ref().is_some_and(|sent| {
+                sent.session == snapshot.session_id
+                    && sent.text_revision == snapshot.applied_text_revision
+                    && sent.text == text
+            });
+            if !awaiting_clear {
+                self.record_composer_draft(&key, &text, cx);
+            }
+        }
+    }
+
+    pub(in crate::ui) fn retain_composer_drafts(
+        &mut self,
+        mut state: rish_shell_core::ShellState,
+        cx: &mut Context<Self>,
+    ) {
+        // TextInput notifications may be queued behind the actor snapshot.
+        // Capture the live entity before replacing the old authority; only an
+        // established transport key, not the incoming actor, scopes that edit.
+        let text = self.composer.read(cx).text();
+        if let Some(key) = self
+            .inline_composer
+            .state
+            .current_conversation_key()
+            .map(str::to_owned)
+        {
+            if self.inline_composer.state.is_closed() && self.inline_composer.state.text() != text {
+                // A prompt tile may replace TextInput after native closed but
+                // before its observer runs. Closed state rejects replacements;
+                // retire that old receipt slot so late close replies cannot
+                // overwrite this explicit preset.
+                self.inline_composer.drafts.remove(&key);
+                self.record_composer_draft(&key, &text, cx);
+            } else {
+                self.inline_composer.state.observe_external_text(&text);
+                self.remember_inline_draft(cx);
+            }
+        } else if !text.is_empty() {
+            let key = self
+                .state
+                .active_conversation_id()
+                .or_else(|| state.active_conversation_id())
+                .unwrap_or("new-draft")
+                .to_owned();
+            self.record_composer_draft(&key, &text, cx);
+        }
+        state.retain_composer_drafts_from(&self.state);
+        self.state = state;
+        self.composer_drafts.restoring_snapshot = true;
+    }
+
+    pub(in crate::ui) fn acknowledge_actor_sent_draft(&mut self) {
+        let Some(sent) = self.inline_composer.sent.as_ref() else {
+            return;
+        };
+        let key = self.inline_composer.drafts.iter().find_map(|(key, draft)| {
+            (draft.session == sent.session
+                && draft.text_revision == sent.text_revision
+                && draft.text == sent.text)
+                .then_some(key.clone())
+        });
+        if let Some(key) = key {
+            if self.state.composer_draft(&key) == sent.text {
+                let _ = self.state.stage_composer_draft(&key, "");
+            }
+        }
+    }
+
     pub(in crate::ui) fn preflight_inline_action(
         &mut self,
         action: InlineAction,

@@ -85,7 +85,15 @@ impl ShellState {
             "completeV2",
             vec![json!(request.to_string())],
         );
-        let command = self.commit(next, Some(completion), false)?;
+        let command = self.commit_with_draft_effect(
+            next,
+            Some(completion),
+            false,
+            crate::composer_drafts::DraftEffect::Consume {
+                key: conversation_id.clone(),
+                text: body.to_owned(),
+            },
+        )?;
         self.sending = Some(Sending {
             conversation_id,
             ids: ids.clone(),

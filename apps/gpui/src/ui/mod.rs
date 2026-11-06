@@ -36,6 +36,7 @@ mod assistant_view;
 mod assistant_view_tests;
 mod browser_requests;
 mod composer;
+mod composer_drafts;
 mod conversation_titles;
 mod conversation_workbench;
 #[cfg(all(test, not(any(target_os = "ios", target_os = "android"))))]
@@ -215,6 +216,7 @@ struct Shell {
     conversation_workspace: conversation_workspace::ConversationWorkspace,
     composer: Entity<TextInput>,
     inline_composer: inline_composer::InlineComposer,
+    composer_drafts: composer_drafts::ComposerDrafts,
     native_form_active: bool,
     title_input: Entity<TextInput>,
     transcript: Entity<Transcript>,
@@ -254,6 +256,7 @@ impl Shell {
         let composer = cx.new(|cx| TextInput::new(locale.text(Text::Composer), cx));
         let title_input = cx.new(|cx| TextInput::new(locale.text(Text::Title), cx));
         let submitted = cx.subscribe(&composer, |this, _, _: &Submitted, cx| this.send(cx));
+        let draft_changed = cx.observe(&composer, |this, _, cx| this.composer_text_changed(cx));
         let title_submitted = cx.subscribe(&title_input, |this, _, _: &Submitted, cx| {
             if this.workspace_name_open {
                 let name = this.title_input.read(cx).text();
@@ -299,6 +302,7 @@ impl Shell {
             conversation_workspace: Default::default(),
             composer,
             inline_composer: Default::default(),
+            composer_drafts: Default::default(),
             native_form_active: false,
             title_input,
             transcript: cx.new(|_| Transcript::new(locale)),
@@ -329,7 +333,7 @@ impl Shell {
             send_after_create: false,
             notice: None,
             browser: Browser::default(),
-            _subscriptions: vec![submitted, title_submitted],
+            _subscriptions: vec![submitted, title_submitted, draft_changed],
         };
         if shell.runtime.is_native() {
             shell.start_agent_events(cx);
@@ -502,9 +506,12 @@ impl Shell {
             .configured_default_model()
             .unwrap_or("")
             .to_owned();
-        let command =
-            self.state
-                .create_conversation(&uuid::Uuid::new_v4().to_string(), &now(), &model);
+        let command = self.state.create_conversation_from_draft(
+            &uuid::Uuid::new_v4().to_string(),
+            &now(),
+            &model,
+            "high",
+        );
         if command.is_err() {
             self.send_after_create = false;
         }
@@ -542,6 +549,13 @@ impl Shell {
             return;
         }
         if self.model_picker || !self.runtime.is_native() || self.aux_busy {
+            return;
+        }
+        if self.composer_drafts.saving {
+            self.composer_drafts.send_after_save = Some((
+                self.inline_conversation_key(),
+                self.inline_text_for_send(cx),
+            ));
             return;
         }
         if self.custom_providers.request_pending() || self.provider_models.request_pending() {

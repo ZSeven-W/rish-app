@@ -1,5 +1,5 @@
 //! The session snapshot schema: the strict node-limited JSON scanner, the
-//! schema-9 candidate validator with every sub-validator, the legacy (2..=8)
+//! schema-9/10 candidate validator with every sub-validator, the legacy (2..=8)
 //! root validator, the v2/v3 envelope and tombstone validators, and the
 //! `chat-session` digest — ported from the pure half of
 //! `SessionSnapshotStore.mm`. File protection, pinned descriptors, atomic
@@ -11,6 +11,7 @@
 //! lexeme such as `1.0` is an integer here, `-0` is refused at the scanner.
 
 pub mod cas;
+mod composer_drafts;
 mod grant_recovery;
 mod grant_reuse;
 pub(crate) use grant_recovery::frozen_ids_after_lost_prepare;
@@ -21,6 +22,10 @@ mod primitives;
 pub(crate) mod scanner;
 mod validators;
 
+pub use composer_drafts::{
+    validate_composer_drafts, MAX_COMPOSER_DRAFTS, MAX_COMPOSER_DRAFT_BYTES,
+    MAX_COMPOSER_DRAFT_TOTAL_BYTES,
+};
 pub use primitives::*;
 pub use scanner::{parse_object, MAX_JSON_NODES, MAX_TOMBSTONE_JSON_NODES};
 
@@ -163,7 +168,7 @@ pub fn session_digest(session: &Value) -> Option<String> {
     hash_json("chat-session", session)
 }
 
-/// A validated schema-9 candidate.
+/// A validated current session candidate (schema 9 or 10).
 #[derive(Debug, Clone, PartialEq)]
 pub struct Candidate {
     pub session: Value,
@@ -171,13 +176,13 @@ pub struct Candidate {
 }
 
 /// The CAS path's candidate acceptance: UTF-8 bounds, strict parse,
-/// schema-9 root, canonical digest.
+/// supported session root, canonical digest. Reading never migrates a session.
 pub fn validate_candidate(bytes: &[u8], env: &Env) -> Result<Candidate, SessionError> {
     if bytes.is_empty() || bytes.len() > MAX_BYTES {
         return Err(SessionError::Bounds);
     }
     let session = parse_object(bytes, MAX_JSON_NODES).ok_or(SessionError::InvalidArgument)?;
-    if !(validators::Validator { env }).schema9_root(&session) {
+    if !(validators::Validator { env }).session_root(&session) {
         return Err(SessionError::InvalidArgument);
     }
     let digest = session_digest(&session).ok_or(SessionError::InvalidArgument)?;
@@ -185,13 +190,13 @@ pub fn validate_candidate(bytes: &[u8], env: &Env) -> Result<Candidate, SessionE
 }
 
 /// `+candidateDigestForSessionJSON:`: the lenient JS-facing digest — a
-/// parseable object whose schema_version is 9 and that canonicalises.
+/// parseable object with a supported schema version and that canonicalises.
 pub fn candidate_digest(bytes: &[u8]) -> Option<String> {
     if bytes.is_empty() || bytes.len() > MAX_BYTES {
         return None;
     }
     let session = parse_object(bytes, MAX_JSON_NODES)?;
-    if !exact_schema(get(&session, "schema_version"), 9) {
+    if !supported_session_version(get(&session, "schema_version")) {
         return None;
     }
     session_digest(&session)
@@ -213,7 +218,17 @@ pub fn legacy_root_bytes(bytes: &[u8], env: &Env) -> bool {
 
 /// `DSHSessionValidateSchema9Root` over an already parsed session.
 pub fn validate_schema9_root(session: &Value, env: &Env) -> bool {
-    (validators::Validator { env }).schema9_root(session)
+    exact_schema(get(session, "schema_version"), 9) && validate_session_root(session, env)
+}
+
+/// Current readers accept schema 9 unchanged and schema 10 with its required
+/// draft map. Unknown versions are never treated as an empty session.
+pub fn supported_session_version(version: Option<&Value>) -> bool {
+    exact_schema(version, 9) || exact_schema(version, 10)
+}
+
+pub fn validate_session_root(session: &Value, env: &Env) -> bool {
+    (validators::Validator { env }).session_root(session)
 }
 
 /// What `readStateWithError:` learns from a stored envelope.
@@ -289,7 +304,7 @@ pub fn validate_envelope(raw: &[u8], env: &Env) -> Result<Envelope, SessionError
             || safe_integer(get(&envelope, "generation"), false).is_none()
             || !canonical_digest(get(&envelope, "session_sha256"))
             || !session.is_some_and(Value::is_object)
-            || !validator.schema9_root(session.expect("checked"))
+            || !validator.session_root(session.expect("checked"))
             || commits.is_empty()
             || commits.len() > MAX_RECENT_COMMITS
             || !(is_null(get(&envelope, "proof_run_id"))

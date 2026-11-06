@@ -249,8 +249,28 @@ impl Shell {
         let Some(draft) = self.config_draft.clone() else {
             return;
         };
-        let command = if self.state.active_conversation_id().is_none() {
-            self.state.create_conversation_configured(
+        if self.state.active_conversation_id().is_none() && self.composer_drafts.rejected_text {
+            let message = assistant_copy::copy(
+                self.locale,
+                "This draft is too large. Shorten or copy it before creating a conversation.",
+                "当前草稿过长，请先缩短或复制，再创建会话。",
+            );
+            if let Some(draft) = &mut self.config_draft {
+                draft.error = Some(message.into());
+            }
+            cx.notify();
+            return;
+        }
+        let command = self.prepare_configuration_commit(&draft);
+        self.complete_configuration_preparation(command, window, cx);
+    }
+
+    pub(super) fn prepare_configuration_commit(
+        &mut self,
+        draft: &ConfigurationDraft,
+    ) -> Result<RuntimeCommand, String> {
+        if self.state.active_conversation_id().is_none() {
+            self.state.create_conversation_from_draft(
                 &uuid::Uuid::new_v4().to_string(),
                 &now(),
                 &draft.model,
@@ -259,8 +279,7 @@ impl Shell {
         } else {
             self.state
                 .set_chat_configuration(&draft.model, &draft.thinking)
-        };
-        self.complete_configuration_preparation(command, window, cx);
+        }
     }
 
     // Shared-core validation can reject a draft after its provider catalog

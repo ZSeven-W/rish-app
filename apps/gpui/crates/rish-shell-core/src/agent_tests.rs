@@ -1,5 +1,7 @@
 use super::*;
 use serde_json::{json, Value};
+#[path = "composer_drafts_agent_tests.rs"]
+mod composer_drafts;
 const NOW: &str = "2026-10-16T00:00:00.000Z";
 fn chat() -> ShellState {
     let mut s = ShellState::with_test_models();

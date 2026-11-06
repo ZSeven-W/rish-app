@@ -54,8 +54,8 @@ impl Shell {
             self.state.selected_model()
         };
         let name = self.model_display_label(selected);
-        let busy =
-            self.state.is_busy() || (self.assistant_group_visible() && self.assistant_group_busy());
+        let busy = (self.state.is_busy() && !self.composer_drafts.saving)
+            || (self.assistant_group_visible() && self.assistant_group_busy());
         let answering = self
             .state
             .agent_view()
@@ -73,6 +73,45 @@ impl Shell {
             .flex()
             .flex_col()
             .child(editor)
+            .when_some(self.composer_draft_status(), |card, status| {
+                card.child(
+                    div()
+                        .id("composer-draft-status")
+                        .px_4()
+                        .pb_1()
+                        .flex()
+                        .flex_wrap()
+                        .items_center()
+                        .gap_2()
+                        .text_size(px(11.))
+                        .text_color(p.muted)
+                        .child(status)
+                        .when(
+                            self.composer_drafts.error.is_some()
+                                && self.state.composer_draft_conflicts().is_empty(),
+                            |row| {
+                                row.child(
+                                    div()
+                                        .id("retry-composer-draft")
+                                        .min_h(px(44.))
+                                        .px_2()
+                                        .flex()
+                                        .items_center()
+                                        .cursor_pointer()
+                                        .text_color(p.text)
+                                        .child(self.locale.text(Text::Retry))
+                                        .on_click(cx.listener(|this, _, _, cx| {
+                                            this.retry_composer_drafts(cx)
+                                        })),
+                                )
+                            },
+                        ),
+                )
+            })
+            .when_some(
+                self.state.composer_draft_conflicts().into_iter().next(),
+                |card, key| card.child(self.composer_draft_conflict_view(key, cx)),
+            )
             .child(
                 div()
                     .w(px((width - 2.).max(0.)))

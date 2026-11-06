@@ -164,12 +164,22 @@ record its native artifact provenance when testing platform services.
 
 ## Session and native bridge rules
 
-The shell retains schema 9 JSON and delegates validation to `rish-agent-core`.
+The shell reads schema 9 and 10 JSON and delegates validation to `rish-agent-core`.
 It preserves Agent journals and extension fields. Writes include the native
 generation, digest and operation ID; a conflict reloads authoritative state and
 an uncertain write queries its outcome before another mutation or request.
 Provider requests follow durable user-turn persistence. Do not add a parallel
 UI-owned history store or rewrite active Agent conversations as basic chat.
+
+Schema 10 adds the required `composer_drafts` object: stable editor keys map to
+exact, nonempty unsent text. Empty drafts have no entry. Limits are 256 entries,
+256 UTF-8 bytes per key, 1 MiB per draft and 4 MiB of text in total. Schema 9
+continues to reject this field. Loading does not rewrite session bytes or their
+digest; the first draft mutation upgrades through the existing generation/digest
+CAS and v3 native envelope. Unknown versions fail closed without resetting data.
+Older binaries cannot read schema 10; installing one over upgraded data is not a
+supported downgrade. Both native Rust archives must be rebuilt with the new
+reader before deploying the shell that writes schema 10.
 
 Native services own credentials, storage, authority checks and provider calls.
 The bridge accepts only the reviewed exported operations, bounds outstanding
