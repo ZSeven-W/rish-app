@@ -205,7 +205,8 @@ object RishGpuiBridge {
         permissionReply: (JSONObject) -> Unit,
     ): Any = when (module) {
         "ShellAssistant" -> ShellAssistantRoutes.call(context, method, args)
-        "ShellRuntimeEngines" -> ShellRuntimeEnginesRoutes.call(method, args)
+        "ShellRuntimeEngines" -> ShellRuntimeEnginesRoutes.call(method, args,
+            AndroidSubscriptionAuthProcessFactory(context)::available)
         "TaskExperience" -> TaskExperienceRoutes.call(activity, method, args, permissionReply)
         else -> throw BridgeFailure("E_BRIDGE_UNAVAILABLE")
     }

@@ -8,16 +8,19 @@ import tech.zseven.rish.runtime.AndroidSubscriptionAuthProtocol
 internal object ShellRuntimeEnginesRoutes {
     private val engineIds = listOf("pi", "dsh", "claude-code", "codex", "zcode")
 
-    fun call(method: String, args: JSONArray): JSONObject = when (method) {
+    fun call(
+        method: String, args: JSONArray,
+        authenticationAvailable: (String) -> Boolean = { false },
+    ): JSONObject = when (method) {
         "catalog" -> {
             require(args.length() == 0)
-            catalog()
+            catalog(authenticationAvailable)
         }
         "install" -> {
             val engine = installRequest(args)
             if (engine != "pi") throw BridgeFailure("E_RUNTIME_ENGINE_INSTALL_UNAVAILABLE")
             // Pi is linked into the application; this is an idempotent read.
-            catalog()
+            catalog(authenticationAvailable)
         }
         "cancel" -> {
             installRequest(args)
@@ -27,7 +30,7 @@ internal object ShellRuntimeEnginesRoutes {
         else -> throw BridgeFailure("E_BRIDGE_UNAVAILABLE")
     }
 
-    private fun catalog(): JSONObject {
+    private fun catalog(authenticationAvailable: (String) -> Boolean): JSONObject {
         val engines = JSONArray()
         for (id in engineIds) {
             val builtin = id == "pi"
@@ -43,10 +46,16 @@ internal object ShellRuntimeEnginesRoutes {
                 installation.put("reason_code", "platform_install_unavailable")
                 execution.put("reason_code", "cli_adapter_unavailable")
             }
-            val authSupported = AndroidSubscriptionAuthProtocol.supports(id)
+            // Knowing the CLI protocol does not establish a usable native
+            // login adapter. This metadata-only check must not open a process,
+            // restore credentials or initialize an authentication manager.
+            val authSupported = AndroidSubscriptionAuthProtocol.supports(id) &&
+                try { authenticationAvailable(id) } catch (_: Exception) { false }
             val authentication = JSONObject().put("supported", authSupported)
                 .put("source_selection", false).put("authorization_browser", authSupported)
-                .put("native_code_entry", authSupported).put("provider_selection", false)
+                // The current manager never advertises a code submission
+                // contract, even when its browser login flow is available.
+                .put("native_code_entry", false).put("provider_selection", false)
             engines.put(JSONObject().put("id", id).put("installation", installation).put("execution", execution)
                 .put("authentication", authentication))
         }

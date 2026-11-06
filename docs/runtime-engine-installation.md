@@ -96,6 +96,13 @@ The production auth process factory checks `RISH_OFFICIAL_CLI_ENABLED` before
 availability, vault restoration or process start; bundling probe bytes cannot
 enable it. Normal debug and release remain CLI-disabled.
 
+The Android runtime catalog now reads this same native availability rather
+than treating a recognized protocol ID as a working login adapter. Disabled
+authentication is reported before any status query, with code entry also
+disabled until its native contract exists. Installation, account capability
+and task execution remain independent. See the
+[catalog capability validation](p0-runtime-auth-capabilities-2026-11-07.md).
+
 The development probe now also launches `app-server --stdio`, performs the
 `initialize` → `initialized` exchange, reads the empty loaded-thread list, and
 closes stdin to verify process shutdown. This uses a new empty home and keeps

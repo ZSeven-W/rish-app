@@ -41,17 +41,31 @@ class ShellRuntimeEnginesRoutesTest {
         }
     }
 
-    @Test fun authenticationAdaptersDoNotImplyInstalledOrExecutableRuntimes() {
+    @Test fun catalogWithoutNativeCapabilityDisablesEveryAuthenticationAction() {
         val engines = ShellRuntimeEnginesRoutes.call("catalog", JSONArray()).getJSONArray("engines")
         for (index in 0 until engines.length()) {
             val engine = engines.getJSONObject(index)
             val authentication = engine.getJSONObject("authentication")
             assertEquals(setOf("supported", "source_selection", "authorization_browser", "native_code_entry", "provider_selection"),
                 authentication.keys().asSequence().toSet())
-            val supported = engine.getString("id") in setOf("codex", "claude-code")
-            assertEquals(supported, authentication.getBoolean("supported"))
-            assertEquals(supported, authentication.getBoolean("authorization_browser"))
-            assertEquals(supported, authentication.getBoolean("native_code_entry"))
+            assertTrue(authentication.keys().asSequence().all { authentication.get(it) == false })
+        }
+    }
+
+    @Test fun nativeAvailabilityOnlyEnablesSupportedBrowserAuthentication() {
+        val queried = mutableListOf<String>()
+        val engines = ShellRuntimeEnginesRoutes.call("catalog", JSONArray()) { id ->
+            queried += id
+            id == "codex"
+        }.getJSONArray("engines")
+        assertEquals(listOf("claude-code", "codex"), queried)
+        for (index in 0 until engines.length()) {
+            val engine = engines.getJSONObject(index)
+            val authentication = engine.getJSONObject("authentication")
+            val supported = engine.getString("id") == "codex"
+            assertEquals(supported, authentication.get("supported"))
+            assertEquals(supported, authentication.get("authorization_browser"))
+            assertFalse(authentication.getBoolean("native_code_entry"))
             assertFalse(authentication.getBoolean("source_selection"))
             assertFalse(authentication.getBoolean("provider_selection"))
             if (supported) {
@@ -59,6 +73,52 @@ class ShellRuntimeEnginesRoutesTest {
                 assertEquals("unavailable", engine.getJSONObject("execution").getString("state"))
             }
         }
+    }
+
+    @Test fun nativePredicateCannotGrantAuthenticationToUnknownProtocols() {
+        val queried = mutableListOf<String>()
+        val engines = ShellRuntimeEnginesRoutes.call("catalog", JSONArray()) { id ->
+            queried += id
+            true
+        }.getJSONArray("engines")
+        assertEquals(listOf("claude-code", "codex"), queried)
+        for (index in 0 until engines.length()) {
+            val engine = engines.getJSONObject(index)
+            val id = engine.getString("id")
+            val authentication = engine.getJSONObject("authentication")
+            assertEquals(id in queried, authentication.get("supported"))
+            assertFalse(authentication.getBoolean("native_code_entry"))
+            assertFalse(authentication.getBoolean("source_selection"))
+            assertFalse(authentication.getBoolean("provider_selection"))
+            if (id != "pi") {
+                assertEquals("unavailable", engine.getJSONObject("installation").getString("state"))
+                assertEquals("unavailable", engine.getJSONObject("execution").getString("state"))
+            }
+        }
+    }
+
+    @Test fun failedCapabilityReadDisablesOnlyThatEngineWithoutLeakingItsError() {
+        val result = ShellRuntimeEnginesRoutes.call("catalog", JSONArray()) { id ->
+            if (id == "claude-code") throw SecurityException("PRIVATE_CAPABILITY_DETAIL")
+            true
+        }
+        val engines = result.getJSONArray("engines")
+        assertFalse(result.toString().contains("PRIVATE_CAPABILITY_DETAIL"))
+        assertFalse(engines.getJSONObject(2).getJSONObject("authentication").getBoolean("supported"))
+        assertTrue(engines.getJSONObject(3).getJSONObject("authentication").getBoolean("supported"))
+    }
+
+    @Test fun eachCatalogReadAndBuiltinInstallUseCurrentNativeCapability() {
+        var available = true
+        val capability: (String) -> Boolean = { it == "codex" && available }
+        fun codexSupported(method: String, args: JSONArray) =
+            ShellRuntimeEnginesRoutes.call(method, args, capability).getJSONArray("engines")
+                .getJSONObject(3).getJSONObject("authentication").getBoolean("supported")
+        assertTrue(codexSupported("catalog", JSONArray()))
+        assertTrue(codexSupported("install", install("pi")))
+        available = false
+        assertFalse(codexSupported("catalog", JSONArray()))
+        assertFalse(codexSupported("install", install("pi")))
     }
 
     @Test fun unsupportedCliInstallNeverReturnsDownloadedOrInstalled() {
