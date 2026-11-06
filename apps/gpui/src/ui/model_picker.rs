@@ -6,6 +6,7 @@ use crate::icons::{Icon, icon};
 pub(super) struct ConfigurationDraft {
     pub model: String,
     pub thinking: String,
+    pub error: Option<String>,
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
@@ -13,6 +14,7 @@ pub(super) enum ConfigurationPage {
     #[default]
     Configure,
     Models,
+    Providers,
     Thinking,
 }
 
@@ -28,7 +30,7 @@ pub(super) struct PickerBounds {
     pub floating: bool,
 }
 
-fn picker_bounds(layout: Layout, page: ConfigurationPage) -> PickerBounds {
+fn picker_bounds(layout: Layout, page: ConfigurationPage, has_error: bool) -> PickerBounds {
     let available_width = layout.content_width + layout.sidebar_width;
     let floating = available_width >= 700. && layout.available_height >= 520.;
     let horizontal_margin = (if floating { 24_f32 } else { 10_f32 }).min(available_width / 2.);
@@ -44,8 +46,8 @@ fn picker_bounds(layout: Layout, page: ConfigurationPage) -> PickerBounds {
     };
     let width = (available_width - horizontal_margin * 2.).min(440.);
     let preferred_height = match page {
-        ConfigurationPage::Configure => 260. + bottom_padding,
-        ConfigurationPage::Models => 568.,
+        ConfigurationPage::Configure => 260. + bottom_padding + if has_error { 100. } else { 0. },
+        ConfigurationPage::Models | ConfigurationPage::Providers => 568.,
         ConfigurationPage::Thinking => 270.,
     };
     let height = (available_height - vertical_margin * 2.)
@@ -105,6 +107,7 @@ impl Shell {
         self.close_drawer(true, window, cx);
         self.model_picker_previous_focus = window.focused(cx);
         self.config_draft = Some(ConfigurationDraft {
+            error: None,
             model: if self.assistant_group_visible() {
                 self.assistant_group_model()
             } else {
@@ -170,6 +173,7 @@ impl Shell {
             }
             self.config_draft.as_mut().unwrap().model = id.to_owned();
         }
+        self.config_draft.as_mut().unwrap().error = None;
         self.show_configuration_page(ConfigurationPage::Configure, cx);
     }
 
@@ -190,6 +194,7 @@ impl Shell {
             }
             self.config_draft.as_mut().unwrap().thinking = mode.to_owned();
         }
+        self.config_draft.as_mut().unwrap().error = None;
         self.show_configuration_page(ConfigurationPage::Configure, cx);
     }
 
@@ -255,8 +260,42 @@ impl Shell {
             self.state
                 .set_chat_configuration(&draft.model, &draft.thinking)
         };
-        self.close_model_picker(window, cx);
-        self.commit(command, cx);
+        self.complete_configuration_preparation(command, window, cx);
+    }
+
+    // Shared-core validation can reject a draft after its provider catalog
+    // changes. Keep the editor and focus until preparation actually succeeds.
+    pub(super) fn complete_configuration_preparation(
+        &mut self,
+        command: Result<RuntimeCommand, String>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        match command {
+            Ok(command) => {
+                self.close_model_picker(window, cx);
+                self.commit(Ok(command), cx);
+            }
+            Err(error) => {
+                if let Some(draft) = &mut self.config_draft {
+                    draft.error = Some(if error == "Choose a current model" {
+                        assistant_copy::copy(self.locale,
+                            "This model is no longer available. Choose another model. Your changes are kept.",
+                            "该模型已不可用，请重新选择。你的设置草稿已保留。").into()
+                    } else {
+                        format!(
+                            "{} {error}",
+                            assistant_copy::copy(
+                                self.locale,
+                                "Could not apply settings. Your changes are kept.",
+                                "暂时无法应用设置，你的设置草稿已保留。"
+                            )
+                        )
+                    });
+                }
+                cx.notify();
+            }
+        }
     }
 
     fn configuration_row(
@@ -338,6 +377,24 @@ impl Shell {
                     .min_h(px(0.))
                     .overflow_y_scroll()
                     .px_6()
+                    .when_some(
+                        self.config_draft
+                            .as_ref()
+                            .and_then(|draft| draft.error.clone()),
+                        |fields, error| {
+                            fields.child(
+                                div()
+                                    .id("config-error")
+                                    .debug_selector(|| "config-error".into())
+                                    .py_3()
+                                    .text_size(px(13.))
+                                    .line_height(px(20.))
+                                    .text_color(p.danger)
+                                    .whitespace_normal()
+                                    .child(error),
+                            )
+                        },
+                    )
                     .child(
                         div()
                             .relative()
@@ -415,9 +472,12 @@ impl Shell {
         let p = Palette::get(cx);
         let is_main = self.config_page == ConfigurationPage::Configure;
         let title = match self.config_page {
-            ConfigurationPage::Configure => Text::Configure,
-            ConfigurationPage::Models => Text::Models,
-            ConfigurationPage::Thinking => Text::ThinkingIntensity,
+            ConfigurationPage::Configure => self.locale.text(Text::Configure),
+            ConfigurationPage::Models => self.locale.text(Text::Models),
+            ConfigurationPage::Providers => {
+                assistant_copy::copy(self.locale, "Add / custom model", "添加 / 自定义模型")
+            }
+            ConfigurationPage::Thinking => self.locale.text(Text::ThinkingIntensity),
         };
         div()
             .id("model-picker-header")
@@ -452,7 +512,7 @@ impl Shell {
                             .justify_center()
                             .text_size(px(18.))
                             .font_weight(gpui::FontWeight::SEMIBOLD)
-                            .child(self.locale.text(title))
+                            .child(title)
                             .when(!is_main, |header| {
                                 header
                                     .child(
@@ -473,10 +533,14 @@ impl Shell {
                                             .hover(|s| s.bg(p.surface))
                                             .child(icon(Icon::ChevronLeft, 20., p.text))
                                             .on_click(cx.listener(|this, _, _, cx| {
-                                                this.show_configuration_page(
-                                                    ConfigurationPage::Configure,
-                                                    cx,
-                                                );
+                                                let page = if this.config_page
+                                                    == ConfigurationPage::Providers
+                                                {
+                                                    ConfigurationPage::Models
+                                                } else {
+                                                    ConfigurationPage::Configure
+                                                };
+                                                this.show_configuration_page(page, cx);
                                                 cx.stop_propagation();
                                             })),
                                     )
@@ -513,7 +577,13 @@ impl Shell {
         cx: &mut Context<Self>,
     ) -> impl IntoElement {
         let p = Palette::get(cx);
-        let bounds = picker_bounds(layout, self.config_page);
+        let bounds = picker_bounds(
+            layout,
+            self.config_page,
+            self.config_draft
+                .as_ref()
+                .is_some_and(|draft| draft.error.is_some()),
+        );
         div()
             .id("model-picker-overlay")
             .absolute()
@@ -580,6 +650,9 @@ impl Shell {
                                 }
                                 ConfigurationPage::Models => {
                                     self.model_options(bounds, cx).into_any_element()
+                                }
+                                ConfigurationPage::Providers => {
+                                    self.model_setup_options(bounds, cx).into_any_element()
                                 }
                                 ConfigurationPage::Thinking => {
                                     self.thinking_options(bounds, cx).into_any_element()

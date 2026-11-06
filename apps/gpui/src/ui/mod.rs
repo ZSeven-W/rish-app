@@ -64,6 +64,7 @@ mod layout;
 mod model_picker;
 mod model_picker_options;
 mod model_required;
+mod model_setup;
 mod navigation_flow;
 #[cfg(all(test, not(any(target_os = "ios", target_os = "android"))))]
 mod navigation_flow_tests;

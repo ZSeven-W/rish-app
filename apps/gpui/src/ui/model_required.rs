@@ -15,6 +15,7 @@ impl Shell {
             );
         } else {
             self.config_draft = Some(model_picker::ConfigurationDraft {
+                error: None,
                 model: if self.state.model_is_configured(self.state.selected_model()) {
                     self.state.selected_model().to_owned()
                 } else {

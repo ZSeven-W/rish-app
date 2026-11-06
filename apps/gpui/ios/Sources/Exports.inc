@@ -193,5 +193,6 @@ static const RishExport RishExports[] = {
   {@"ShellAssistant", @"storage", @"storageWithResolver:rejecter:", "", NO},
   {@"ShellRuntimeEngines", @"catalog", @"catalogWithResolver:rejecter:", "", NO},
   {@"ShellRuntimeEngines", @"install", @"installWithRequest:resolver:rejecter:", "d", NO},
+  {@"ShellRuntimeEngines", @"cancel", @"cancelWithRequest:resolver:rejecter:", "d", NO},
   {@"TaskExperience", @"handle", @"handleWithRequest:resolver:rejecter:", "d", NO},
 };

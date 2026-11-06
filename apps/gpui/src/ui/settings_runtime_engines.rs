@@ -58,10 +58,16 @@ pub(super) struct RuntimeEngineState {
     pub authentication: AuthenticationCapabilities,
 }
 
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum EngineAction {
+    Install(RuntimeProduct),
+    Cancel(RuntimeProduct),
+}
+
 #[derive(Clone)]
 struct EngineRequest {
     token: String,
-    install: Option<RuntimeProduct>,
+    action: Option<EngineAction>,
 }
 
 pub(super) struct RuntimeEnginesUi {
@@ -107,6 +113,14 @@ impl RuntimeProduct {
             Self::ClaudeCode => "claude-code",
             Self::Codex => "codex",
             Self::Zcode => "zcode",
+        }
+    }
+    fn cancel_selector(self) -> &'static str {
+        match self {
+            Self::Dsh => "settings-runtime-cancel-dsh",
+            Self::ClaudeCode => "settings-runtime-cancel-claude-code",
+            Self::Codex => "settings-runtime-cancel-codex",
+            Self::Zcode => "settings-runtime-cancel-zcode",
         }
     }
     fn download_selector(self) -> &'static str {
@@ -227,6 +241,10 @@ impl RuntimeEngineState {
                 || (matches!(self.installation, EngineInstallation::Downloaded { .. })
                     && self.integrity != EngineIntegrity::Verified))
     }
+    fn can_cancel(&self) -> bool {
+        self.download_supported
+            && matches!(self.installation, EngineInstallation::Installing { .. })
+    }
     fn installation_label(&self, locale: Locale) -> String {
         if self.download_error {
             return copy(locale, "Download failed", "下载失败").into();
@@ -275,32 +293,47 @@ impl RuntimeEnginesUi {
         install: Option<RuntimeProduct>,
         user_initiated: bool,
     ) -> Option<(EngineRequest, RuntimeCommand)> {
+        self.prepare_action_request(install.map(EngineAction::Install), user_initiated)
+    }
+    fn prepare_action_request(
+        &mut self,
+        action: Option<EngineAction>,
+        user_initiated: bool,
+    ) -> Option<(EngineRequest, RuntimeCommand)> {
         if self.request.is_some() {
             return None;
         }
-        if let Some(product) = install {
+        if let Some(action) = action {
             if !user_initiated
                 || self.error.is_some()
-                || !self
-                    .entries
-                    .iter()
-                    .any(|entry| entry.product == product && entry.can_download())
+                || !self.entries.iter().any(|entry| match action {
+                    EngineAction::Install(product) => {
+                        entry.product == product && entry.can_download()
+                    }
+                    EngineAction::Cancel(product) => entry.product == product && entry.can_cancel(),
+                })
             {
                 return None;
             }
         }
         let request = EngineRequest {
             token: uuid::Uuid::new_v4().to_string(),
-            install,
+            action,
         };
-        let command = match install {
-            Some(product) => RuntimeCommand::new(
-                "ShellRuntimeEngines",
-                "install",
-                vec![
-                    json!({"schema_version":1,"engine_id":product.engine_id(),"userInitiated":true}),
-                ],
-            ),
+        let command = match action {
+            Some(action) => {
+                let (product, method) = match action {
+                    EngineAction::Install(product) => (product, "install"),
+                    EngineAction::Cancel(product) => (product, "cancel"),
+                };
+                RuntimeCommand::new(
+                    "ShellRuntimeEngines",
+                    method,
+                    vec![
+                        json!({"schema_version":1,"engine_id":product.engine_id(),"userInitiated":true}),
+                    ],
+                )
+            }
             None => RuntimeCommand::new("ShellRuntimeEngines", "catalog", vec![]),
         };
         self.request = Some(request.clone());
@@ -312,7 +345,12 @@ impl RuntimeEnginesUi {
     fn install_pending(&self, product: RuntimeProduct) -> bool {
         self.request
             .as_ref()
-            .is_some_and(|request| request.install == Some(product))
+            .is_some_and(|request| request.action == Some(EngineAction::Install(product)))
+    }
+    fn cancel_pending(&self, product: RuntimeProduct) -> bool {
+        self.request
+            .as_ref()
+            .is_some_and(|request| request.action == Some(EngineAction::Cancel(product)))
     }
     fn accept_result(
         &mut self,
@@ -355,16 +393,30 @@ impl Shell {
         user_initiated: bool,
         cx: &mut Context<Self>,
     ) {
+        self.request_runtime_engine_action(install.map(EngineAction::Install), user_initiated, cx);
+    }
+    fn request_runtime_engine_action(
+        &mut self,
+        action: Option<EngineAction>,
+        user_initiated: bool,
+        cx: &mut Context<Self>,
+    ) {
         if !self.runtime.is_native()
             || !self.runtime_catalog_visible()
             || self.runtime_engines.request.is_some()
         {
             return;
         }
-        let Some((request, command)) = self
-            .runtime_engines
-            .prepare_request(install, user_initiated)
-        else {
+        let prepared = match action {
+            Some(EngineAction::Cancel(_)) => self
+                .runtime_engines
+                .prepare_action_request(action, user_initiated),
+            Some(EngineAction::Install(product)) => self
+                .runtime_engines
+                .prepare_request(Some(product), user_initiated),
+            None => self.runtime_engines.prepare_request(None, user_initiated),
+        };
+        let Some((request, command)) = prepared else {
             return;
         };
         let runtime = self.runtime.clone();
@@ -428,6 +480,8 @@ impl Shell {
         let id = entry.product.settings_selector();
         let installation = if self.runtime_engines.install_pending(entry.product) {
             copy(self.locale, "Starting download", "正在开始下载").into()
+        } else if self.runtime_engines.cancel_pending(entry.product) {
+            copy(self.locale, "Cancelling", "正在取消").into()
         } else if self.runtime_engines.loading && entry.installation == EngineInstallation::Unknown
         {
             copy(self.locale, "Checking", "正在检查").into()
@@ -439,20 +493,31 @@ impl Shell {
             EngineExecution::Unavailable => copy(self.locale, "Tasks unavailable", "暂不可运行"),
         };
         let download = entry.can_download();
+        let cancel = entry.can_cancel();
         let enabled = self.runtime.is_native()
             && self.runtime_engines.request.is_none()
             && self.runtime_engines.error.is_none();
-        let trailing = if download {
-            let selector = product.download_selector();
-            div()
+        let trailing = if download || cancel {
+            let selector = if cancel {
+                product.cancel_selector()
+            } else {
+                product.download_selector()
+            };
+            let action = if cancel {
+                EngineAction::Cancel(product)
+            } else {
+                EngineAction::Install(product)
+            };
+            let label = if cancel {
+                copy(self.locale, "Cancel", "取消")
+            } else {
+                copy(self.locale, "Download", "下载")
+            };
+            let button = div()
                 .id(selector)
                 .debug_selector(move || selector.into())
                 .role(gpui::Role::Button)
-                .aria_label(format!(
-                    "{} {}",
-                    copy(self.locale, "Download", "下载"),
-                    product.label()
-                ))
+                .aria_label(format!("{} {}", label, product.label()))
                 .min_h(px(44.))
                 .min_w(px(68.))
                 .flex_shrink_0()
@@ -464,13 +529,35 @@ impl Shell {
                 .bg(p.surface)
                 .text_color(if enabled { p.text } else { p.muted })
                 .text_size(px(13.))
-                .child(copy(self.locale, "Download", "下载"))
+                .child(label)
                 .when(enabled, |button| button.cursor_pointer())
                 .on_click(cx.listener(move |this, _, _, cx| {
                     cx.stop_propagation();
-                    this.request_runtime_engines(Some(product), true, cx)
-                }))
-                .into_any_element()
+                    this.request_runtime_engine_action(Some(action), true, cx)
+                }));
+            if cancel {
+                div()
+                    .flex()
+                    .flex_col()
+                    .items_center()
+                    .gap_1()
+                    .flex_shrink_0()
+                    .child(
+                        div()
+                            .debug_selector(move || format!("{selector}-progress"))
+                            .max_w(px(100.))
+                            .text_size(px(12.))
+                            .line_height(px(16.))
+                            .text_color(p.muted)
+                            .text_center()
+                            .whitespace_normal()
+                            .child(installation),
+                    )
+                    .child(button)
+                    .into_any_element()
+            } else {
+                button.into_any_element()
+            }
         } else {
             div()
                 .max_w(px(100.))

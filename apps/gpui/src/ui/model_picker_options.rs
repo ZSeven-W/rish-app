@@ -133,7 +133,8 @@ impl Shell {
             .px_3()
             .pb(px(bounds.bottom_padding))
             .flex()
-            .flex_col();
+            .flex_col()
+            .child(self.model_setup_entry("model-picker-add-model", cx));
         if self.state.models().is_empty() {
             list = list.child(self.model_catalog_empty_state("model-picker-empty", cx));
         }

@@ -129,6 +129,57 @@ fn download_requires_current_capability_and_explicit_action_then_returns_only_in
 }
 
 #[test]
+fn cancel_requires_active_supported_download_and_explicit_action() {
+    let action = Some(EngineAction::Cancel(RuntimeProduct::Codex));
+    let mut ui = state();
+    assert!(ui.prepare_action_request(action, true).is_none());
+    ui.entries[2].installation = EngineInstallation::Installing { progress: Some(42) };
+    assert!(ui.prepare_action_request(action, false).is_none());
+    ui.entries[2].download_supported = false;
+    assert!(ui.prepare_action_request(action, true).is_none());
+    ui.entries[2].download_supported = true;
+    let (request, command) = ui.prepare_action_request(action, true).unwrap();
+    assert_eq!(command.module, "ShellRuntimeEngines");
+    assert_eq!(command.method, "cancel");
+    assert_eq!(
+        command.args,
+        vec![json!({"schema_version":1,"engine_id":"codex","userInitiated":true})]
+    );
+    assert!(ui.cancel_pending(RuntimeProduct::Codex));
+    assert!(!ui.install_pending(RuntimeProduct::Codex));
+    assert!(ui.prepare_action_request(action, true).is_none());
+    assert!(ui.prepare_request(None, false).is_none());
+    assert!(ui.accept_result(&request, Ok(catalog()), Locale::En));
+    assert!(!ui.cancel_pending(RuntimeProduct::Codex));
+    assert!(ui.entries[2].can_download());
+    assert!(!ui.entries[2].can_cancel());
+}
+
+#[test]
+fn completed_poll_cannot_overwrite_cancel_or_the_following_retry() {
+    let mut ui = state();
+    let (poll, _) = ui.prepare_request(None, false).unwrap();
+    let mut downloading = catalog();
+    downloading["engines"][2]["installation"]["state"] = json!("installing");
+    downloading["engines"][2]["installation"]["progress"] = json!(42);
+    assert!(ui.accept_result(&poll, Ok(downloading.clone()), Locale::En));
+    let (cancel, _) = ui
+        .prepare_action_request(Some(EngineAction::Cancel(RuntimeProduct::Codex)), true)
+        .unwrap();
+    assert!(!ui.accept_result(&poll, Ok(downloading.clone()), Locale::En));
+    assert!(ui.cancel_pending(RuntimeProduct::Codex));
+    assert!(ui.accept_result(&cancel, Ok(catalog()), Locale::En));
+    let (retry, _) = ui
+        .prepare_request(Some(RuntimeProduct::Codex), true)
+        .unwrap();
+    assert!(!ui.accept_result(&cancel, Ok(catalog()), Locale::En));
+    assert_eq!(ui.request.as_ref().unwrap().token, retry.token);
+    assert!(ui.accept_result(&retry, Ok(downloading), Locale::En));
+    assert_eq!(ui.entries[2].installation_label(Locale::Zh), "正在下载 42%");
+    assert_eq!(ui.entries[2].execution, EngineExecution::Unavailable);
+}
+
+#[test]
 fn downloaded_integrity_is_independent_of_installation_and_execution() {
     for integrity in ["unverified", "verified"] {
         let mut value = catalog();
@@ -162,7 +213,7 @@ fn stale_reply_and_native_error_preserve_prior_state_and_hide_raw_error_details(
     let (request, _) = ui.prepare_request(None, false).unwrap();
     let stale = EngineRequest {
         token: "stale".into(),
-        install: None,
+        action: None,
     };
     assert!(!ui.accept_result(&stale, Ok(catalog()), Locale::En));
     assert!(ui.loading);
@@ -305,6 +356,65 @@ fn truthful_download_controls_fit_phone_and_tablet_but_preview_cannot_dispatch_t
                     })
                     .unwrap();
             }
+        }
+    }
+}
+
+#[test]
+fn cancel_and_progress_fit_narrow_phone_and_tablet_rows_in_both_locales() {
+    for width in [320., 1194.] {
+        for locale in [Locale::Zh, Locale::En] {
+            let mut app = TestAppContext::single();
+            let window = app.open_window(size(px(width), px(844.)), |_, cx| Shell::new(cx));
+            let mut cx = VisualTestContext::from_window(window.into(), &app);
+            cx.run_until_parked();
+            window
+                .update(&mut cx, |shell, _, cx| {
+                    shell.page = Page::Settings;
+                    shell.settings_expanded = Some(settings::PreferenceGroup::Runtime);
+                    shell.locale = locale;
+                    shell.runtime_engines = state();
+                    shell.runtime_engines.entries[2].installation =
+                        EngineInstallation::Installing { progress: Some(42) };
+                    cx.notify();
+                })
+                .unwrap();
+            cx.run_until_parked();
+            cx.update(|window, cx| window.draw(cx).clear(cx));
+            assert!(cx.debug_bounds("settings-runtime-download-codex").is_none());
+            assert!(
+                cx.debug_bounds("settings-runtime-cancel-claude-code")
+                    .is_none()
+            );
+            let cancel = cx.debug_bounds("settings-runtime-cancel-codex").unwrap();
+            let progress = cx
+                .debug_bounds("settings-runtime-cancel-codex-progress")
+                .unwrap();
+            let row = cx.debug_bounds("settings-runtime-codex").unwrap();
+            let viewport = cx.debug_bounds("settings-content").unwrap();
+            assert!(cancel.size.width >= px(68.) && cancel.size.height >= px(44.));
+            assert!(cancel.top() >= row.top() && cancel.bottom() <= row.bottom());
+            assert!(progress.top() >= row.top() && progress.bottom() <= cancel.top());
+            assert!(
+                progress.size.height <= px(32.),
+                "two progress lines use explicit compact leading"
+            );
+            assert!(cancel.left() > row.center().x && cancel.right() <= row.right());
+            assert!(cancel.left() >= viewport.left() && cancel.right() <= viewport.right());
+            assert!(
+                row.size.height <= px(100.),
+                "progress and cancel remain compact: {row:?}"
+            );
+            window
+                .read_with(&cx, |shell, _| {
+                    assert!(
+                        shell.runtime_engines.entries[2]
+                            .installation_label(locale)
+                            .contains("42%")
+                    );
+                    assert!(shell.runtime_engines.request.is_none());
+                })
+                .unwrap();
         }
     }
 }

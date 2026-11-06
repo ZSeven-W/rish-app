@@ -388,9 +388,20 @@ fn model_catalog_api_accounts_and_runtime_products_are_distinct_disclosures() {
         assert!(fixture.cx.debug_bounds(selector).is_none());
     }
     let card = fixture.bounds("settings-models-card");
+    let default_row = fixture.bounds("settings-model");
+    let add_model = fixture.bounds("settings-add-model");
     assert!(
-        card.size.height <= px(62.),
-        "the default model group must remain one row"
+        card.size.height <= px(124.),
+        "the collapsed model group contains only the default and setup rows"
+    );
+    assert!(default_row.bottom() <= add_model.top());
+    assert!(add_model.size.height >= px(44.));
+    assert!(card.contains(&default_row.center()) && card.contains(&add_model.center()));
+    assert!(
+        fixture
+            .cx
+            .debug_bounds("settings-default-model-deepseek-v4-flash")
+            .is_none()
     );
     fixture.reveal("assistant-background");
     let background = fixture.bounds("assistant-background");
@@ -485,7 +496,10 @@ fn model_catalog_api_accounts_and_runtime_products_are_distinct_disclosures() {
     fixture.click("settings-runtime");
     assert!(fixture.cx.debug_bounds("DEEPSEEK_API_KEY").is_none());
     assert!(fixture.cx.debug_bounds("provider-logo-dsh").is_none());
-    assert!(fixture.bounds("settings-models-card").size.height <= px(62.));
+    assert_eq!(
+        fixture.bounds("settings-models-card").size.height,
+        card.size.height
+    );
     assert!(fixture.bounds("settings-accounts-card").size.height <= px(62.));
 }
 

@@ -30,6 +30,7 @@ android {
     // Existing runtime classes refer to tech.zseven.rish.BuildConfig.
     namespace "tech.zseven.rish"
     compileSdk 36
+    buildToolsVersion "36.0.0"
     ndkVersion "27.1.12297006"
     defaultConfig {
         // Parallel installation keeps the existing app and its data intact.

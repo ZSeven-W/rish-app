@@ -1,6 +1,7 @@
 #import <UIKit/UIKit.h>
 #import <QuartzCore/QuartzCore.h>
 #import "RishGPUIBridge.h"
+#import "RishRuntimeEngineDownloads.h"
 #import "RishGPUI-Swift.h"
 
 extern void rish_gpui_run(void);
@@ -49,6 +50,14 @@ static void *RishGPUIApplication;
 - (BOOL)application:(UIApplication *)application openURL:(NSURL *)url
     options:(NSDictionary<UIApplicationOpenURLOptionsKey, id> *)options {
   return [RishTaskExperienceBridge openURL:url];
+}
+- (void)application:(UIApplication *)application handleEventsForBackgroundURLSession:(NSString *)identifier
+    completionHandler:(void (^)(void))completionHandler {
+  if ([identifier isEqual:RishRuntimeEngineDownloads.backgroundSessionIdentifier]) {
+    [[RishRuntimeEngineDownloads shared] handleBackgroundEventsWithCompletion:completionHandler];
+  } else {
+    completionHandler();
+  }
 }
 - (void)startDisplayLink {
   if (self.displayLink != nil || self.gpuiWindow == NULL) return;

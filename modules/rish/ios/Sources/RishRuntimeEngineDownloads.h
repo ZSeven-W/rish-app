@@ -6,10 +6,13 @@ NS_ASSUME_NONNULL_BEGIN
 /// claim that a downloaded CLI has an assistant execution adapter.
 @interface RishRuntimeEngineDownloads : NSObject <NSURLSessionDownloadDelegate>
 + (instancetype)shared;
++ (NSString *)backgroundSessionIdentifier;
+- (void)handleBackgroundEventsWithCompletion:(void (^)(void))completion;
 + (NSDictionary<NSString *, NSDictionary *> *)descriptors;
 @property(nonatomic, readonly, nullable) NSURL *directory;
 - (NSDictionary *)installationForEngine:(NSString *)engineID;
 - (void)installEngine:(NSString *)engineID;
+- (void)cancelEngine:(NSString *)engineID;
 - (nullable NSURL *)verifiedArtifactForEngine:(NSString *)engineID;
 - (nullable NSURL *)ensureDirectory;
 
@@ -18,10 +21,15 @@ NS_ASSUME_NONNULL_BEGIN
     descriptors:(NSDictionary<NSString *, NSDictionary *> *)descriptors
     starter:(nullable void (^)(NSString *engineID, NSURL *url))starter;
 /// The real URLSession and fake transport pass through the same acceptance gate.
-- (void)finishDownloadForEngine:(NSString *)engineID file:(NSURL *)file
+- (void)finishDownloadForEngine:(NSString *)engineID attempt:(NSString *)attempt file:(NSURL *)file
     response:(nullable NSHTTPURLResponse *)response;
-- (void)failDownloadForEngine:(NSString *)engineID;
-- (void)recordProgress:(double)fraction forEngine:(NSString *)engineID;
+- (void)failDownloadForEngine:(NSString *)engineID attempt:(NSString *)attempt;
+- (void)recordProgress:(double)fraction forEngine:(NSString *)engineID attempt:(NSString *)attempt;
+- (nullable NSString *)attemptForEngine:(NSString *)engineID;
+/// System task reconciliation, also exercised by deterministic fake transports.
+- (void)beginRestoringTasks;
+- (void)restoreTasks:(NSArray<NSURLSessionTask *> *)tasks;
+- (void)retryDeferredRestoration;
 @end
 
 NS_ASSUME_NONNULL_END

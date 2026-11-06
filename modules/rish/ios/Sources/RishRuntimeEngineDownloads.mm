@@ -3,6 +3,12 @@
 #include <math.h>
 #include <stdio.h>
 #include <sys/stat.h>
+#include <unistd.h>
+#include <errno.h>
+#import <TargetConditionals.h>
+#if TARGET_OS_IOS
+#import <UIKit/UIKit.h>
+#endif
 
 static NSString *RishEngineSHA256(NSURL *url) {
   NSInputStream *stream = [NSInputStream inputStreamWithURL:url];
@@ -28,10 +34,18 @@ static NSString *RishEngineSHA256(NSURL *url) {
 @property(nonatomic, strong) NSMutableDictionary *states;
 @property(nonatomic, strong) NSMutableDictionary *verifiedFingerprints;
 @property(nonatomic, strong) NSURLSession *session;
+@property(nonatomic, strong) NSMutableDictionary<NSString *, NSURLSessionTask *> *tasks;
+@property(nonatomic, strong) NSMutableSet<NSString *> *pendingInstalls;
+@property(nonatomic) BOOL restoring;
+@property(nonatomic) BOOL stateReadBlocked;
+@property(nonatomic, strong) NSArray<NSURLSessionTask *> *deferredTasks;
+@property(nonatomic, strong) NSMutableArray *backgroundCompletions;
+@property(nonatomic) BOOL backgroundEventsFinished;
 @property(nonatomic, copy) void (^starter)(NSString *, NSURL *);
 @end
 
 @implementation RishRuntimeEngineDownloads
++ (NSString *)backgroundSessionIdentifier { return @"tech.zseven.rish.harness-cli-download"; }
 + (NSDictionary<NSString *, NSDictionary *> *)descriptors {
   // Fixed release metadata reviewed 2026-10-29. Keep URL, version, length and
   // digest together; a successful HTTP transfer alone is not an installation.
@@ -57,19 +71,13 @@ static NSString *RishEngineSHA256(NSURL *url) {
     store = [[self alloc] initWithDirectory:[support URLByAppendingPathComponent:@"harness-cli" isDirectory:YES]
         descriptors:self.descriptors starter:nil];
     NSURLSessionConfiguration *configuration = [NSURLSessionConfiguration
-        backgroundSessionConfigurationWithIdentifier:@"tech.zseven.rish.harness-cli-download"];
+        backgroundSessionConfigurationWithIdentifier:self.backgroundSessionIdentifier];
     configuration.sessionSendsLaunchEvents = YES;
     configuration.timeoutIntervalForResource = 6 * 3600;
+    [store beginRestoringTasks];
     store.session = [NSURLSession sessionWithConfiguration:configuration delegate:store delegateQueue:nil];
-    // Reattach to system-owned transfers after relaunch; this never starts one.
     [store.session getAllTasksWithCompletionHandler:^(NSArray<__kindof NSURLSessionTask *> *tasks) {
-      @synchronized (store) {
-        for (NSURLSessionTask *task in tasks) {
-          NSString *engineID = task.taskDescription;
-          if (engineID && store.artifactDescriptors[engineID] && !store.states[engineID])
-            store.states[engineID] = @{@"state": @"installing"};
-        }
-      }
+      [store restoreTasks:tasks];
     }];
   });
   return store;
@@ -82,6 +90,14 @@ static NSString *RishEngineSHA256(NSURL *url) {
     _starter = [starter copy];
     _states = [NSMutableDictionary dictionary];
     _verifiedFingerprints = [NSMutableDictionary dictionary];
+    _tasks = [NSMutableDictionary dictionary];
+    _pendingInstalls = [NSMutableSet set];
+    _backgroundCompletions = [NSMutableArray array];
+    [self loadStates];
+#if TARGET_OS_IOS
+    [NSNotificationCenter.defaultCenter addObserver:self selector:@selector(retryDeferredRestoration)
+        name:UIApplicationProtectedDataDidBecomeAvailable object:nil];
+#endif
   }
   return self;
 }
@@ -90,7 +106,12 @@ static NSString *RishEngineSHA256(NSURL *url) {
   if (!self.directory.isFileURL || !self.directory.path.isAbsolutePath ||
       (lstat(self.directory.fileSystemRepresentation, &metadata) == 0 && !S_ISDIR(metadata.st_mode))) return nil;
   if (![NSFileManager.defaultManager createDirectoryAtURL:self.directory withIntermediateDirectories:YES
-      attributes:@{NSFileProtectionKey: NSFileProtectionComplete} error:nil]) return nil;
+      attributes:@{NSFileProtectionKey: NSFileProtectionCompleteUntilFirstUserAuthentication} error:nil]) return nil;
+  // This directory and attempt journal contain public release metadata only.
+  // Keep them readable for background reconciliation after the first unlock;
+  // downloaded executable files retain Complete protection below.
+  if (![NSFileManager.defaultManager setAttributes:@{NSFileProtectionKey: NSFileProtectionCompleteUntilFirstUserAuthentication}
+      ofItemAtPath:self.directory.path error:nil]) return nil;
   [self.directory setResourceValue:@YES forKey:NSURLIsExcludedFromBackupKey error:nil];
   return self.directory;
 }
@@ -114,6 +135,8 @@ static NSString *RishEngineSHA256(NSURL *url) {
 }
 - (NSURL *)verifiedArtifactForEngine:(NSString *)engineID {
   @synchronized (self) {
+    struct stat directory;
+    if (lstat(self.directory.fileSystemRepresentation, &directory) != 0 || !S_ISDIR(directory.st_mode)) return nil;
     NSDictionary *descriptor = self.artifactDescriptors[engineID];
     NSURL *url = [self artifactForEngine:engineID];
     NSString *fingerprint = [self fingerprintForURL:url expectedSize:descriptor[@"size"]];
@@ -129,6 +152,9 @@ static NSString *RishEngineSHA256(NSURL *url) {
     NSDictionary *descriptor = self.artifactDescriptors[engineID];
     if (!descriptor) return @{@"state": @"unavailable", @"version": NSNull.null,
       @"download_supported": @NO, @"integrity": @"unknown", @"reason_code": @"installer_unavailable"};
+    if (self.stateReadBlocked) return @{@"state": @"installing", @"version": NSNull.null,
+        @"available_version": descriptor[@"version"], @"download_supported": @NO, @"integrity": @"unknown",
+        @"reason_code": @"download_storage_locked"};
     NSDictionary *state = self.states[engineID];
     BOOL verified = [self verifiedArtifactForEngine:engineID] != nil;
     struct stat metadata;
@@ -144,77 +170,328 @@ static NSString *RishEngineSHA256(NSURL *url) {
     return result;
   }
 }
+// The durable attempt is the authority for every progress/completion callback.
+// A cancelled or superseded system task can never publish into another attempt.
+- (NSURL *)stateFile { return [self.directory URLByAppendingPathComponent:@".engine-download-state.json"]; }
+- (void)loadStates {
+  struct stat metadata;
+  NSURL *file = [self stateFile];
+  self.stateReadBlocked = NO;
+  if (lstat(self.directory.fileSystemRepresentation, &metadata) != 0) {
+    self.stateReadBlocked = errno != ENOENT; return;
+  }
+  if (!S_ISDIR(metadata.st_mode)) { self.stateReadBlocked = YES; return; }
+  if (lstat(file.fileSystemRepresentation, &metadata) != 0) {
+    self.stateReadBlocked = errno != ENOENT; return;
+  }
+  if (!S_ISREG(metadata.st_mode) || metadata.st_size > 65536) { self.stateReadBlocked = YES; return; }
+  NSData *bytes = [NSData dataWithContentsOfURL:file];
+  if (!bytes) { self.stateReadBlocked = YES; return; }
+  id saved = [NSJSONSerialization JSONObjectWithData:bytes options:0 error:nil];
+  if (![saved isKindOfClass:NSDictionary.class]) return;
+  for (NSString *engine in self.artifactDescriptors) {
+    id record = saved[engine];
+    if (![record isKindOfClass:NSDictionary.class] ||
+        ![record[@"digest"] isEqual:self.artifactDescriptors[engine][@"sha256"]]) continue;
+    NSString *attempt = record[@"attempt"];
+    if (![attempt isKindOfClass:NSString.class] || ![[NSUUID alloc] initWithUUIDString:attempt]) continue;
+    NSString *phase = record[@"state"];
+    if (![@[@"installing", @"cancelled", @"finished", @"failed"] containsObject:phase ?: @""]) continue;
+    NSMutableDictionary *state = [@{@"attempt": attempt, @"digest": record[@"digest"], @"state": phase} mutableCopy];
+    if ([@[@"download_failed", @"download_integrity_failed", @"download_storage_unavailable", @"download_interrupted"]
+        containsObject:record[@"error"] ?: @""]) state[@"error"] = record[@"error"];
+    self.states[engine] = state;
+  }
+}
+- (BOOL)saveStates {
+  if (self.stateReadBlocked || ![self ensureDirectory]) return NO;
+  struct stat metadata;
+  NSURL *file = [self stateFile];
+  if (lstat(file.fileSystemRepresentation, &metadata) == 0 && !S_ISREG(metadata.st_mode)) return NO;
+  NSData *data = [NSJSONSerialization dataWithJSONObject:self.states options:0 error:nil];
+  return data && [data writeToURL:file options:NSDataWritingAtomic | NSDataWritingFileProtectionCompleteUntilFirstUserAuthentication error:nil];
+}
+- (NSString *)attemptForEngine:(NSString *)engineID {
+  @synchronized (self) { return self.states[engineID][@"attempt"]; }
+}
+- (BOOL)isCurrentEngine:(NSString *)engineID attempt:(NSString *)attempt {
+  NSDictionary *state = self.states[engineID];
+  return attempt && [state[@"attempt"] isEqual:attempt] && [state[@"state"] isEqual:@"installing"];
+}
+- (void)setTerminal:(NSString *)phase error:(NSString *)error engine:(NSString *)engineID {
+  NSMutableDictionary *record = [self.states[engineID] mutableCopy];
+  if (!record) return;
+  record[@"state"] = phase;
+  [record removeObjectForKey:@"progress"];
+  if (error) record[@"error"] = error; else [record removeObjectForKey:@"error"];
+  self.states[engineID] = record;
+  [self.pendingInstalls removeObject:engineID];
+  [self.tasks removeObjectForKey:engineID];
+  if (![self saveStates]) {
+    record[@"error"] = @"download_storage_unavailable";
+    self.states[engineID] = record;
+  }
+}
+- (NSArray<NSString *> *)identityForTask:(NSURLSessionTask *)task {
+  NSArray *identity = [task.taskDescription componentsSeparatedByString:@"|"];
+  if (identity.count != 3) return nil;
+  NSDictionary *descriptor = self.artifactDescriptors[identity[0]];
+  if (!descriptor || ![identity[2] isEqual:descriptor[@"sha256"]] ||
+      ![[NSUUID alloc] initWithUUIDString:identity[1]] ||
+      ![task.originalRequest.URL.absoluteString isEqual:descriptor[@"url"]]) return nil;
+  return identity;
+}
+- (void)beginRestoringTasks {
+  @synchronized (self) { self.restoring = YES; }
+}
+- (void)restoreTasks:(NSArray<NSURLSessionTask *> *)tasks {
+  @synchronized (self) {
+    if (!self.restoring) return;
+    if (self.stateReadBlocked) { self.deferredTasks = [tasks copy]; return; }
+    self.deferredTasks = nil;
+    [self publishDeferredDownloads];
+    for (NSURLSessionTask *task in tasks) {
+      NSArray *identity = [self identityForTask:task];
+      NSString *engine = identity.firstObject;
+      // Legacy engine-only tasks cannot prove an attempt or artifact version.
+      // Cancel them and require an explicit retry instead of adopting blindly.
+      if (!identity || ![self isCurrentEngine:engine attempt:identity[1]] ||
+          (self.tasks[engine] && self.tasks[engine] != task) || task.state == NSURLSessionTaskStateCanceling || task.state == NSURLSessionTaskStateCompleted) {
+        [task cancel]; continue;
+      }
+      self.tasks[engine] = task;
+      [self.pendingInstalls removeObject:engine];
+      if (task.state == NSURLSessionTaskStateSuspended) [task resume];
+    }
+    self.restoring = NO;
+    for (NSString *engine in self.artifactDescriptors) {
+      if (![self.states[engine][@"state"] isEqual:@"installing"] || self.tasks[engine]) continue;
+      if ([self.pendingInstalls containsObject:engine]) [self startTransfer:engine];
+      else [self setTerminal:@"failed" error:@"download_interrupted" engine:engine];
+    }
+    // Only unlink regular files with our exact staging-name format. Never
+    // recurse into a directory or follow a link left in the cache.
+    struct stat directory;
+    if (lstat(self.directory.fileSystemRepresentation, &directory) != 0 || !S_ISDIR(directory.st_mode)) return;
+    for (NSURL *file in [NSFileManager.defaultManager contentsOfDirectoryAtURL:self.directory
+        includingPropertiesForKeys:nil options:0 error:nil]) {
+      NSString *name = file.lastPathComponent;
+      if (![name hasPrefix:@".engine-download-"]) continue;
+      NSString *suffix = [name substringFromIndex:@".engine-download-".length];
+      struct stat metadata;
+      if ([[NSUUID alloc] initWithUUIDString:suffix] && lstat(file.fileSystemRepresentation, &metadata) == 0 && S_ISREG(metadata.st_mode))
+        unlink(file.fileSystemRepresentation);
+    }
+  }
+}
+- (void)retryDeferredRestoration {
+  @synchronized (self) {
+    if (!self.stateReadBlocked) return;
+    [self loadStates];
+    if (!self.stateReadBlocked && self.deferredTasks) [self restoreTasks:self.deferredTasks];
+  }
+}
+- (void)startTransfer:(NSString *)engineID {
+  [self.pendingInstalls removeObject:engineID];
+  NSURL *url = [NSURL URLWithString:self.artifactDescriptors[engineID][@"url"]];
+  if (self.starter) { self.starter(engineID, url); return; }
+  NSURLSessionDownloadTask *task = [self.session downloadTaskWithURL:url];
+  if (!task) { [self setTerminal:@"failed" error:@"download_failed" engine:engineID]; return; }
+  task.taskDescription = [NSString stringWithFormat:@"%@|%@|%@", engineID,
+      self.states[engineID][@"attempt"], self.artifactDescriptors[engineID][@"sha256"]];
+  self.tasks[engineID] = task;
+  [task resume];
+}
 - (void)installEngine:(NSString *)engineID {
   @synchronized (self) {
     NSDictionary *descriptor = self.artifactDescriptors[engineID];
-    if (!descriptor || [self verifiedArtifactForEngine:engineID] ||
+    if (self.stateReadBlocked || !descriptor || [self verifiedArtifactForEngine:engineID] ||
         [self.states[engineID][@"state"] isEqual:@"installing"]) return;
-    if (![self ensureDirectory]) {
-      self.states[engineID] = @{@"error": @"download_storage_unavailable"}; return;
+    self.states[engineID] = @{@"state": @"installing", @"progress": @0,
+        @"attempt": NSUUID.UUID.UUIDString, @"digest": descriptor[@"sha256"]};
+    if (![self saveStates]) { [self setTerminal:@"failed" error:@"download_storage_unavailable" engine:engineID]; return; }
+    // Explicit retry clears only a corrupt regular artifact. Suspicious links
+    // and directories are left untouched and prevent publication.
+    NSURL *artifact = [self artifactForEngine:engineID];
+    struct stat metadata;
+    if (lstat(artifact.fileSystemRepresentation, &metadata) == 0 &&
+        (!S_ISREG(metadata.st_mode) || unlink(artifact.fileSystemRepresentation) != 0)) {
+      [self setTerminal:@"failed" error:@"download_storage_unavailable" engine:engineID]; return;
     }
-    self.states[engineID] = @{@"state": @"installing", @"progress": @0};
-    NSURL *url = [NSURL URLWithString:descriptor[@"url"]];
-    if (self.starter) { self.starter(engineID, url); return; }
-    // Checking the existing background tasks also closes the startup window
-    // before the asynchronous restoration callback has populated local state.
-    [self.session getAllTasksWithCompletionHandler:^(NSArray<__kindof NSURLSessionTask *> *tasks) {
-      for (NSURLSessionTask *task in tasks) if ([task.taskDescription isEqual:engineID]) return;
-      NSURLSessionDownloadTask *task = [self.session downloadTaskWithURL:url];
-      task.taskDescription = engineID;
-      [task resume];
-    }];
+    if (self.restoring) [self.pendingInstalls addObject:engineID];
+    else [self startTransfer:engineID];
   }
 }
-- (void)finishDownloadForEngine:(NSString *)engineID file:(NSURL *)file response:(NSHTTPURLResponse *)response {
+- (void)cancelEngine:(NSString *)engineID {
   @synchronized (self) {
+    if (![self.states[engineID][@"state"] isEqual:@"installing"]) return;
+    NSURLSessionTask *task = self.tasks[engineID];
+    [self setTerminal:@"cancelled" error:nil engine:engineID];
+    [task cancel];
+  }
+}
+- (void)discardTemporary:(NSURL *)file {
+  // URLSession owns this transient path. Do not delete a cache artifact or
+  // recursively remove a malformed directory supplied by the transport.
+  for (NSString *engine in self.artifactDescriptors)
+    if ([file.path isEqual:[self artifactForEngine:engine].path]) return;
+  struct stat metadata;
+  if (file.isFileURL && lstat(file.fileSystemRepresentation, &metadata) == 0 && S_ISREG(metadata.st_mode))
+    unlink(file.fileSystemRepresentation);
+}
+- (void)finishDownloadForEngine:(NSString *)engineID attempt:(NSString *)attempt file:(NSURL *)file
+    response:(NSHTTPURLResponse *)response {
+  @synchronized (self) {
+    if (![self isCurrentEngine:engineID attempt:attempt]) { [self discardTemporary:file]; return; }
     NSDictionary *descriptor = self.artifactDescriptors[engineID];
-    if (!descriptor) return;
     if (!response || response.statusCode != 200 || ![self verifyURL:file descriptor:descriptor]) {
-      self.states[engineID] = @{@"error": @"download_integrity_failed"}; return;
+      [self discardTemporary:file];
+      [self setTerminal:@"failed" error:@"download_integrity_failed" engine:engineID]; return;
     }
     NSURL *target = [self artifactForEngine:engineID];
     NSFileManager *manager = NSFileManager.defaultManager;
-    if (![self ensureDirectory]) { self.states[engineID] = @{@"error": @"download_storage_unavailable"}; return; }
-    // Stage on the target filesystem, then atomically replace. A failed move,
-    // protection update or rename leaves the previous cached artifact intact.
+    struct stat metadata;
+    if (![self ensureDirectory] || (lstat(target.fileSystemRepresentation, &metadata) == 0 && !S_ISREG(metadata.st_mode))) {
+      [self discardTemporary:file];
+      [self setTerminal:@"failed" error:@"download_storage_unavailable" engine:engineID]; return;
+    }
     NSURL *staged = [self.directory URLByAppendingPathComponent:
         [@".engine-download-" stringByAppendingString:NSUUID.UUID.UUIDString]];
     if (![manager moveItemAtURL:file toURL:staged error:nil]) {
-      self.states[engineID] = @{@"error": @"download_storage_unavailable"}; return;
+      [self discardTemporary:file];
+      [self setTerminal:@"failed" error:@"download_storage_unavailable" engine:engineID]; return;
     }
     if (![manager setAttributes:@{NSFileProtectionKey: NSFileProtectionComplete} ofItemAtPath:staged.path error:nil] ||
         rename(staged.fileSystemRepresentation, target.fileSystemRepresentation) != 0) {
-      [manager removeItemAtURL:staged error:nil];
-      self.states[engineID] = @{@"error": @"download_storage_unavailable"}; return;
+      unlink(staged.fileSystemRepresentation);
+      [self setTerminal:@"failed" error:@"download_storage_unavailable" engine:engineID]; return;
     }
     [self.verifiedFingerprints removeObjectForKey:engineID];
-    self.states[engineID] = @{};
+    [self setTerminal:@"finished" error:nil engine:engineID];
   }
 }
-- (void)failDownloadForEngine:(NSString *)engineID {
+- (void)failDownloadForEngine:(NSString *)engineID attempt:(NSString *)attempt {
   @synchronized (self) {
-    if (self.artifactDescriptors[engineID] && ![self verifiedArtifactForEngine:engineID])
-      self.states[engineID] = @{@"error": @"download_failed"};
+    if ([self isCurrentEngine:engineID attempt:attempt])
+      [self setTerminal:@"failed" error:@"download_failed" engine:engineID];
   }
 }
-- (void)recordProgress:(double)fraction forEngine:(NSString *)engineID {
+- (void)recordProgress:(double)fraction forEngine:(NSString *)engineID attempt:(NSString *)attempt {
   @synchronized (self) {
-    if (self.artifactDescriptors[engineID] && isfinite(fraction) &&
-        [self.states[engineID][@"state"] isEqual:@"installing"])
-      self.states[engineID] = @{@"state": @"installing", @"progress": @((NSUInteger)floor(MIN(100., MAX(0., fraction * 100.))))};
+    if (isfinite(fraction) && [self isCurrentEngine:engineID attempt:attempt]) {
+      NSMutableDictionary *state = [self.states[engineID] mutableCopy];
+      state[@"progress"] = @((NSUInteger)floor(MIN(100., MAX(0., fraction * 100.))));
+      self.states[engineID] = state;
+    }
+  }
+}
+// The system deletes a download URL when its delegate returns. Preserve bytes
+// and a bounded public receipt while the authority journal is unreadable, then
+// validate the attempt after unlock (also after a process restart).
+- (BOOL)deferDownload:(NSURL *)location task:(NSURLSessionTask *)task {
+  NSArray *identity = [self identityForTask:task];
+  if (!identity || ![self ensureDirectory]) return NO;
+  NSString *name = [@".engine-deferred-" stringByAppendingString:NSUUID.UUID.UUIDString];
+  NSURL *bytes = [self.directory URLByAppendingPathComponent:[name stringByAppendingString:@".bin"]];
+  NSURL *receipt = [self.directory URLByAppendingPathComponent:[name stringByAppendingString:@".json"]];
+  struct stat metadata;
+  if (lstat(location.fileSystemRepresentation, &metadata) != 0 || !S_ISREG(metadata.st_mode) ||
+      ![NSFileManager.defaultManager moveItemAtURL:location toURL:bytes error:nil]) return NO;
+  NSInteger status = [task.response isKindOfClass:NSHTTPURLResponse.class] ? ((NSHTTPURLResponse *)task.response).statusCode : 0;
+  NSDictionary *record = @{@"engine": identity[0], @"attempt": identity[1], @"digest": identity[2], @"status": @(status)};
+  NSData *data = [NSJSONSerialization dataWithJSONObject:record options:0 error:nil];
+  if (![NSFileManager.defaultManager setAttributes:@{NSFileProtectionKey: NSFileProtectionCompleteUntilFirstUserAuthentication}
+      ofItemAtPath:bytes.path error:nil] ||
+      ![data writeToURL:receipt options:NSDataWritingAtomic | NSDataWritingFileProtectionCompleteUntilFirstUserAuthentication error:nil]) {
+    unlink(bytes.fileSystemRepresentation); return NO;
+  }
+  return YES;
+}
+- (void)publishDeferredDownloads {
+  struct stat directory;
+  if (lstat(self.directory.fileSystemRepresentation, &directory) != 0 || !S_ISDIR(directory.st_mode)) return;
+  for (NSURL *receipt in [NSFileManager.defaultManager contentsOfDirectoryAtURL:self.directory
+      includingPropertiesForKeys:nil options:0 error:nil]) {
+    NSString *name = receipt.lastPathComponent;
+    if (![name hasPrefix:@".engine-deferred-"] || ![name hasSuffix:@".json"]) continue;
+    NSString *identifier = [[name stringByDeletingPathExtension] substringFromIndex:@".engine-deferred-".length];
+    struct stat metadata;
+    if (![[NSUUID alloc] initWithUUIDString:identifier] ||
+        lstat(receipt.fileSystemRepresentation, &metadata) != 0 || !S_ISREG(metadata.st_mode) || metadata.st_size > 4096) continue;
+    NSData *data = [NSData dataWithContentsOfURL:receipt];
+    if (!data) continue;
+    id record = [NSJSONSerialization JSONObjectWithData:data options:0 error:nil];
+    NSURL *bytes = [[receipt URLByDeletingPathExtension] URLByAppendingPathExtension:@"bin"];
+    if ([record isKindOfClass:NSDictionary.class] && [record[@"engine"] isKindOfClass:NSString.class] &&
+        [record[@"attempt"] isKindOfClass:NSString.class] && [record[@"status"] isKindOfClass:NSNumber.class] &&
+        [record[@"digest"] isEqual:self.artifactDescriptors[record[@"engine"]][@"sha256"]]) {
+      NSURL *url = [NSURL URLWithString:self.artifactDescriptors[record[@"engine"]][@"url"]];
+      NSHTTPURLResponse *response = [[NSHTTPURLResponse alloc] initWithURL:url statusCode:[record[@"status"] integerValue]
+          HTTPVersion:@"HTTP/1.1" headerFields:@{}];
+      [self finishDownloadForEngine:record[@"engine"] attempt:record[@"attempt"] file:bytes response:response];
+    }
+    [self discardTemporary:bytes];
+    unlink(receipt.fileSystemRepresentation);
+  }
+}
+- (NSArray<NSString *> *)callbackIdentityForTask:(NSURLSessionTask *)task bindIfRestoring:(BOOL)bind {
+  @synchronized (self) {
+    if (self.stateReadBlocked) return nil;
+    NSArray *identity = [self identityForTask:task];
+    if (!identity || ![self isCurrentEngine:identity[0] attempt:identity[1]]) return nil;
+    NSURLSessionTask *owned = self.tasks[identity[0]];
+    if ((owned && owned != task) || task.state == NSURLSessionTaskStateCanceling) return nil;
+    // An unowned cancellation/error before enumeration may belong to a
+    // duplicate rejected by the previous process. Let reconciliation decide.
+    if (!owned && self.restoring && !bind) return nil;
+    // A background delegate may arrive before getAllTasks completes. Bind it
+    // now, so another task with a duplicate description cannot settle it.
+    if (!owned && self.restoring) self.tasks[identity[0]] = task;
+    return identity;
+  }
+}
+- (void)handleBackgroundEventsWithCompletion:(void (^)(void))completion {
+  @synchronized (self) {
+    [self.backgroundCompletions addObject:[completion copy]];
+    [self finishBackgroundEventsIfReady];
+  }
+}
+- (void)finishBackgroundEventsIfReady {
+  if (!self.backgroundEventsFinished || !self.backgroundCompletions.count) return;
+  NSArray *completions = [self.backgroundCompletions copy];
+  [self.backgroundCompletions removeAllObjects];
+  self.backgroundEventsFinished = NO;
+  dispatch_async(dispatch_get_main_queue(), ^{
+    for (void (^completion)(void) in completions) completion();
+  });
+}
+- (void)URLSessionDidFinishEventsForBackgroundURLSession:(NSURLSession *)session {
+  @synchronized (self) {
+    self.backgroundEventsFinished = YES;
+    [self finishBackgroundEventsIfReady];
   }
 }
 - (void)URLSession:(NSURLSession *)session downloadTask:(NSURLSessionDownloadTask *)task
     didFinishDownloadingToURL:(NSURL *)location {
-  if (task.taskDescription) [self finishDownloadForEngine:task.taskDescription file:location
+  @synchronized (self) {
+    if (self.stateReadBlocked) {
+      if (![self deferDownload:location task:task]) [self discardTemporary:location];
+      return;
+    }
+  }
+  NSArray *identity = [self callbackIdentityForTask:task bindIfRestoring:YES];
+  if (identity) [self finishDownloadForEngine:identity[0] attempt:identity[1] file:location
       response:[task.response isKindOfClass:NSHTTPURLResponse.class] ? (NSHTTPURLResponse *)task.response : nil];
+  else [self discardTemporary:location];
 }
 - (void)URLSession:(NSURLSession *)session task:(NSURLSessionTask *)task didCompleteWithError:(NSError *)error {
-  if (error && task.taskDescription) [self failDownloadForEngine:task.taskDescription];
+  NSArray *identity = [self callbackIdentityForTask:task bindIfRestoring:NO];
+  if (error && identity) [self failDownloadForEngine:identity[0] attempt:identity[1]];
 }
 - (void)URLSession:(NSURLSession *)session downloadTask:(NSURLSessionDownloadTask *)task
     didWriteData:(int64_t)bytesWritten totalBytesWritten:(int64_t)total
     totalBytesExpectedToWrite:(int64_t)expected {
-  if (expected > 0 && task.taskDescription) [self recordProgress:(double)total / expected forEngine:task.taskDescription];
+  NSArray *identity = [self callbackIdentityForTask:task bindIfRestoring:YES];
+  if (expected > 0 && identity) [self recordProgress:(double)total / expected forEngine:identity[0] attempt:identity[1]];
 }
 @end

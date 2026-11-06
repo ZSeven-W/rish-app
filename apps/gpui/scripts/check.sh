@@ -23,10 +23,11 @@ case "$mode" in
     ;;
   ios)
     require_macos
-    export IPHONEOS_DEPLOYMENT_TARGET=16.0
     for target in aarch64-apple-ios-sim aarch64-apple-ios; do
       require_target "$target"
-      cargo check --locked --manifest-path "$GPUI_DIR/mobile/Cargo.toml" --target "$target" --lib
+      # Keep the mobile deployment target out of the macOS bridge tests below.
+      IPHONEOS_DEPLOYMENT_TARGET=16.0 cargo check --locked \
+        --manifest-path "$GPUI_DIR/mobile/Cargo.toml" --target "$target" --lib
     done
     "$GPUI_DIR/ios/check-bridge.sh"
     ;;

@@ -422,3 +422,105 @@ fn model_picker_short_landscape_bounds_done_and_scrolls_models_with_fixed_naviga
     assert!(!fixture.read(|shell, _| shell.model_picker));
     fixture.assert_composer_focused();
 }
+
+#[test]
+fn model_setup_roundtrip_preserves_chat_and_configuration_drafts_on_phone_and_tablet() {
+    for (width, height) in [(390., 844.), (844., 390.), (1194., 834.)] {
+        let mut fixture = Fixture::new(width, height);
+        fixture.load_transcript();
+        let session = fixture.read(|shell, _| shell.state.raw_session().clone());
+        fixture.click("model-picker-open");
+        fixture.update(|shell, _, cx| {
+            shell.config_draft.as_mut().unwrap().thinking = "max".into();
+            shell.show_configuration_page(ConfigurationPage::Models, cx);
+        });
+        fixture.draw();
+        let entry = fixture.bounds("model-picker-add-model");
+        assert!(
+            fixture
+                .bounds("model-picker-list")
+                .contains(&entry.center())
+        );
+        fixture.click("model-picker-add-model");
+        assert!(fixture.read(|shell, _| shell.page == Page::Chat));
+        assert!(fixture.read(|shell, _| shell.config_page == ConfigurationPage::Providers));
+        let panel = fixture.bounds("config-panel");
+        let setup = fixture.bounds("model-picker-provider-setup");
+        assert!(setup.bottom() <= panel.bottom());
+        assert!(panel.contains(&fixture.bounds("model-picker-back").center()));
+        assert!(
+            fixture
+                .cx
+                .debug_bounds("settings-add-custom-provider")
+                .is_some()
+        );
+        fixture.click("DEEPSEEK_API_KEY");
+        assert!(fixture.cx.debug_bounds("provider-models-editor").is_some());
+        fixture.assert_draft("deepseek-v4-flash", "max");
+        fixture.assert_session_unchanged(&session);
+        fixture.click("model-picker-back");
+        assert!(fixture.read(|shell, _| shell.config_page == ConfigurationPage::Models));
+        fixture.assert_draft("deepseek-v4-flash", "max");
+        fixture.assert_session_unchanged(&session);
+        fixture.escape();
+        fixture.assert_composer_focused();
+    }
+}
+
+#[test]
+fn removed_staged_model_keeps_configuration_draft_and_shows_validation_error() {
+    let mut fixture = Fixture::new(390., 844.);
+    fixture.load_transcript();
+    let session = fixture.read(|shell, _| shell.state.raw_session().clone());
+    fixture.click("model-picker-open");
+    fixture.click("config-model-row");
+    fixture.click("model-picker-row-deepseek-v4-pro");
+    fixture.click("config-thinking-row");
+    fixture.click("thinking-picker-row-max");
+    fixture.click("config-model-row");
+    fixture.click("model-picker-add-model");
+    // Accept the same saved catalog response used by the provider editor, with
+    // the staged model removed. Existing conversation A must remain unchanged.
+    fixture.update(|shell, _, cx| {
+        let models = shell.state.models();
+        let initial = json!({"schema_version":1,"revision":0,"providers":
+            provider_models::HARNESSES.iter().map(|harness| json!({
+                "harness_id":harness,"models":models.iter().filter(|model| model.harness==*harness)
+                    .map(|model| json!({"id":model.id,"name":model.name,"supports_images":false}))
+                    .collect::<Vec<_>>(),"retired_models":[]
+            })).collect::<Vec<_>>()});
+        let remaining: Vec<_> = models.iter().filter(|model| model.harness=="dsh" && model.id!="deepseek-v4-pro")
+            .map(|model| json!({"id":model.id,"name":model.name,"supports_images":false})).collect();
+        // The real save reducer retires B and preserves all historical IDs.
+        let catalog = rish_shell_core::provider_model_catalog::save_registry(&initial,
+            &json!({"schema_version":1,"harness_id":"dsh","expected_revision":0,"models":remaining}),
+            &Value::Null, &[]).unwrap();
+        shell.accept_provider_models_snapshot(catalog).unwrap();
+        cx.notify();
+    });
+    fixture.draw();
+    fixture.click("model-picker-back");
+    fixture.click("model-picker-back");
+    // Headless runtime deliberately cannot persist. Exercise Done's native
+    // preparation result with the actual shared-core rejection instead.
+    fixture.update(|shell, window, cx| {
+        let draft = shell.config_draft.as_ref().unwrap().clone();
+        let result = shell
+            .state
+            .set_chat_configuration(&draft.model, &draft.thinking);
+        assert_eq!(result.as_ref().unwrap_err(), "Choose a current model");
+        shell.complete_configuration_preparation(result, window, cx);
+    });
+    fixture.draw();
+    fixture.assert_configure_page();
+    fixture.assert_draft("deepseek-v4-pro", "max");
+    fixture.assert_session_unchanged(&session);
+    let error = fixture.bounds("config-error");
+    assert!(fixture.bounds("config-panel").contains(&error.center()));
+    fixture.update(|shell, window, _| assert!(shell.model_picker_focus.is_focused(window)));
+    fixture.click("config-model-row");
+    fixture.click("model-picker-row-deepseek-v4-flash");
+    fixture.assert_draft("deepseek-v4-flash", "max");
+    assert!(fixture.cx.debug_bounds("config-error").is_none());
+    fixture.assert_session_unchanged(&session);
+}

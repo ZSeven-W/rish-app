@@ -71,6 +71,20 @@ class ShellRuntimeEnginesRoutesTest {
         catalogReportsRealBuiltinAndExplicitlyUnavailableOptionalRuntimes()
     }
 
+    @Test fun cancelValidatesExplicitActionAndNeverPretendsAnUnavailableDownloadStopped() {
+        for (id in listOf("pi") + cliIds) {
+            val failure = assertThrows(BridgeFailure::class.java) {
+                ShellRuntimeEnginesRoutes.call("cancel", install(id))
+            }
+            assertEquals("E_RUNTIME_ENGINE_INSTALL_UNAVAILABLE", failure.code)
+        }
+        for (args in listOf(install(initiated = false), install(schema = true), install(schema = 1.0),
+            install("unknown"), install().apply { getJSONObject(0).put("url", "https://example.invalid/") })) {
+            assertThrows(IllegalArgumentException::class.java) { ShellRuntimeEnginesRoutes.call("cancel", args) }
+        }
+        catalogReportsRealBuiltinAndExplicitlyUnavailableOptionalRuntimes()
+    }
+
     @Test fun builtinInstallIsIdempotentAndDoesNotEnableAnyCli() {
         val result = ShellRuntimeEnginesRoutes.call("install", install("pi"))
         assertEquals(ShellRuntimeEnginesRoutes.call("catalog", JSONArray()).toString(), result.toString())

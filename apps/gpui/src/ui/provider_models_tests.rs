@@ -186,7 +186,7 @@ fn empty_catalog_shows_provider_setup_without_inventing_a_model_or_changing_pref
             .unwrap();
         let b = f.cx.debug_bounds("settings-models-empty").unwrap();
         assert!(b.left() >= px(0.) && b.right() <= px(width));
-        f.click("settings-models-empty-configure");
+        f.click("settings-add-model");
         f.window
             .read_with(&f.cx, |s, _| {
                 assert!(s.settings_expanded == Some(settings::PreferenceGroup::Accounts));
@@ -372,12 +372,12 @@ fn empty_model_picker_opens_setup_guide_without_mutating_saved_choice() {
         .unwrap();
     f.draw();
     assert!(f.cx.debug_bounds("model-picker-empty").is_some());
-    f.click("model-picker-empty-configure");
+    f.click("model-picker-add-model");
     f.window
         .read_with(&f.cx, |s, _| {
-            assert!(!s.model_picker);
+            assert!(s.model_picker);
+            assert!(s.config_page == model_picker::ConfigurationPage::Providers);
             assert!(s.page == Page::Settings);
-            assert!(s.settings_expanded == Some(settings::PreferenceGroup::Accounts));
             assert_eq!(s.state.raw_session(), &before);
         })
         .unwrap();
@@ -442,4 +442,151 @@ fn send_setup_picker_receives_keyboard_focus_and_restores_it_on_close() {
             assert!(s.drawer_focus.is_focused(window));
         })
         .unwrap();
+}
+
+#[test]
+fn model_setup_saved_catalog_returns_to_picker_without_selecting_new_model_automatically() {
+    let initial = registry(vec![row("wire-alpha", "Alpha", false).value()]);
+    let mut f = Fixture::new(390., 844., initial.clone());
+    f.window
+        .update(&mut f.cx, |s, window, cx| {
+            s.page = Page::Chat;
+            s.composer.update(cx, |input, cx| {
+                input.set_text("Keep my question".into(), cx)
+            });
+            s.open_model_picker(window, cx);
+            s.show_configuration_page(model_picker::ConfigurationPage::Models, cx);
+        })
+        .unwrap();
+    f.draw();
+    f.click("model-picker-add-model");
+    let before = f
+        .window
+        .read_with(&f.cx, |s, _| s.state.raw_session().clone())
+        .unwrap();
+    f.window.update(&mut f.cx, |s, _, cx| {
+        s.open_provider_models("dsh", cx);
+        let editor = s.provider_models.editor.as_mut().unwrap();
+        editor.set_models("wire-alpha | Alpha\nwire-beta | My new model").unwrap();
+        let models: Vec<_> = editor.models.iter().map(ModelRow::value).collect();
+        let response = rish_shell_core::provider_model_catalog::save_registry(&initial,
+            &json!({"schema_version":1,"harness_id":"dsh","expected_revision":1,"models":models}), &Value::Null, &[]).unwrap();
+        let pending = request(editor, Operation::Save { models, revision:1 });
+        s.provider_models.request = Some(pending.clone());
+        s.complete_provider_models_request(pending, Ok(response), cx);
+    }).unwrap();
+    f.draw();
+    f.click("model-picker-back");
+    assert!(f.cx.debug_bounds("model-picker-row-wire-beta").is_some());
+    f.window
+        .read_with(&f.cx, |s, cx| {
+            assert_eq!(s.state.raw_session(), &before);
+            assert_eq!(s.composer.read(cx).text(), "Keep my question");
+            assert_ne!(s.config_draft.as_ref().unwrap().model, "wire-beta");
+        })
+        .unwrap();
+    f.click("model-picker-row-wire-beta");
+    f.window
+        .read_with(&f.cx, |s, _| {
+            assert_eq!(s.config_draft.as_ref().unwrap().model, "wire-beta");
+            assert_eq!(s.state.raw_session(), &before);
+        })
+        .unwrap();
+}
+
+#[test]
+fn default_model_setup_entry_and_return_work_with_populated_catalog() {
+    for width in [390., 1194.] {
+        let mut f = Fixture::new(
+            width,
+            834.,
+            registry(vec![row("wire-alpha", "Alpha", false).value()]),
+        );
+        let before = f
+            .window
+            .read_with(&f.cx, |s, _| s.state.raw_session().clone())
+            .unwrap();
+        f.click("settings-add-model");
+        f.click("model-setup-return-defaults");
+        assert!(
+            f.cx.debug_bounds("settings-default-model-wire-alpha")
+                .is_some()
+        );
+        f.window
+            .read_with(&f.cx, |s, _| {
+                assert!(s.settings_expanded == Some(settings::PreferenceGroup::Models));
+                assert_eq!(s.state.raw_session(), &before);
+            })
+            .unwrap();
+    }
+}
+
+#[test]
+fn model_setup_long_editor_scrolls_manual_and_save_into_view_with_fixed_header() {
+    use gpui::{ScrollDelta, ScrollWheelEvent, TouchPhase, point};
+    for (width, height, count) in [
+        (390., 844., 0),
+        (390., 844., 24),
+        (844., 390., 0),
+        (844., 390., 24),
+        (1194., 834., 0),
+        (1194., 834., 24),
+    ] {
+        let models = (0..count)
+            .map(|i| row(&format!("manual-{i}"), &format!("Model {i}"), false).value())
+            .collect();
+        let mut f = Fixture::new(width, height, registry(models));
+        f.window
+            .update(&mut f.cx, |shell, window, cx| {
+                shell.page = Page::Chat;
+                shell.open_model_picker(window, cx);
+                shell.show_configuration_page(model_picker::ConfigurationPage::Models, cx);
+            })
+            .unwrap();
+        f.draw();
+        f.click("model-picker-add-model");
+        f.click("DEEPSEEK_API_KEY");
+        let viewport = f.cx.debug_bounds("model-picker-provider-setup").unwrap();
+        let header = f.cx.debug_bounds("model-picker-header").unwrap();
+        let back = f.cx.debug_bounds("model-picker-back").unwrap();
+        let close = f.cx.debug_bounds("model-picker-close").unwrap();
+        let session = f
+            .window
+            .read_with(&f.cx, |shell, _| shell.state.raw_session().clone())
+            .unwrap();
+        for selector in ["provider-models-manual", "provider-models-save"] {
+            let mut visible = false;
+            for _ in 0..30 {
+                let target = f.cx.debug_bounds(selector).unwrap();
+                if target.top() >= viewport.top() && target.bottom() <= viewport.bottom() {
+                    visible = true;
+                    break;
+                }
+                f.cx.simulate_event(ScrollWheelEvent {
+                    position: viewport.center(),
+                    delta: ScrollDelta::Pixels(point(px(0.), px(-100.))),
+                    modifiers: Modifiers::none(),
+                    touch_phase: TouchPhase::Moved,
+                });
+                f.draw();
+            }
+            assert!(
+                visible,
+                "{selector} must scroll into the {width}x{height} viewport"
+            );
+            assert_eq!(f.cx.debug_bounds("model-picker-header").unwrap(), header);
+            assert_eq!(f.cx.debug_bounds("model-picker-back").unwrap(), back);
+            assert_eq!(f.cx.debug_bounds("model-picker-close").unwrap(), close);
+        }
+        f.window
+            .read_with(&f.cx, |shell, _| {
+                assert!(shell.model_picker_scroll.offset().y < px(0.));
+                assert_eq!(shell.state.raw_session(), &session);
+                assert_eq!(
+                    shell.provider_models.editor.as_ref().unwrap().models.len(),
+                    count
+                );
+            })
+            .unwrap();
+    }
 }

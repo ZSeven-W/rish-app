@@ -446,6 +446,12 @@ impl Shell {
             self.runtime_edit_enabled()
         };
         let selected = value == "✓";
+        let theme = cx
+            .try_global::<theme::ThemeState>()
+            .copied()
+            .unwrap_or_default();
+        let dark = theme.mode == theme::ThemeMode::Dark
+            || (theme.mode == theme::ThemeMode::System && theme.system_dark);
         div()
             .id(id)
             .debug_selector(move || id.into())
@@ -463,6 +469,7 @@ impl Shell {
                 })
             })
             .min_h(px(48.))
+            .when(radio, |row| row.min_h(px(64.)))
             .px_4()
             .py_3()
             .flex()
@@ -470,6 +477,20 @@ impl Shell {
             .gap_3()
             .when(enabled, |row| {
                 row.cursor_pointer().hover(|style| style.bg(p.surface))
+            })
+            .when(matches!(action, RuntimeAction::Pi), |row| {
+                row.child(crate::providers::pi_logo(30., dark))
+            })
+            .when(matches!(action, RuntimeAction::Custom), |row| {
+                row.child(
+                    div()
+                        .size(px(30.))
+                        .flex_shrink_0()
+                        .flex()
+                        .items_center()
+                        .justify_center()
+                        .child(icon(Icon::CodeXml, 24., p.muted)),
+                )
             })
             .child(
                 div()

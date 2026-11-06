@@ -61,4 +61,27 @@ RISH_NATIVE_METHOD(install, installWithRequest:(NSDictionary *)request
   [self.downloads installEngine:engineID];
   [self catalogWithResolver:resolve rejecter:reject];
 }
+RISH_NATIVE_METHOD(cancel, cancelWithRequest:(NSDictionary *)request
+    resolver:(RishResolveBlock)resolve rejecter:(RishRejectBlock)reject) {
+  if (![request isKindOfClass:NSDictionary.class]) {
+    reject(@"runtime_engine_invalid_request", @"Choose a runtime engine download from an explicit user action.", nil); return;
+  }
+  id schema = request[@"schema_version"];
+  id initiated = request[@"userInitiated"];
+  NSString *engineID = request[@"engine_id"];
+  BOOL valid = [request isKindOfClass:NSDictionary.class] && request.count == 3 &&
+      [schema isKindOfClass:NSNumber.class] && CFGetTypeID((__bridge CFTypeRef)schema) != CFBooleanGetTypeID() &&
+      !CFNumberIsFloatType((__bridge CFNumberRef)schema) &&
+      [schema isEqual:@1] && [initiated isKindOfClass:NSNumber.class] &&
+      CFGetTypeID((__bridge CFTypeRef)initiated) == CFBooleanGetTypeID() && [initiated boolValue] &&
+      [engineID isKindOfClass:NSString.class] && [@[@"dsh", @"claude-code", @"codex", @"zcode"] containsObject:engineID];
+  if (!valid) {
+    reject(@"runtime_engine_invalid_request", @"Choose a runtime engine download from an explicit user action.", nil); return;
+  }
+  if (![[self.downloads installationForEngine:engineID][@"download_supported"] boolValue]) {
+    reject(@"runtime_engine_installer_unavailable", @"This runtime engine has no installer on this device.", nil); return;
+  }
+  [self.downloads cancelEngine:engineID];
+  [self catalogWithResolver:resolve rejecter:reject];
+}
 @end

@@ -2,6 +2,23 @@
 //! Product logos belong to execution engines, never model or API account rows.
 use gpui::{AnyElement, div, img, prelude::*, px, rgb, svg};
 
+/// The embedded Pi engine is not an optional download or subscription product.
+pub fn pi_logo(size: f32, dark: bool) -> AnyElement {
+    div()
+        .debug_selector(|| "provider-logo-pi".into())
+        .size(px(size))
+        .flex_shrink_0()
+        .child(
+            svg()
+                .path("providers/pi.svg")
+                .size(px(size))
+                // Match the original badge's light/dark CSS colors explicitly;
+                // GPUI's SVG mask renderer does not evaluate media queries.
+                .text_color(rgb(if dark { 0xf6f6f6 } else { 0x111111 })),
+        )
+        .into_any_element()
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum RuntimeProduct {
     Dsh,
@@ -95,6 +112,10 @@ impl ApiProvider {
 }
 
 pub(crate) const ASSETS: &[(&str, &[u8])] = &[
+    (
+        "providers/pi.svg",
+        include_bytes!("../assets/providers/pi.svg"),
+    ),
     (
         "providers/dsh.svg",
         include_bytes!("../assets/providers/dsh.svg"),

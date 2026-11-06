@@ -1,6 +1,27 @@
 #import <Foundation/Foundation.h>
 #import "ShellRuntimeEnginesModule.h"
 #import "RishRuntimeEngineDownloads.h"
+#include <sys/stat.h>
+
+// Exercise the actual URLSession delegate path with controllable task identity
+// and delivery order, without release servers or background daemon timing.
+@interface FixtureDownloadTask : NSURLSessionDownloadTask
+@property(nonatomic, copy) NSString *fixtureDescription;
+@property(nonatomic, strong) NSURLRequest *fixtureRequest;
+@property(nonatomic, strong) NSHTTPURLResponse *fixtureResponse;
+@property(nonatomic) NSURLSessionTaskState fixtureState;
+@property(nonatomic) NSUInteger cancellations;
+@property(nonatomic) NSUInteger resumes;
+@end
+@implementation FixtureDownloadTask
+- (NSString *)taskDescription { return self.fixtureDescription; }
+- (void)setTaskDescription:(NSString *)value { self.fixtureDescription = value; }
+- (NSURLRequest *)originalRequest { return self.fixtureRequest; }
+- (NSURLResponse *)response { return self.fixtureResponse; }
+- (NSURLSessionTaskState)state { return self.fixtureState; }
+- (void)cancel { self.cancellations++; self.fixtureState = NSURLSessionTaskStateCanceling; }
+- (void)resume { self.resumes++; self.fixtureState = NSURLSessionTaskStateRunning; }
+@end
 
 static NSUInteger checks;
 static void Check(BOOL condition, NSString *message) {
@@ -36,6 +57,171 @@ static NSURL *TempFile(NSURL *root, NSData *bytes) {
   NSURL *url = [root URLByAppendingPathComponent:NSUUID.UUID.UUIDString];
   Check([bytes writeToURL:url atomically:YES], @"Fixture file is created");
   return url;
+}
+static FixtureDownloadTask *Task(RishRuntimeEngineDownloads *downloads, NSDictionary *descriptor) {
+  #pragma clang diagnostic push
+  #pragma clang diagnostic ignored "-Wdeprecated-declarations"
+  FixtureDownloadTask *task = [FixtureDownloadTask new];
+  #pragma clang diagnostic pop
+  task.taskDescription = [NSString stringWithFormat:@"codex|%@|%@", [downloads attemptForEngine:@"codex"], descriptor[@"sha256"]];
+  task.fixtureRequest = [NSURLRequest requestWithURL:[NSURL URLWithString:descriptor[@"url"]]];
+  task.fixtureResponse = Response(200);
+  task.fixtureState = NSURLSessionTaskStateSuspended;
+  return task;
+}
+static NSDictionary *Cancel(ShellRuntimeEnginesModule *module, id request, NSString *expectedError) {
+  __block NSDictionary *result;
+  __block NSString *failure;
+  [module cancelWithRequest:request resolver:^(id value) { result = value; }
+      rejecter:^(NSString *code, NSString *message, NSError *error) { failure = code; }];
+  Check(expectedError ? [failure isEqual:expectedError] : result != nil, @"Cancel has the expected disposition");
+  return result;
+}
+static void LifecycleChecks(NSURL *root, NSDictionary *descriptor) {
+  NSURL *cache = [root URLByAppendingPathComponent:@"lifecycle"];
+  NSDictionary *descriptors = @{@"codex": descriptor};
+  __block NSUInteger started = 0;
+  void (^starter)(NSString *, NSURL *) = ^(NSString *engine, NSURL *url) { started++; };
+  RishRuntimeEngineDownloads *(^load)(void) = ^{
+    return [[RishRuntimeEngineDownloads alloc] initWithDirectory:cache descriptors:descriptors starter:starter];
+  };
+  NSData *good = [@"abc" dataUsingEncoding:NSUTF8StringEncoding];
+  RishRuntimeEngineDownloads *downloads = load();
+  ShellRuntimeEnginesModule *module = [[ShellRuntimeEnginesModule alloc] initWithDownloads:(id)downloads];
+  for (id request in @[@{}, @[], Request(@"pi"),
+      @{@"schema_version": @1, @"engine_id": @"codex", @"userInitiated": @NO},
+      @{@"schema_version": @YES, @"engine_id": @"codex", @"userInitiated": @YES},
+      @{@"schema_version": @1, @"engine_id": @"codex", @"userInitiated": @YES, @"attempt": @"forged"}])
+    Cancel(module, request, @"runtime_engine_invalid_request");
+  Cancel(module, Request(@"dsh"), @"runtime_engine_installer_unavailable");
+  [downloads installEngine:@"codex"];
+  FixtureDownloadTask *old = Task(downloads, descriptor);
+  NSString *oldAttempt = [downloads attemptForEngine:@"codex"];
+  Cancel(module, Request(@"codex"), nil);
+  Check([[downloads installationForEngine:@"codex"][@"state"] isEqual:@"not_installed"], @"Cancel stops progress immediately");
+  // Recreate the service before the cancelled daemon task disappears.
+  downloads = load();
+  [downloads beginRestoringTasks];
+  [downloads restoreTasks:@[old]];
+  Check(old.cancellations == 1 && old.resumes == 0, @"Durable cancellation cannot be resurrected on launch");
+  [downloads installEngine:@"codex"];
+  Check(![[downloads attemptForEngine:@"codex"] isEqual:oldAttempt], @"Retry has a fresh attempt identity");
+  FixtureDownloadTask *current = Task(downloads, descriptor);
+  NSURL *late = TempFile(root, good);
+  [downloads URLSession:NSURLSession.sharedSession downloadTask:old didFinishDownloadingToURL:late];
+  [downloads URLSession:NSURLSession.sharedSession task:old didCompleteWithError:[NSError errorWithDomain:@"fixture" code:1 userInfo:nil]];
+  [downloads URLSession:NSURLSession.sharedSession downloadTask:old didWriteData:3 totalBytesWritten:3 totalBytesExpectedToWrite:3];
+  Check(![NSFileManager.defaultManager fileExistsAtPath:late.path], @"Late completion temporary bytes are discarded");
+  Check([downloads verifiedArtifactForEngine:@"codex"] == nil &&
+      [[[downloads installationForEngine:@"codex"] objectForKey:@"progress"] isEqual:@0], @"Old success, error and progress cannot pollute retry");
+  // A forged/stale artifact URL cannot use a valid attempt token.
+  FixtureDownloadTask *wrongURL = Task(downloads, descriptor);
+  wrongURL.fixtureRequest = [NSURLRequest requestWithURL:[NSURL URLWithString:@"https://wrong.invalid/artifact"]];
+  [downloads URLSession:NSURLSession.sharedSession downloadTask:wrongURL didFinishDownloadingToURL:TempFile(root, good)];
+  Check([downloads verifiedArtifactForEngine:@"codex"] == nil, @"Task original URL is part of artifact authority");
+  downloads = load();
+  [downloads beginRestoringTasks];
+  [downloads installEngine:@"codex"];
+  NSUInteger before = started;
+  FixtureDownloadTask *duplicate = Task(downloads, descriptor);
+  FixtureDownloadTask *cancelledBeforeRestore = Task(downloads, descriptor);
+  [cancelledBeforeRestore cancel];
+  [downloads URLSession:NSURLSession.sharedSession task:cancelledBeforeRestore didCompleteWithError:
+      [NSError errorWithDomain:NSURLErrorDomain code:NSURLErrorCancelled userInfo:nil]];
+  Check([[downloads installationForEngine:@"codex"][@"state"] isEqual:@"installing"],
+      @"Early duplicate cancellation cannot seize recovery ownership");
+  [downloads restoreTasks:@[current, wrongURL, duplicate]];
+  [downloads URLSession:NSURLSession.sharedSession task:duplicate didCompleteWithError:[NSError errorWithDomain:@"cancelled duplicate" code:1 userInfo:nil]];
+  Check([[downloads installationForEngine:@"codex"][@"state"] isEqual:@"installing"], @"Cancelled duplicate task cannot fail the accepted restored task");
+  Check(started == before && current.resumes == 1 && wrongURL.cancellations == 1,
+      @"Restore reattaches the exact task and does not duplicate it");
+  [downloads URLSession:NSURLSession.sharedSession downloadTask:current didWriteData:1 totalBytesWritten:1 totalBytesExpectedToWrite:2];
+  Check([[downloads installationForEngine:@"codex"][@"progress"] isEqual:@50], @"Restored task progress reaches the current attempt");
+  NSURL *journal = [cache URLByAppendingPathComponent:@".engine-download-state.json"];
+  Check(chmod(journal.fileSystemRepresentation, 0000) == 0, @"Fixture blocks journal reads");
+  RishRuntimeEngineDownloads *locked = load();
+  [locked beginRestoringTasks];
+  [locked restoreTasks:@[current]];
+  Check(current.cancellations == 0 && ![[locked installationForEngine:@"codex"][@"download_supported"] boolValue],
+      @"Unreadable journal defers restoration without cancelling system-owned work");
+  [locked installEngine:@"codex"];
+  Check(started == before, @"Unreadable journal cannot launch a conflicting attempt");
+  NSURL *whileLocked = TempFile(root, good);
+  [locked URLSession:NSURLSession.sharedSession downloadTask:current didFinishDownloadingToURL:whileLocked];
+  Check(![NSFileManager.defaultManager fileExistsAtPath:whileLocked.path], @"Blocked completion leaves no dependency on system temporary URL");
+  current.fixtureState = NSURLSessionTaskStateCompleted;
+  locked = load();
+  [locked beginRestoringTasks];
+  [locked restoreTasks:@[current]];
+  Check(chmod(journal.fileSystemRepresentation, 0600) == 0, @"Fixture unlocks journal");
+  [locked retryDeferredRestoration];
+  Check([[locked installationForEngine:@"codex"][@"download_supported"] boolValue],
+      @"Protected data availability reconciles deferred system tasks");
+  Check([locked verifiedArtifactForEngine:@"codex"] != nil,
+      @"Completion during journal lock survives restart and is published after unlock");
+  [NSFileManager.defaultManager removeItemAtURL:[locked verifiedArtifactForEngine:@"codex"] error:nil];
+  downloads = locked;
+  [downloads installEngine:@"codex"];
+  current = Task(downloads, descriptor);
+  [downloads beginRestoringTasks];
+  [downloads restoreTasks:@[current]];
+  [downloads cancelEngine:@"codex"];
+  Check(current.cancellations == 1, @"Cancel stops the restored transport");
+  before = started;
+  // Install/cancel during asynchronous enumeration must not create an orphan.
+  downloads = load();
+  [downloads beginRestoringTasks];
+  [downloads installEngine:@"codex"];
+  Check(started == before, @"New install waits for restoration to settle");
+  [downloads cancelEngine:@"codex"];
+  [downloads restoreTasks:@[current]];
+  Check(started == before, @"Cancel during restore suppresses queued start");
+  [downloads beginRestoringTasks];
+  [downloads installEngine:@"codex"];
+  FixtureDownloadTask *queued = Task(downloads, descriptor);
+  [downloads restoreTasks:@[]];
+  Check(started == before + 1, @"Queued explicit retry starts exactly once after reconciliation");
+  [downloads restoreTasks:@[]];
+  Check(started == before + 1, @"Duplicate reconciliation callback cannot restart a transfer");
+  [downloads URLSession:NSURLSession.sharedSession downloadTask:queued didFinishDownloadingToURL:TempFile(root, good)];
+  NSURL *artifact = [downloads verifiedArtifactForEngine:@"codex"];
+  Check(artifact != nil, @"Current completion publishes verified bytes");
+  [downloads URLSession:NSURLSession.sharedSession task:queued didCompleteWithError:[NSError errorWithDomain:@"late" code:1 userInfo:nil]];
+  [downloads URLSession:NSURLSession.sharedSession downloadTask:old didFinishDownloadingToURL:TempFile(root, [@"bad" dataUsingEncoding:NSUTF8StringEncoding])];
+  Check([[NSData dataWithContentsOfURL:artifact] isEqual:good] && [downloads installationForEngine:@"codex"][@"error"] == nil,
+      @"Late callbacks preserve verified artifact and terminal success");
+  __block NSUInteger backgroundFinished = 0;
+  [downloads handleBackgroundEventsWithCompletion:^{
+    Check(NSThread.isMainThread, @"System background completion runs on main queue"); backgroundFinished++;
+  }];
+  Check(backgroundFinished == 0, @"Host completion waits for all delegate events");
+  [downloads URLSessionDidFinishEventsForBackgroundURLSession:NSURLSession.sharedSession];
+  [NSRunLoop.currentRunLoop runUntilDate:[NSDate dateWithTimeIntervalSinceNow:0.02]];
+  Check(backgroundFinished == 1, @"Background completion is delivered once");
+  // The session can flush immediately while the host is registering its callback.
+  [downloads URLSessionDidFinishEventsForBackgroundURLSession:NSURLSession.sharedSession];
+  [downloads handleBackgroundEventsWithCompletion:^{ backgroundFinished++; }];
+  [NSRunLoop.currentRunLoop runUntilDate:[NSDate dateWithTimeIntervalSinceNow:0.02]];
+  Check(backgroundFinished == 2, @"Early event drain cannot lose host completion");
+  // Lost system transfers become retryable after relaunch; errors persist.
+  [NSFileManager.defaultManager removeItemAtURL:artifact error:nil];
+  [downloads installEngine:@"codex"];
+  downloads = load();
+  [downloads beginRestoringTasks];
+  [downloads restoreTasks:@[]];
+  Check([[downloads installationForEngine:@"codex"][@"error"] isEqual:@"download_interrupted"], @"Lost transfer does not remain downloading forever");
+  Check([[load() installationForEngine:@"codex"][@"error"] isEqual:@"download_interrupted"], @"Failure remains visible across relaunch");
+  // Known corrupt cache is removed on explicit retry, unknown paths survive.
+  NSURL *target = [cache URLByAppendingPathComponent:@"codex.bin"];
+  [@"bad" writeToURL:target atomically:YES encoding:NSUTF8StringEncoding error:nil];
+  [downloads installEngine:@"codex"];
+  Check(![NSFileManager.defaultManager fileExistsAtPath:target.path], @"Retry removes corrupt regular artifact");
+  [downloads cancelEngine:@"codex"];
+  NSURL *sentinel = TempFile(root, good);
+  [NSFileManager.defaultManager createSymbolicLinkAtURL:target withDestinationURL:sentinel error:nil];
+  [downloads installEngine:@"codex"];
+  Check([[NSData dataWithContentsOfURL:sentinel] isEqual:good] &&
+      [[downloads installationForEngine:@"codex"][@"error"] isEqual:@"download_storage_unavailable"], @"Retry refuses symlink cache without touching destination");
 }
 int main(int argc, const char *argv[]) {
   @autoreleasepool {
@@ -79,25 +265,27 @@ int main(int argc, const char *argv[]) {
     Check([Row(catalog, @"codex")[@"installation"][@"state"] isEqual:@"installing"], @"Install returns current catalog immediately");
     Install(module, Request(@"codex"), nil);
     Check(started == 1, @"Concurrent/repeated install starts one transfer");
-    [downloads recordProgress:0.42 forEngine:@"codex"];
+    [downloads recordProgress:0.42 forEngine:@"codex" attempt:[downloads attemptForEngine:@"codex"]];
     Check([[downloads installationForEngine:@"codex"][@"progress"] isEqual:@42], @"Progress uses percentage units");
-    [downloads recordProgress:0.423 forEngine:@"codex"];
+    [downloads recordProgress:0.423 forEngine:@"codex" attempt:[downloads attemptForEngine:@"codex"]];
     NSDictionary *progress = Row(Catalog(module), @"codex")[@"installation"];
     NSString *json = [[NSString alloc] initWithData:[NSJSONSerialization dataWithJSONObject:progress options:0 error:nil]
         encoding:NSUTF8StringEncoding];
     Check([json containsString:@"\"progress\":42"] && ![json containsString:@"42."], @"Fractional transfer progress crosses bridge as integer JSON");
-    [downloads recordProgress:2.0 forEngine:@"codex"];
+    [downloads recordProgress:2.0 forEngine:@"codex" attempt:[downloads attemptForEngine:@"codex"]];
     Check([[downloads installationForEngine:@"codex"][@"progress"] isEqual:@100], @"Progress is bounded");
     NSData *good = [@"abc" dataUsingEncoding:NSUTF8StringEncoding];
     for (NSHTTPURLResponse *response in @[Response(404), Response(206), NSNull.null]) {
-      [downloads finishDownloadForEngine:@"codex" file:TempFile(root, good)
+      [downloads installEngine:@"codex"];
+      [downloads finishDownloadForEngine:@"codex" attempt:[downloads attemptForEngine:@"codex"] file:TempFile(root, good)
           response:(id)response == NSNull.null ? nil : response];
       Check([downloads verifiedArtifactForEngine:@"codex"] == nil, @"A missing or unsuccessful HTTP response cannot install");
       Check([[downloads installationForEngine:@"codex"][@"error"] isEqual:@"download_integrity_failed"], @"Only bounded error code is exposed");
     }
     for (NSData *bad in @[[NSMutableData dataWithLength:1024 * 1024], [@"ab" dataUsingEncoding:NSUTF8StringEncoding],
         [@"xyz" dataUsingEncoding:NSUTF8StringEncoding]]) {
-      [downloads finishDownloadForEngine:@"codex" file:TempFile(root, bad) response:Response(200)];
+      [downloads installEngine:@"codex"];
+      [downloads finishDownloadForEngine:@"codex" attempt:[downloads attemptForEngine:@"codex"] file:TempFile(root, bad) response:Response(200)];
       Check([downloads verifiedArtifactForEngine:@"codex"] == nil, @"Exact size and SHA256 both gate installation");
     }
     NSURL *existing = [directory URLByAppendingPathComponent:@"codex.bin"];
@@ -106,7 +294,7 @@ int main(int argc, const char *argv[]) {
     Check([old[@"state"] isEqual:@"downloaded"] && [old[@"integrity"] isEqual:@"unverified"], @"Old unverified cache is not installed");
     Check([old[@"version"] isEqual:NSNull.null], @"Unknown cached bytes do not claim a version");
     Install(module, Request(@"codex"), nil);
-    [downloads finishDownloadForEngine:@"codex" file:TempFile(root, good) response:Response(200)];
+    [downloads finishDownloadForEngine:@"codex" attempt:[downloads attemptForEngine:@"codex"] file:TempFile(root, good) response:Response(200)];
     catalog = Catalog(module);
     NSDictionary *installed = Row(catalog, @"codex")[@"installation"];
     Check([installed[@"state"] isEqual:@"downloaded"] && [installed[@"integrity"] isEqual:@"verified"], @"Good HTTP/length/hash promotes artifact");
@@ -122,14 +310,15 @@ int main(int argc, const char *argv[]) {
     [NSFileManager.defaultManager createSymbolicLinkAtURL:existing withDestinationURL:other error:nil];
     Check([downloads verifiedArtifactForEngine:@"codex"] == nil, @"Symlink artifact is never installed");
     [NSFileManager.defaultManager removeItemAtURL:existing error:nil];
+    [downloads installEngine:@"codex"];
     [NSFileManager.defaultManager createDirectoryAtURL:existing withIntermediateDirectories:YES attributes:nil error:nil];
     NSURL *sentinel = [existing URLByAppendingPathComponent:@"preserve"];
     [good writeToURL:sentinel atomically:YES];
-    [downloads finishDownloadForEngine:@"codex" file:TempFile(root, good) response:Response(200)];
+    [downloads finishDownloadForEngine:@"codex" attempt:[downloads attemptForEngine:@"codex"] file:TempFile(root, good) response:Response(200)];
     Check([[NSData dataWithContentsOfURL:sentinel] isEqual:good], @"Failed atomic publication preserves the previous target");
     Check([[downloads installationForEngine:@"codex"][@"error"] isEqual:@"download_storage_unavailable"], @"Publication failure remains recoverable");
     Install(module, Request(@"claude-code"), nil);
-    [downloads failDownloadForEngine:@"claude-code"];
+    [downloads failDownloadForEngine:@"claude-code" attempt:[downloads attemptForEngine:@"claude-code"]];
     Check([[downloads installationForEngine:@"claude-code"][@"error"] isEqual:@"download_failed"], @"Transfer failure stays retriable");
     // Actual loopback HTTP transports small fixtures through the same byte and
     // response acceptance gate; it never contacts a release/download service.
@@ -147,7 +336,7 @@ int main(int argc, const char *argv[]) {
       NSURLSessionDownloadTask *task = [http downloadTaskWithURL:url
           completionHandler:^(NSURL *location, NSURLResponse *response, NSError *error) {
         transportOK = location != nil && error == nil;
-        if (transportOK) [httpDownloads finishDownloadForEngine:@"codex" file:location
+        if (transportOK) [httpDownloads finishDownloadForEngine:@"codex" attempt:[httpDownloads attemptForEngine:@"codex"] file:location
             response:[response isKindOfClass:NSHTTPURLResponse.class] ? (NSHTTPURLResponse *)response : nil];
         dispatch_semaphore_signal(done);
       }];
@@ -160,6 +349,7 @@ int main(int argc, const char *argv[]) {
           @"Real HTTP success, tampering, truncation and error status reach integrity gate");
     }
     [http finishTasksAndInvalidate];
+    LifecycleChecks(root, descriptor);
     [NSFileManager.defaultManager removeItemAtURL:root error:nil];
     printf("PASS: %lu runtime engine and download integrity checks\n", (unsigned long)checks);
   }

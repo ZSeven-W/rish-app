@@ -175,8 +175,14 @@ impl Shell {
             .child(self.settings_account_section(p, cx))
     }
 
-    fn settings_account_section(&self, p: Palette, cx: &mut Context<Self>) -> impl IntoElement {
-        let expanded = self.settings_expanded == Some(PreferenceGroup::Accounts);
+    pub(super) fn settings_account_section(
+        &self,
+        p: Palette,
+        cx: &mut Context<Self>,
+    ) -> impl IntoElement {
+        let expanded = self.settings_expanded == Some(PreferenceGroup::Accounts)
+            || (self.model_picker
+                && self.config_page == model_picker::ConfigurationPage::Providers);
         let mut accounts = group(p)
             .id("settings-accounts-card")
             .debug_selector(|| "settings-accounts-card".into())
@@ -188,6 +194,9 @@ impl Shell {
                 "API Key".into(),
                 cx,
             ));
+        if expanded && !self.model_picker {
+            accounts = accounts.child(self.model_setup_return_to_defaults(cx));
+        }
         for provider in crate::providers::ApiProvider::ALL
             .into_iter()
             .filter(|_| expanded)

@@ -2,10 +2,11 @@
 set -euo pipefail
 root=$(cd "$(dirname "$0")" && pwd)
 core="$root/../../../modules/rish/core"
+native="$root/../../../modules/rish/ios"
 python3 "$root/generate-exports.py" --check
 build_dir=$(mktemp -d "${TMPDIR:-/tmp}/rish-gpui-bridge.XXXXXX")
 trap 'rm -rf "$build_dir"' EXIT
-common=(-fobjc-arc -fblocks -I "$root/Native" -I "$root/Sources" -I "$core/include")
+common=(-fobjc-arc -fblocks -I "$root/Native" -I "$root/Sources" -I "$core/include" -I "$native/Sources")
 xcrun --sdk macosx clang "${common[@]}" -framework Foundation \
   "$root/Sources/RishGPUIBridge.m" "$root/Sources/RishEventEmitter.m" \
   "$root/Tests/BridgeTests.m" -o "$build_dir/bridge-tests"
@@ -26,10 +27,24 @@ xcrun --sdk macosx clang "${common[@]}" -framework Foundation -framework Securit
   "$root/Sources/RishNameValidation.m" "$root/Tests/NameValidationTests.m" \
   "$core/target/debug/librish_agent_ffi.a" -o "$build_dir/name-tests"
 "$build_dir/name-tests"
+swift_sources=(
+  "$root/Sources/RishTaskExperienceBridge.swift"
+  "$native/TaskExperience/TaskExperience.swift"
+  "$native/TaskExperience/TaskBackgroundExecution.swift"
+  "$native/TaskExperience/TaskAlertPolicy.swift"
+  "$native/TaskExperience/Widget/TaskAttributes.swift"
+)
 for sdk in iphonesimulator iphoneos; do
   target=arm64-apple-ios16.0
   [[ $sdk != iphonesimulator ]] || target=arm64-apple-ios16.0-simulator
-  xcrun --sdk "$sdk" clang "${common[@]}" -fsyntax-only -target "$target" \
+  # main.m imports the generated Swift interface; check the real bridge sources
+  # with the same language version as the application instead of a header stub.
+  mkdir -p "$build_dir/$sdk"
+  xcrun --sdk "$sdk" swiftc -swift-version 5 -parse-as-library -emit-module \
+    -sdk "$(xcrun --sdk "$sdk" --show-sdk-path)" -target "$target" \
+    -module-name RishGPUI -emit-module-path "$build_dir/$sdk/RishGPUI.swiftmodule" \
+    -emit-objc-header-path "$build_dir/$sdk/RishGPUI-Swift.h" "${swift_sources[@]}"
+  xcrun --sdk "$sdk" clang "${common[@]}" -I "$build_dir/$sdk" -fsyntax-only -target "$target" \
     "$root/Sources/RishGPUIBridge.m" "$root/Sources/RishEventEmitter.m" \
     "$root/Sources/ShellInputModule.m" "$root/Sources/RishNameController.m" \
     "$root/Sources/RishComposerController.m" "$root/Sources/ShellWorkspaceModule.m" \

@@ -25,6 +25,9 @@ impl Shell {
                 name,
                 cx,
             ));
+        card = card
+            .child(separator(p))
+            .child(self.model_setup_entry("settings-add-model", cx));
         if expanded {
             if catalog.is_empty() {
                 card = card.child(self.model_catalog_empty_state("settings-models-empty", cx));
@@ -181,20 +184,12 @@ impl Shell {
         cx: &mut Context<Self>,
     ) -> AnyElement {
         let p = Palette::get(cx);
-        let action = format!("{selector}-configure");
         div().id(selector).debug_selector(move || selector.into()).w_full().p_4().flex().flex_col().gap_3()
             .child(div().text_size(px(14.)).font_weight(gpui::FontWeight::MEDIUM)
                 .child(assistant_copy::copy(self.locale, "No configured models", "尚未配置模型")))
             .child(div().text_size(px(12.)).line_height(px(20.)).text_color(p.muted).whitespace_normal()
                 .child(assistant_copy::copy(self.locale, "Configure a provider or add a model first. Models come from your saved provider catalogs.",
                     "请先配置服务商或添加模型，模型列表来自已保存的服务商目录。")))
-            .child(div().id(action.clone()).debug_selector(move || action.clone()).role(gpui::Role::Button)
-                .aria_label(assistant_copy::copy(self.locale, "Configure providers", "配置服务商"))
-                .min_h(px(44.)).px_3().rounded(px(12.)).bg(p.surface).flex().items_center().gap_2().cursor_pointer()
-                .child(icon(Icon::Globe, 17., p.text)).child(assistant_copy::copy(self.locale, "Configure providers", "配置服务商"))
-                .on_click(cx.listener(|this, _, window, cx| {
-                    if this.model_picker { this.close_model_picker(window, cx); }
-                    this.open_provider_settings(cx);
-                }))).into_any_element()
+            .into_any_element()
     }
 }

@@ -3,6 +3,20 @@
   "retrieved_on": "2026-10-28",
   "assets": [
     {
+      "file": "pi.svg",
+      "product": "Pi",
+      "width": 560,
+      "height": 560,
+      "source": "https://pi.dev/favicon.svg",
+      "source_kind": "official_press_kit",
+      "source_page": "https://pi.dev/press-kit",
+      "retrieved_on": "2026-11-06",
+      "license_notice": "LICENSE.pi",
+      "license_source": "https://github.com/earendil-works/pi/blob/c466d97b7909184bac60cdca6324ea2b5d67ed3e/LICENSE",
+      "rights_note": "Original Pi badge offered by the official press kit for favicons and compact badges. The publisher site declares MIT License; its upstream MIT notice is retained. Product marks remain with their owners. Artwork is copied byte-for-byte.",
+      "sha256": "d266b2c1d2c7bf169ca30d438963b176fba16fea6263b9ac30c8302f34ad7ce7"
+    },
+    {
       "file": "dsh.svg",
       "product": "DSH",
       "width": 50,

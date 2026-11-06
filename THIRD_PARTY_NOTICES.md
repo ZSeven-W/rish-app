@@ -72,7 +72,7 @@ embedded through `rquickjs` `0.12.1`; the Cargo lockfiles record the Rust/C
 dependency versions. The Pi CLI and provider SDKs are not in the JavaScript
 bundle.
 
-Runtime-engine artwork uses original DSH, Claude Code, Codex and zcode assets.
+Runtime-engine artwork uses original Pi, DSH, Claude Code, Codex and zcode assets.
 Their individual sources, hashes and available license texts are recorded in
 [`assets/providers`](apps/gpui/assets/providers/README.md). These brand assets
 are not relicensed under the application's MIT license.

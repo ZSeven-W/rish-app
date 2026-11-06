@@ -19,6 +19,11 @@ internal object ShellRuntimeEnginesRoutes {
             // Pi is linked into the application; this is an idempotent read.
             catalog()
         }
+        "cancel" -> {
+            installRequest(args)
+            // This host has no download to cancel. Never manufacture success.
+            throw BridgeFailure("E_RUNTIME_ENGINE_INSTALL_UNAVAILABLE")
+        }
         else -> throw BridgeFailure("E_BRIDGE_UNAVAILABLE")
     }
 

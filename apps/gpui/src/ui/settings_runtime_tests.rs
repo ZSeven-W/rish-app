@@ -365,6 +365,10 @@ fn custom_runtime_form_fits_phone_tablet_languages_and_themes_without_mutating_p
                 cx.run_until_parked();
                 cx.update(|window, cx| window.draw(cx).clear(cx));
                 let pi = cx.debug_bounds("settings-runtime-pi").unwrap();
+                let pi_logo = cx.debug_bounds("provider-logo-pi").unwrap();
+                assert_eq!(pi_logo.size.width, px(30.));
+                assert_eq!(pi_logo.size.height, px(30.));
+                assert!(pi_logo.top() >= pi.top() && pi_logo.bottom() <= pi.bottom());
                 for product in crate::providers::RuntimeProduct::ALL {
                     let row = cx.debug_bounds(product.settings_selector()).unwrap();
                     let logo = cx.debug_bounds(product.selector()).unwrap();
@@ -372,6 +376,7 @@ fn custom_runtime_form_fits_phone_tablet_languages_and_themes_without_mutating_p
                     assert_eq!(row.size.width, pi.size.width);
                     assert_eq!(logo.size.width, px(30.));
                     assert_eq!(logo.size.height, px(30.));
+                    assert_eq!(logo.left(), pi_logo.left());
                     assert!(logo.left() >= row.left() && logo.right() <= row.right());
                 }
                 for id in [

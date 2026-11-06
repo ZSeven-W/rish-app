@@ -11,6 +11,15 @@ export const requiredFiles = [
   'apps/gpui/mobile/Cargo.toml',
   'apps/gpui/mobile/Cargo.lock',
   'apps/gpui/crates/rish-shell-core/Cargo.toml',
+  'apps/gpui/crates/rish-pi-runtime/Cargo.toml',
+  'apps/gpui/vendor/gpui-mobile/Cargo.toml',
+  'apps/gpui/vendor/gpui-mobile/UPSTREAM.json',
+  'apps/gpui/vendor/gpui-mobile/RISH-PATCHES.txt',
+  'apps/gpui/vendor/gpui-mobile/LICENSE-APACHE',
+  'apps/gpui/vendor/gpui-pre-wgpu/Cargo.toml',
+  'apps/gpui/vendor/gpui-pre-wgpu/UPSTREAM.toml',
+  'apps/gpui/vendor/gpui-pre-wgpu/RISH-PATCHES.txt',
+  'apps/gpui/vendor/gpui-pre-wgpu/LICENSE-APACHE',
   'apps/gpui/src/main.rs',
   'apps/gpui/src/lib.rs',
   'apps/gpui/ios/project.yml',
@@ -64,6 +73,27 @@ const inside = (root, file) => {
 };
 const activeLines = text => text.split('\n').map((line, index) => ({line, index}))
   .filter(({line}) => !/^\s*(?:#(?!include|import)|\/\/|\/\*|\*)/.test(line));
+const table = (text, name) => {
+  const lines = text.split('\n');
+  const start = lines.findIndex(line => line.trim() === `[${name}]`);
+  if (start < 0) return '';
+  const end = lines.findIndex((line, index) => index > start && /^\s*\[/.test(line));
+  return lines.slice(start + 1, end < 0 ? undefined : end).join('\n');
+};
+const field = (text, name) => text.match(new RegExp(`^${name}\\s*=\\s*"([^"\\n]+)"`, 'm'))?.[1];
+const localPackages = {
+  'rish-agent-core': 'modules/rish/core/crates/rish-agent-core/Cargo.toml',
+  'rish-gpui': 'apps/gpui/Cargo.toml',
+  'rish-gpui-mobile': 'apps/gpui/mobile/Cargo.toml',
+  'rish-shell-core': 'apps/gpui/crates/rish-shell-core/Cargo.toml',
+  'rish-pi-runtime': 'apps/gpui/crates/rish-pi-runtime/Cargo.toml',
+  'gpui-mobile': 'apps/gpui/vendor/gpui-mobile/Cargo.toml',
+  'gpui-pre-wgpu': 'apps/gpui/vendor/gpui-pre-wgpu/Cargo.toml',
+};
+const mobilePatches = [
+  ['gpui-mobile', 'patch."https://github.com/itsbalamurali/gpui-mobile"'],
+  ['gpui-pre-wgpu', 'patch.crates-io'],
+];
 
 export function auditSource(sourceRoot) {
   const root = fs.realpathSync(sourceRoot);
@@ -140,29 +170,48 @@ export function auditSource(sourceRoot) {
     // libraries and Cargo's registry/git cache are deliberately not required.
     for (const match of text.matchAll(/\{[^\n}]*\bpath\s*=\s*"([^"]+)"[^\n}]*\}/g)) {
       const dependency = path.resolve(root, path.dirname(file), match[1]);
-      if (!inside(root, dependency) || !fs.existsSync(path.join(dependency, 'Cargo.toml')) ||
-          !inside(root, fs.realpathSync(dependency))) {
+      const manifest = path.join(dependency, 'Cargo.toml');
+      if (!inside(root, dependency) || !fs.existsSync(manifest) ||
+          !fs.statSync(manifest).isFile() || !inside(root, fs.realpathSync(manifest))) {
         errors.push(`${file}: local Cargo dependency must resolve inside this source checkout`);
       }
     }
   }
+  const locks = new Map();
   for (const file of ['apps/gpui/Cargo.lock', 'apps/gpui/mobile/Cargo.lock']) {
     const text = read(file);
     if (text === null) continue;
     if (!/^version = 4$/m.test(text)) errors.push(`${file}: expected a Cargo v4 lockfile`);
     const packages = text.split('[[package]]').slice(1);
     const names = new Set();
+    const entries = new Map();
+    locks.set(file, entries);
     for (const entry of packages) {
-      const name = entry.match(/^name = "([^"]+)"$/m)?.[1];
-      const source = entry.match(/^source = "([^"]+)"$/m)?.[1];
+      const name = field(entry, 'name');
+      const source = field(entry, 'source');
       names.add(name);
+      entries.set(name, entry);
       if (!source) {
-        if (!['rish-agent-core', 'rish-gpui', 'rish-gpui-mobile', 'rish-shell-core'].includes(name)) {
+        const manifest = Object.hasOwn(localPackages, name) ? localPackages[name] : null;
+        const mobileOnly = ['rish-gpui-mobile', 'gpui-mobile', 'gpui-pre-wgpu'].includes(name);
+        if (!manifest || (mobileOnly && !file.includes('/mobile/')) ||
+            (name === 'rish-gpui' && file.includes('/mobile/'))) {
           errors.push(`${file}: ${name || 'unnamed package'} has an unexpected unpinned source`);
+        } else {
+          const contents = read(manifest);
+          const metadata = contents === null ? '' : table(contents, 'package');
+          // The independently maintained agent core inherits its version from
+          // its own workspace; the GPUI packages declare theirs directly.
+          const version = name === 'rish-agent-core' && /^version\.workspace\s*=\s*true\s*$/m.test(metadata)
+            ? field(table(read('modules/rish/core/Cargo.toml') || '', 'workspace.package'), 'version')
+            : field(metadata, 'version');
+          if (field(metadata, 'name') !== name || version !== field(entry, 'version')) {
+            errors.push(`${file}: ${name} does not match its checked-in Cargo manifest`);
+          }
         }
       } else if (source === 'registry+https://github.com/rust-lang/crates.io-index') {
         if (!/^checksum = "[a-f0-9]{64}"$/m.test(entry)) errors.push(`${file}: ${name} needs a registry checksum`);
-      } else if (!/^git\+https:\/\/github\.com\/[\w.-]+\/[\w.-]+\?rev=[a-f0-9]{40}#[a-f0-9]{40}$/.test(source)) {
+      } else if (!/^git\+https:\/\/github\.com\/[\w.-]+\/[\w.-]+\?rev=([a-f0-9]{40})#\1$/.test(source)) {
         errors.push(`${file}: ${name} needs a public revision-pinned Cargo source`);
       }
     }
@@ -171,11 +220,36 @@ export function auditSource(sourceRoot) {
     }
   }
   const mobile = read('apps/gpui/mobile/Cargo.toml');
-  const mobileLock = read('apps/gpui/mobile/Cargo.lock');
-  if (mobile !== null && mobileLock !== null) {
-    const revision = mobile.match(/^gpui-mobile\s*=\s*\{[^\n]*rev\s*=\s*"([a-f0-9]{40})"/m)?.[1];
-    if (!revision || !mobileLock.includes(`?rev=${revision}#${revision}`)) {
-      errors.push('apps/gpui/mobile/Cargo.lock: gpui-mobile revision differs from Cargo.toml');
+  const mobileEntries = locks.get('apps/gpui/mobile/Cargo.lock');
+  if (mobile !== null && mobileEntries) {
+    for (const [name, section] of mobilePatches) {
+      const expected = `../vendor/${name}`;
+      const patch = table(mobile, section).match(new RegExp(`^${name}\\s*=\\s*\\{([^\\n}]+)\\}`, 'm'))?.[1];
+      if (!patch || !new RegExp(`\\bpath\\s*=\\s*"${expected.replaceAll('.', '\\.')}"`).test(patch)) {
+        errors.push(`apps/gpui/mobile/Cargo.toml: ${name} must use its reviewed in-repository path patch`);
+      }
+      const entry = mobileEntries.get(name);
+      if (!entry || field(entry, 'source')) {
+        errors.push(`apps/gpui/mobile/Cargo.lock: ${name} must resolve to its checked-in path patch`);
+      }
+    }
+    const dependency = table(mobile, 'dependencies').match(/^gpui-mobile\s*=\s*\{([^\n}]+)\}/m)?.[1] || '';
+    const revision = dependency.match(/\brev\s*=\s*"([a-f0-9]{40})"/)?.[1];
+    const repository = dependency.match(/\bgit\s*=\s*"([^"]+)"/)?.[1];
+    let upstream;
+    try { upstream = JSON.parse(read('apps/gpui/vendor/gpui-mobile/UPSTREAM.json')); } catch { /* diagnosed below */ }
+    if (!revision || repository !== 'https://github.com/itsbalamurali/gpui-mobile' ||
+        upstream?.repository !== repository || upstream?.revision !== revision) {
+      errors.push('apps/gpui/vendor/gpui-mobile/UPSTREAM.json: gpui-mobile revision differs from Cargo.toml');
+    }
+    const renderer = read('apps/gpui/vendor/gpui-pre-wgpu/UPSTREAM.toml') || '';
+    const rendererVersion = field(mobileEntries.get('gpui-pre-wgpu') || '', 'version');
+    if (field(renderer, 'name') !== 'gpui-pre-wgpu' || !rendererVersion ||
+        field(renderer, 'version') !== rendererVersion ||
+        field(renderer, 'archive_url') !== `https://static.crates.io/crates/gpui-pre-wgpu/gpui-pre-wgpu-${rendererVersion}.crate` ||
+        !/^[a-f0-9]{64}$/.test(field(renderer, 'archive_sha256') || '') ||
+        !/^[a-f0-9]{40}$/.test(field(renderer, 'zed_revision') || '')) {
+      errors.push('apps/gpui/vendor/gpui-pre-wgpu/UPSTREAM.toml: renderer provenance does not match the locked path patch');
     }
   }
   return errors;

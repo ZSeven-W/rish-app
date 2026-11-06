@@ -44,6 +44,13 @@ can be saved before setup; sending opens model setup or selection until a
 configured model is chosen. Existing conversations keep their saved IDs, even
 when a model is removed from active choices, and are never silently reassigned.
 
+Both the default-model settings and conversation model picker offer **Add /
+custom model**. In a conversation, provider setup opens inside the picker and
+reuses the same provider editors. Returning preserves the unsent chat input and
+the pending model/thinking choices; saving a catalog does not select a model.
+If a pending choice was removed while editing the catalog, Done keeps the draft
+open with an error until the user chooses an available model.
+
 Custom API services can be added under **Settings → API providers**. Set the
 name, API address and protocol, then save the provider and
 optionally open its native secure-key prompt. Display aliases and image support
@@ -245,6 +252,12 @@ The development bundle ID does not migrate data or credentials from older
 installations. Removing the old source does not delete installed app data.
 
 ## Agent execution
+
+Optional CLI downloads are separate from executable engines. The iOS runtime
+list supports cancelling a download and explicitly retrying; cancelled or old
+transfer callbacks cannot publish a newer attempt. Verified payloads still show
+**Tasks unavailable** until a real execution adapter is implemented and probed.
+See [runtime installation evidence and platform gaps](../../docs/runtime-engine-installation.md).
 
 Each provider round, approval and tool execution is gated by its committed
 session checkpoint. Native services retain authority over workspace bindings,
