@@ -328,6 +328,30 @@ pub fn raw_arguments_bind_intent(
     let Some(kind) = as_str(get(precondition, "kind")) else {
         return Err(StoreError::InvalidArgument);
     };
+    if name == crate::user_question::NAME {
+        return if crate::user_question::question_shape(Some(precondition))
+            && precondition["question"] == arguments_value
+        {
+            Ok(())
+        } else {
+            Err(StoreError::Conflict)
+        };
+    }
+    if crate::assistant_tools::is_assistant(name) {
+        if !crate::assistant_tools::arguments_valid(name, &arguments)
+            || !crate::assistant_tools::precondition_shape(Some(precondition))
+            || kind != name
+        {
+            return Err(StoreError::InvalidArgument);
+        }
+        return if crate::schema::arguments_sha256(get(intent, "name"), arguments_json).as_deref()
+            == as_str(get(precondition, "arguments_sha256"))
+        {
+            Ok(())
+        } else {
+            Err(StoreError::Conflict)
+        };
+    }
     if crate::runtime_tools::is_runtime(name) {
         if !crate::runtime_tools::arguments_valid(name, &arguments)
             || !crate::runtime_tools::precondition_shape(Some(precondition))
@@ -494,6 +518,9 @@ fn hex_object_id(value: Option<&Value>, length: usize) -> bool {
 
 /// `DSHAgentPrecondition`: the closed per-tool precondition union.
 pub fn precondition_shape(value: Option<&Value>) -> bool {
+    if value.is_some_and(|value| value["kind"] == crate::user_question::NAME) {
+        return crate::user_question::question_shape(value);
+    }
     let Some(Value::Object(map)) = value else {
         return false;
     };
@@ -501,6 +528,9 @@ pub fn precondition_shape(value: Option<&Value>) -> bool {
         return false;
     };
     let schema1 = || safe_integer(map.get("schema_version"), 1, false).is_some();
+    if crate::assistant_tools::is_assistant(kind) {
+        return crate::assistant_tools::precondition_shape(value);
+    }
     if crate::runtime_tools::is_runtime(kind) {
         return crate::runtime_tools::precondition_shape(value);
     }
@@ -672,6 +702,9 @@ pub fn precondition_shape(value: Option<&Value>) -> bool {
 
 /// `DSHAgentSettledFacts`.
 pub fn settled_facts_shape(value: Option<&Value>) -> bool {
+    if value.is_some_and(|value| value["kind"] == crate::user_question::NAME) {
+        return crate::user_question::facts_shape(value);
+    }
     let Some(Value::Object(map)) = value else {
         return false;
     };
@@ -679,6 +712,9 @@ pub fn settled_facts_shape(value: Option<&Value>) -> bool {
         return false;
     };
     let schema1 = || safe_integer(map.get("schema_version"), 1, false).is_some();
+    if crate::assistant_tools::is_assistant(kind) {
+        return crate::assistant_tools::settled_facts_shape(value);
+    }
     if crate::runtime_tools::is_runtime(kind) {
         return crate::runtime_tools::settled_facts_shape(value);
     }
@@ -746,6 +782,9 @@ pub fn settled_facts_shape(value: Option<&Value>) -> bool {
 /// `DSHAgentSettledFactsMatchFeedback`: the settled facts a caller supplies
 /// must restate what the protected feedback payload reports.
 pub fn settled_facts_match_feedback(row: &Value, feedback: &Value, facts: Option<&Value>) -> bool {
+    if row["name"] == crate::user_question::NAME && feedback["outcome"] == "ok" {
+        return facts.is_some_and(|facts| crate::user_question::facts_match(row, feedback, facts));
+    }
     let outcome = as_str(get(feedback, "outcome"));
     if outcome != Some("ok") {
         return is_null(facts);
@@ -758,6 +797,9 @@ pub fn settled_facts_match_feedback(row: &Value, feedback: &Value, facts: Option
     let precondition = get(row, "precondition").unwrap_or(&null);
     let kind = as_str(get(precondition, "kind"));
     let name = as_str(get(row, "name"));
+    if name.is_some_and(crate::assistant_tools::is_assistant) {
+        return crate::assistant_tools::facts_match_feedback(row, feedback, facts);
+    }
     if name.is_some_and(crate::runtime_tools::is_runtime) {
         return crate::runtime_tools::facts_match_feedback(row, feedback, facts);
     }
@@ -826,7 +868,7 @@ pub fn ledger_row(row: &Value) -> bool {
         return false;
     }
     let kind = as_str(get(precondition, "kind")).unwrap_or_default();
-    if crate::runtime_tools::is_runtime(kind)
+    if (crate::runtime_tools::is_runtime(kind) || crate::assistant_tools::is_assistant(kind))
         && map.get("arguments_sha256") != get(precondition, "arguments_sha256")
     {
         return false;
@@ -901,6 +943,9 @@ pub fn ledger_row(row: &Value) -> bool {
             };
             if get(facts, "kind") != get(precondition, "kind") {
                 return false;
+            }
+            if crate::assistant_tools::is_assistant(kind) {
+                return crate::assistant_tools::facts_bind_row(row, facts);
             }
             if crate::runtime_tools::is_runtime(kind) {
                 return get(facts, "arguments_sha256") == get(precondition, "arguments_sha256");
@@ -1102,7 +1147,9 @@ pub fn feedback_string_valid(text: &str) -> Result<(), StoreError> {
     }
     let name = as_str(map.get("name")).expect("checked");
     let outcome = as_str(map.get("outcome"));
-    if (name == "list_dir" || crate::runtime_tools::is_runtime(name))
+    if (name == "list_dir"
+        || crate::runtime_tools::is_runtime(name)
+        || crate::assistant_tools::is_assistant(name))
         && text.len() > MAX_FEEDBACK_ENCODED_BYTES
     {
         return Err(StoreError::Capacity);
@@ -1157,6 +1204,13 @@ pub fn feedback_string_valid(text: &str) -> Result<(), StoreError> {
         return Err(StoreError::InvalidArgument);
     }
     let ok = match name {
+        crate::user_question::NAME => {
+            exact_keys(Some(payload), &["schema_version", "question", "response"]).is_some()
+                && crate::user_question::response_valid(&payload["question"], &payload["response"])
+        }
+        name if crate::assistant_tools::is_assistant(name) => {
+            crate::assistant_tools::success_payload(name, payload)
+        }
         name if crate::runtime_tools::is_runtime(name) => {
             crate::runtime_tools::success_payload(name, payload)
         }

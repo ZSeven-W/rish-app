@@ -6,7 +6,7 @@ output="$PWD/.build/runtime-environment-tests"
 mkdir -p "$output"
 python3 scripts/ci/prepare-runtime-fixtures.py --output "$fixture"
 plans=("$PWD"/.build/preview-tests/DerivedData/Build/Products/*.xctestrun)
-[[ ${#plans[@]} == 1 && -f "${plans[0]}" ]] || { echo 'Build the Release simulator test host first.' >&2; exit 1; }
+[[ ${#plans[@]} == 1 && -f "${plans[0]}" ]] || { echo 'Run scripts/ci/test-ios-preview.sh to build the GPUI Release simulator test host first.' >&2; exit 1; }
 device=$(python3 - "$PWD/.build/preview-tests/devices.json" <<'PY'
 import json, sys
 for runtime, devices in sorted(json.load(open(sys.argv[1]))['devices'].items(), reverse=True):

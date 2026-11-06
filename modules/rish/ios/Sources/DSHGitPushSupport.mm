@@ -1,12 +1,12 @@
 #import "DSHGitPushSupport.h"
 
 #import <Security/Security.h>
-#import <arpa/inet.h>
 #import <dispatch/dispatch.h>
 #import <fcntl.h>
 #import <sys/stat.h>
 #import <unistd.h>
 
+#include "rish_agent_core.h"
 #include <atomic>
 #include <math.h>
 #include <string.h>
@@ -39,96 +39,29 @@ static BOOL DSHGitPushHasControlCharacter(NSString *value) {
   return NO;
 }
 
-static NSString *DSHGitPushStripBrackets(NSString *host) {
-  if ([host hasPrefix:@"["] && [host hasSuffix:@"]"] && host.length > 2) {
-    return [host substringWithRange:NSMakeRange(1, host.length - 2)];
-  }
-  return host;
-}
-
-static BOOL DSHGitPushIsIPLiteral(NSString *host) {
-  const char *bytes = DSHGitPushStripBrackets(host).UTF8String;
-  if (bytes == nullptr) return NO;
-  struct in_addr ipv4 = {};
-  struct in6_addr ipv6 = {};
-  return inet_pton(AF_INET, bytes, &ipv4) == 1
-    || inet_pton(AF_INET6, bytes, &ipv6) == 1;
-}
-
-static BOOL DSHGitPushIsPublicDNSName(NSString *host) {
-  if (host.length == 0 || host.length > 253 || [host hasSuffix:@"."]
-    || DSHGitPushHasControlCharacter(host)
-    || [host isEqualToString:@"localhost"]
-    || [host hasSuffix:@".local"] || [host hasSuffix:@".internal"]
-    || DSHGitPushIsIPLiteral(host)) return NO;
-  NSArray<NSString *> *labels = [host componentsSeparatedByString:@"."];
-  if (labels.count < 2) return NO;
-  NSCharacterSet *allowed = [NSCharacterSet characterSetWithCharactersInString:
-    @"abcdefghijklmnopqrstuvwxyz0123456789-"];
-  for (NSString *label in labels) {
-    if (label.length == 0 || label.length > 63 || [label hasPrefix:@"-"]
-      || [label hasSuffix:@"-"]
-      || [label rangeOfCharacterFromSet:allowed.invertedSet].location != NSNotFound) return NO;
-  }
-  return YES;
-}
-
-/// Loopback, RFC 1918, link-local, and ULA literals plus "localhost". These
-/// are the only hosts a plain http:// test remote may use.
-static BOOL DSHGitPushIsPrivateLiteral(NSString *host) {
-  if ([host isEqualToString:@"localhost"]) return YES;
-  const char *bytes = DSHGitPushStripBrackets(host).UTF8String;
-  if (bytes == nullptr) return NO;
-  struct in_addr v4 = {};
-  if (inet_pton(AF_INET, bytes, &v4) == 1) {
-    uint32_t ip = ntohl(v4.s_addr);
-    if ((ip & 0xFF000000u) == 0x7F000000u) return YES;  // 127/8
-    if ((ip & 0xFF000000u) == 0x0A000000u) return YES;  // 10/8
-    if ((ip & 0xFFF00000u) == 0xAC100000u) return YES;  // 172.16/12
-    if ((ip & 0xFFFF0000u) == 0xC0A80000u) return YES;  // 192.168/16
-    if ((ip & 0xFFFF0000u) == 0xA9FE0000u) return YES;  // 169.254/16
-    return NO;
-  }
-  struct in6_addr v6 = {};
-  if (inet_pton(AF_INET6, bytes, &v6) == 1) {
-    if (IN6_IS_ADDR_LOOPBACK(&v6) || IN6_IS_ADDR_LINKLOCAL(&v6)) return YES;
-    return (v6.s6_addr[0] & 0xFE) == 0xFC;  // ULA fc00::/7
-  }
-  return NO;
-}
-
 NSURL *DSHGitValidatedRemoteURL(id value, NSError **error) {
-  NSString *input = [value isKindOfClass:NSString.class] ? value : @"";
-  NSString *trimmed = [input stringByTrimmingCharactersInSet:
-      NSCharacterSet.whitespaceAndNewlineCharacterSet];
-  if (input.length == 0 || input.length > 4096 || DSHGitPushHasControlCharacter(input)
-    || [input containsString:@"\\"] || ![input isEqualToString:trimmed]) {
-    if (error != nil) *error = DSHGitPushSupportError(3002, @"Remote URL is invalid");
-    return nil;
+  NSURL *url = nil;
+  // The host only performs lossless Unicode/JSON conversion and creates the
+  // system URL object. The shared Rust policy owns remote authorization rules.
+  if ([value isKindOfClass:NSString.class] &&
+      [value dataUsingEncoding:NSUTF8StringEncoding allowLossyConversion:NO] != nil) {
+    NSData *request = [NSJSONSerialization dataWithJSONObject:@{@"url": value} options:0 error:nil];
+    char *raw = request == nil ? nullptr : rish_agent_git_remote_policy_reduce(
+      static_cast<const char *>(request.bytes), request.length);
+    if (raw != nullptr) {
+      NSData *bytes = [NSData dataWithBytes:raw length:strlen(raw)];
+      rish_agent_string_free(raw);
+      id reply = [NSJSONSerialization JSONObjectWithData:bytes options:0 error:nil];
+      NSDictionary *policy = [reply isKindOfClass:NSDictionary.class] && [reply[@"ok"] isEqual:@YES] &&
+        [reply[@"value"] isKindOfClass:NSDictionary.class] ? reply[@"value"] : nil;
+      // This entry point is the HTTPS/LAN adapter; SSH has a separate native
+      // transport and must never enter the HTTPS credential flow.
+      if (policy != nil && [@[@"http", @"https"] containsObject:policy[@"scheme"]] &&
+          [policy[@"url"] isKindOfClass:NSString.class]) url = [NSURL URLWithString:policy[@"url"]];
+    }
   }
-  NSURLComponents *components = [NSURLComponents componentsWithString:input];
-  NSString *scheme = components.scheme.lowercaseString;
-  NSString *host = components.host.lowercaseString;
-  NSString *path = components.path;
-  BOOL httpsValid = [scheme isEqualToString:@"https"] && DSHGitPushIsPublicDNSName(host)
-      && (components.port == nil || components.port.integerValue == 443);
-  BOOL httpValid = [scheme isEqualToString:@"http"] && DSHGitPushIsPrivateLiteral(host)
-      && (components.port == nil
-          || (components.port.integerValue >= 1 && components.port.integerValue <= 65535));
-  BOOL valid = (httpsValid || httpValid) && components.user == nil
-    && components.password == nil && components.query == nil
-    && components.fragment == nil && path.length > 1 && path.length <= 2048
-    && !DSHGitPushHasControlCharacter(path);
-  for (NSString *component in [path componentsSeparatedByString:@"/"]) {
-    if ([component isEqualToString:@"."] || [component isEqualToString:@".."]) valid = NO;
-  }
-  if (!valid || components.URL == nil) {
-    if (error != nil) *error = DSHGitPushSupportError(3002, @"Remote URL is invalid");
-    return nil;
-  }
-  components.scheme = scheme;
-  components.host = host;
-  return components.URL;
+  if (url == nil && error != nil) *error = DSHGitPushSupportError(3002, @"Remote URL is invalid");
+  return url;
 }
 
 BOOL DSHGitRemoteURLIsPlaintext(NSURL *url) {

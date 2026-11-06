@@ -4,7 +4,7 @@
 # Areas where a change carries extra obligations: the native agent runtime and
 # its ledger, the bundled guest binaries, and the licence and security files.
 /modules/rish/                          @ZSeven-W
-/apps/mobile/ios/Rish/GuestAssets/      @ZSeven-W
+/modules/rish/shared/GuestAssets/      @ZSeven-W
 /third-party/                           @ZSeven-W
 /LICENSE                                @ZSeven-W
 /SECURITY.md                            @ZSeven-W

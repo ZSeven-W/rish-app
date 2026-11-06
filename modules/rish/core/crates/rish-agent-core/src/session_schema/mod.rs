@@ -27,7 +27,7 @@ pub use scanner::{parse_object, MAX_JSON_NODES, MAX_TOMBSTONE_JSON_NODES};
 use crate::canonical::{canonical_json, hash_bytes, hash_json};
 use crate::execution_ledger::{as_str, get};
 use serde_json::{json, Value};
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashSet};
 
 /// `DSHSessionSnapshotMaximumBytes`.
 pub const MAX_BYTES: usize = 16 * 1024 * 1024;
@@ -98,12 +98,26 @@ impl Env {
     }
 
     /// `DSHProviderRecordWithoutConfiguration`: strips a valid binding,
-    /// returns `None` for an invalid one, passes records without one through.
+    /// returns `None` for an invalid one. Independent providers always need a
+    /// captured binding; built-in records retain their existing optional form.
     pub fn record_without_configuration<'a>(
         &self,
         record: &'a Value,
     ) -> Option<(std::borrow::Cow<'a, Value>, Option<&ProviderBinding>)> {
         let Some(binding) = get(record, "provider_configuration") else {
+            if get(record, "model")
+                .and_then(Value::as_str)
+                .is_some_and(|model| {
+                    crate::custom_provider_registry::provider_id_for_model(model).is_some()
+                })
+                || self
+                    .harness_for_model(get(record, "model"))
+                    .is_some_and(|harness| {
+                        crate::custom_provider_registry::provider_id_for_harness(harness).is_some()
+                    })
+            {
+                return None;
+            }
             return Some((std::borrow::Cow::Borrowed(record), None));
         };
         let entry = self.binding_for(binding, get(record, "model"))?;
@@ -362,20 +376,23 @@ pub fn validate_tombstones(raw: &[u8]) -> Option<(u64, Vec<String>)> {
     {
         return None;
     }
-    let mut seen: Vec<String> = Vec::with_capacity(ids.len());
+    // Borrow the parsed IDs for membership, cloning only into the ordered
+    // result. A linear scan here makes a full 400,000-entry ledger quadratic.
+    let mut seen = HashSet::with_capacity(ids.len());
+    let mut ordered = Vec::with_capacity(ids.len());
     for id in ids {
         if !canonical_uuid(Some(id)) {
             return None;
         }
-        let text = as_str(Some(id)).expect("uuid").to_string();
-        if seen.contains(&text) {
+        let text = as_str(Some(id)).expect("uuid");
+        if !seen.insert(text) {
             return None;
         }
-        seen.push(text);
+        ordered.push(text.to_owned());
     }
     Some((
         safe_integer(get(&envelope, "generation"), true).expect("checked"),
-        seen,
+        ordered,
     ))
 }
 

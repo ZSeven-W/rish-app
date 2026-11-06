@@ -1,0 +1,16 @@
+# Provenance for the unmodified registry archive from which this directory was copied.
+name = "gpui-pre-wgpu"
+version = "0.3.6"
+archive_url = "https://static.crates.io/crates/gpui-pre-wgpu/gpui-pre-wgpu-0.3.6.crate"
+archive_bytes = 90780
+archive_sha256 = "05515b32799b1767d69300921c1b562cd53104965211a0e8905acdc7aa18e693"
+repository = "https://github.com/zed-industries/zed"
+zed_crate = "gpui_wgpu"
+zed_version = "0.1.0"
+zed_revision = "bcf6582ce3500df93a8a39366640173e6786cea6"
+license = "Apache-2.0"
+license_file = "LICENSE-APACHE"
+license_sha256 = "752daf2fb234ca4a1fa372c073fe127f44b7b90fd2529ae44273a64f9d53da7a"
+upstream_file_count = 14
+modified_upstream_files = ["src/wgpu_context.rs"]
+patch_description = "RISH-PATCHES.txt"

@@ -2,7 +2,7 @@
 #import "DSHGuestRuntimeState.h"
 
 #import <Foundation/Foundation.h>
-#import <React/RCTBridgeModule.h>
+#import <RishNative/RishNativeModule.h>
 
 #import <CommonCrypto/CommonDigest.h>
 #include <math.h>
@@ -124,7 +124,7 @@ static NSArray<NSString *> *DSHGuestValidatedCommand(id value) {
 
 static const void *const DSHGuestStateQueueKey = &DSHGuestStateQueueKey;
 
-@interface LocalGuestModule () <RCTBridgeModule>
+@interface LocalGuestModule () <RishNativeModule>
 @property(nonatomic, strong) dispatch_queue_t stateQueue;
 @property(nonatomic, strong) dispatch_queue_t bootQueue;
 @property(nonatomic, assign) DSHGuestSessionState sessionState;
@@ -137,7 +137,7 @@ static const void *const DSHGuestStateQueueKey = &DSHGuestStateQueueKey;
 
 @implementation LocalGuestModule
 
-RCT_EXPORT_MODULE(LocalGuest)
+RISH_NATIVE_MODULE(LocalGuest)
 
 + (BOOL)requiresMainQueueSetup {
   return NO;
@@ -468,23 +468,23 @@ RCT_EXPORT_MODULE(LocalGuest)
   });
 }
 
-RCT_REMAP_METHOD(bootGuest,
+RISH_NATIVE_METHOD(bootGuest,
                  bootGuestRequest:(NSDictionary *)request
-                 resolver:(RCTPromiseResolveBlock)resolve
-                 rejecter:(RCTPromiseRejectBlock)reject) {
+                 resolver:(RishResolveBlock)resolve
+                 rejecter:(RishRejectBlock)reject) {
   [self bootGuestRequest:request resolve:resolve reject:reject];
 }
 
-RCT_REMAP_METHOD(guestExec,
+RISH_NATIVE_METHOD(guestExec,
                  guestExecRequest:(NSDictionary *)request
-                 resolver:(RCTPromiseResolveBlock)resolve
-                 rejecter:(RCTPromiseRejectBlock)reject) {
+                 resolver:(RishResolveBlock)resolve
+                 rejecter:(RishRejectBlock)reject) {
   [self guestExecRequest:request resolve:resolve reject:reject];
 }
 
-RCT_REMAP_METHOD(shutdownGuest,
-                 shutdownGuestWithResolver:(RCTPromiseResolveBlock)resolve
-                 rejecter:(RCTPromiseRejectBlock)reject) {
+RISH_NATIVE_METHOD(shutdownGuest,
+                 shutdownGuestWithResolver:(RishResolveBlock)resolve
+                 rejecter:(RishRejectBlock)reject) {
   [self shutdownGuestResolve:resolve reject:reject];
 }
 

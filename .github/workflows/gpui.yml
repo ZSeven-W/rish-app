@@ -1,0 +1,117 @@
+name: GPUI shell checks
+
+on:
+  pull_request:
+    paths:
+      - 'apps/gpui/**'
+      - 'modules/rish/**'
+      - 'scripts/prepare-*.sh'
+      - 'scripts/native-tests/**'
+      - '.github/workflows/gpui.yml'
+  push:
+    branches: [main]
+    paths:
+      - 'apps/gpui/**'
+      - 'modules/rish/**'
+      - 'scripts/prepare-*.sh'
+      - 'scripts/native-tests/**'
+      - '.github/workflows/gpui.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: gpui-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  shell-core:
+    name: State and persistence contract
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@1.95.0
+        with:
+          components: rustfmt
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: |
+            apps/gpui
+            scripts/native-tests/shell-agent-harness
+      - run: apps/gpui/scripts/check.sh core
+      # Compiles the shared-ShellState loopback driver only. Its ten native
+      # iOS scenarios require a separately linked host and complete VM/Git vendor.
+      - name: Compile native contract driver
+        run: |
+          cargo fmt --manifest-path scripts/native-tests/shell-agent-harness/Cargo.toml -- --check
+          cargo check --locked --manifest-path scripts/native-tests/shell-agent-harness/Cargo.toml
+      - name: Check build script syntax
+        run: for script in apps/gpui/scripts/*.sh scripts/native-tests/*.sh; do bash -n "$script"; done
+
+  desktop:
+    name: GPUI Fast macOS
+    runs-on: macos-26
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@1.95.0
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: apps/gpui
+      - run: apps/gpui/scripts/check.sh desktop
+      - name: GPUI interaction regression tests
+        run: cargo test --locked --manifest-path apps/gpui/Cargo.toml --lib
+
+  ios:
+    name: iOS Rust and native bridge
+    runs-on: macos-26
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@1.95.0
+        with:
+          targets: aarch64-apple-ios,aarch64-apple-ios-sim
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: apps/gpui/mobile
+      # This compiles Rust and checks the native bridge. Linking the complete
+      # host app separately requires the pinned existing VM/Git XCFrameworks.
+      - run: apps/gpui/scripts/check.sh ios
+
+  android:
+    name: Android arm64 Rust and native host
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@1.95.0
+        with:
+          targets: aarch64-linux-android
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - uses: android-actions/setup-android@v3
+      - name: Install Android build tools
+        run: |
+          sdkmanager 'platforms;android-36' 'build-tools;36.0.0' 'ndk;27.1.12297006' 'cmake;3.22.1'
+          echo "ANDROID_NDK_HOME=$ANDROID_HOME/ndk/27.1.12297006" >> "$GITHUB_ENV"
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: apps/gpui/mobile
+      - name: Install cargo-ndk
+        run: cargo install cargo-ndk --locked --version 4.1.2
+      - run: apps/gpui/scripts/check.sh android
+      - name: Compile and test native bridge
+        working-directory: apps/gpui/android
+        run: ./gradlew --no-daemon testDebugUnitTest

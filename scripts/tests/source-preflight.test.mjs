@@ -21,60 +21,74 @@ function edit(root, file, transform) {
   fs.writeFileSync(absolute, transform(fs.readFileSync(absolute, 'utf8')));
 }
 
-test('minimal source archive passes without Git, Pods, node_modules, Vendor libraries or a sibling repo', t => {
+test('minimal GPUI source archive passes without Git, Cargo cache, generated project or native libraries', t => {
   assert.deepEqual(auditSource(fixture(t)), []);
 });
-test('missing renamed project is rejected even if an old project exists', t => {
+test('missing GPUI host source is rejected', t => {
   const root = fixture(t);
-  fs.renameSync(path.join(root, 'apps/mobile/ios/Rish.xcodeproj'), path.join(root, 'apps/mobile/ios/DSHMobile.xcodeproj'));
-  assert.ok(auditSource(root).some(error => error.includes('Rish.xcodeproj/project.pbxproj: required source')));
+  fs.unlinkSync(path.join(root, 'apps/gpui/ios/Sources/main.m'));
+  assert.ok(auditSource(root).some(error => error.includes('main.m: required source')));
 });
-test('old native component name is rejected', t => {
+test('Android launcher must load the GPUI renderer', t => {
   const root = fixture(t);
-  edit(root, 'apps/mobile/ios/Rish/AppDelegate.swift', text => text.replace('withModuleName: "Rish"', 'withModuleName: "DSHMobile"'));
-  assert.ok(auditSource(root).some(error => error.includes('Rish entry point does not match')));
+  edit(root, 'apps/gpui/android/app/src/main/AndroidManifest.xml', text => text.replace('android:value="rish_gpui"', 'android:value="wrong_renderer"'));
+  assert.ok(auditSource(root).some(error => error.includes('GPUI entry point does not match')));
 });
-test('machine-specific CocoaPods executable is rejected', t => {
+test('machine-specific executable is rejected', t => {
   const root = fixture(t);
-  edit(root, 'run-simulator.sh', text => `${text}\n/opt/homebrew/bin/pod install\n`);
+  edit(root, 'run-simulator.sh', text => `${text}\n/opt/homebrew/bin/xcodegen generate\n`);
   assert.ok(auditSource(root).some(error => error.includes('machine-specific path')));
 });
 test('a retired Xcode SDK path is rejected', t => {
   const root = fixture(t);
-  edit(root, 'apps/mobile/ios/Rish.xcodeproj/project.pbxproj', text => text.replace(
-    'path = System/Library/Frameworks/Foundation.framework; sourceTree = SDKROOT;',
-    'path = Platforms/iPhoneOS.platform/Developer/SDKs/iPhoneOS18.0.sdk/System/Library/Frameworks/Foundation.framework; sourceTree = DEVELOPER_DIR;'));
+  edit(root, 'apps/gpui/ios/project.yml', text => `${text}\nSDKROOT: Platforms/iPhoneOS.platform/Developer/SDKs/iPhoneOS18.0.sdk/System\n`);
   assert.ok(auditSource(root).some(error => error.includes('use SDKROOT instead')));
 });
-test('external local pod checkout is rejected', t => {
+test('external Cargo checkout is rejected', t => {
   const root = fixture(t);
-  edit(root, 'apps/mobile/ios/Podfile', text => text.replace('../../../modules/rish/ios', '../../../../rish/ios'));
-  assert.ok(auditSource(root).some(error => error.includes('local runtime must resolve inside')));
+  edit(root, 'apps/gpui/crates/rish-shell-core/Cargo.toml', text => text.replace('../../../../modules/rish/core/crates/rish-agent-core', '../../../../../private-runtime'));
+  assert.ok(auditSource(root).some(error => error.includes('local Cargo dependency must resolve inside')));
 });
 test('a symlink cannot conceal an external source prerequisite', t => {
   const root = fixture(t);
-  const file = 'apps/mobile/ios/Rish/Info.plist';
+  const file = 'apps/gpui/ios/Info.plist';
   fs.unlinkSync(path.join(root, file));
   fs.symlinkSync(path.join(checkout, file), path.join(root, file));
   assert.ok(auditSource(root).some(error => error.includes('source resolves outside')));
 });
-test('local npm dependency and absent integrity are rejected', t => {
+test('registry dependencies require checksums', t => {
   const root = fixture(t);
-  edit(root, 'apps/mobile/package-lock.json', text => {
-    const lock = JSON.parse(text);
-    const entry = lock.packages[Object.keys(lock.packages).find(key => key)];
-    entry.resolved = 'file:../../../private-checkout';
-    delete entry.integrity;
-    return JSON.stringify(lock);
-  });
-  assert.ok(auditSource(root).some(error => error.includes('public, integrity-pinned npm resolution')));
+  edit(root, 'apps/gpui/Cargo.lock', text => text.replace(/^checksum = "[^"]+"\n/m, ''));
+  assert.ok(auditSource(root).some(error => error.includes('needs a registry checksum')));
 });
-test('a stale npm lock is rejected before npm ci', t => {
+test('git dependencies require public immutable revisions', t => {
   const root = fixture(t);
-  edit(root, 'apps/mobile/package.json', text => {
-    const manifest = JSON.parse(text);
-    manifest.dependencies.react = '0.0.0';
-    return JSON.stringify(manifest);
-  });
-  assert.ok(auditSource(root).some(error => error.includes('dependencies differs from package.json')));
+  edit(root, 'apps/gpui/mobile/Cargo.lock', text => text.replace(/git\+https:\/\/github.com\/[^"\n]+/, 'git+file:///private/gpui-mobile#main'));
+  assert.ok(auditSource(root).some(error => error.includes('public revision-pinned Cargo source')));
+});
+test('a stale mobile backend revision is rejected before Cargo builds', t => {
+  const root = fixture(t);
+  edit(root, 'apps/gpui/mobile/Cargo.toml', text => text.replace(/rev = "[a-f0-9]{40}"/, `rev = "${'a'.repeat(40)}"`));
+  assert.ok(auditSource(root).some(error => error.includes('revision differs from Cargo.toml')));
+});
+test('the retired React Native app cannot reenter the source archive', t => {
+  const root = fixture(t);
+  fs.mkdirSync(path.join(root, 'apps/mobile'));
+  assert.ok(auditSource(root).some(error => error.includes('retired React Native application must not be present')));
+});
+test('native runtime sources cannot import a React Native bridge', t => {
+  const root = fixture(t);
+  const file = 'modules/rish/ios/Sources/SessionSnapshotStore.mm';
+  edit(root, file, text => `${text}\n#import <React/RCTBridgeModule.h>\n`);
+  assert.ok(auditSource(root).some(error => error.includes('React Native or JavaScript engine dependency')));
+});
+test('a new source file cannot hide a React Native Android dependency', t => {
+  const root = fixture(t);
+  fs.writeFileSync(path.join(root, 'apps/gpui/android/app/src/main/java/OldBridge.java'), 'import com.facebook.react.ReactActivity;\n');
+  assert.ok(auditSource(root).some(error => error.includes('React Native or JavaScript engine dependency')));
+});
+test('Gradle cannot retain a React Native source path', t => {
+  const root = fixture(t);
+  edit(root, 'apps/gpui/android/app/build.gradle', text => `${text}\ndef retired = file("../../../mobile/android")\n`);
+  assert.ok(auditSource(root).some(error => error.includes('retired mobile app build reference')));
 });

@@ -37,7 +37,7 @@ NSString *DSHGitCredentialAccountForScope(NSString *scopeId, NSString *host);
 /// Reads the credential for (scopeId, host). Expired items are deleted and
 /// reported as absent. The returned dictionary carries `username`, `token`,
 /// `expires_at` (unix seconds) and `expiry_seconds`; it must never cross the
-/// React Native bridge.
+/// app UI bridge.
 NSDictionary *_Nullable DSHGitCredentialForScope(NSString *scopeId,
                                                  NSString *host,
                                                  NSError **error);

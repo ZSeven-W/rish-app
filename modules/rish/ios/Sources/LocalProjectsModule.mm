@@ -1,7 +1,7 @@
 #import <Foundation/Foundation.h>
 #import <CommonCrypto/CommonDigest.h>
-#import <React/RCTBridgeModule.h>
-#import <React/RCTUtils.h>
+#import <RishNative/RishNativeModule.h>
+#import <RishNative/RishUIKit.h>
 #import <Security/Security.h>
 #import <UIKit/UIKit.h>
 
@@ -53,7 +53,7 @@ typedef BOOL (^LPV2AttachFaultHook)(NSString *stage);
 // LocalWorkspaceAccess intentionally keeps authority storage private.  This
 // narrow native-only category is used to read the already verified root
 // fingerprint and to publish the private Git binding; none of these methods
-// or objects cross the React Native boundary.
+// or objects cross the app UI boundary.
 @interface DSHLocalWorkspaceAccess (DSHLocalProjectsPrivateAccess)
 @property(nonatomic, strong) NSURL *privateRootURL;
 - (nullable NSURL *)ownedWorkspacesRootURL;
@@ -117,7 +117,7 @@ static BOOL LPV2SafeRevision(id value) {
 }
 
 // What a project operation's arguments have to be, and which code a failure is
-// reported to JavaScript as, live in the shared core (modules/rish/core,
+// reported to the UI as, live in the shared core (modules/rish/core,
 // `rish_agent_project_module_reduce`).
 static NSDictionary *LPV2Reduce(NSString *op, NSDictionary *fields) {
   NSMutableDictionary *envelope = [fields mutableCopy];
@@ -265,7 +265,7 @@ static NSString *LPV2StableErrorCode(NSError *error) {
   return [code isKindOfClass:NSString.class] ? code : @"E_PROJECT_NATIVE";
 }
 
-static void LPV2Reject(RCTPromiseRejectBlock reject, NSError *error) {
+static void LPV2Reject(RishRejectBlock reject, NSError *error) {
   NSString *code = LPV2StableErrorCode(error);
   reject(code, code, nil);
 }
@@ -905,7 +905,7 @@ static int LPCloneCertificateCallback(git_cert *cert, int valid,
 
 /// Native credential prompt result. `failureCode` nil means the user entered a
 /// username, token, and expiry window; "cancelled" and "presentation" are the
-/// only failure codes. Neither value is ever returned to React Native.
+/// only failure codes. Neither value is ever returned to the app UI.
 typedef void (^LPCredentialPromptCompletion)(NSString *_Nullable username,
                                              NSString *_Nullable token,
                                              NSInteger expirySeconds,
@@ -916,7 +916,7 @@ typedef void (^LPCredentialPromptHook)(NSString *host, BOOL chinese,
                                        BOOL plaintext,
                                        LPCredentialPromptCompletion completion);
 
-@interface LocalProjectsModule : NSObject <RCTBridgeModule, UIDocumentPickerDelegate>
+@interface LocalProjectsModule : NSObject <RishNativeModule, UIDocumentPickerDelegate>
 @property(nonatomic, strong) dispatch_queue_t projectQueue;
 @property(nonatomic, strong) LPCloneOperation *cloneOperation;
 @property(nonatomic, copy, nullable) LPCredentialPromptHook credentialPromptHook;
@@ -937,8 +937,8 @@ typedef void (^LPCredentialPromptHook)(NSString *host, BOOL chinese,
 @property(nonatomic, copy, nullable) NSString *sshImportHost;
 @property(nonatomic) NSInteger sshImportPort;
 @property(nonatomic, copy, nullable) NSString *sshImportUsername;
-@property(nonatomic, copy, nullable) RCTPromiseResolveBlock sshImportResolve;
-@property(nonatomic, copy, nullable) RCTPromiseRejectBlock sshImportReject;
+@property(nonatomic, copy, nullable) RishResolveBlock sshImportResolve;
+@property(nonatomic, copy, nullable) RishRejectBlock sshImportReject;
 - (nullable NSDictionary *)diffForRepository:(git_repository *)repository projectId:(NSString *)projectId
   staged:(BOOL)staged contextLines:(NSUInteger)contextLines pageOffset:(NSNumber *)pageOffset
   expectedSnapshot:(NSString *)expectedSnapshot error:(NSError **)error;
@@ -950,6 +950,11 @@ typedef void (^LPCredentialPromptHook)(NSString *host, BOOL chinese,
 - (BOOL)reconcileOwnedOrphansInRootLease:(DSHLocalProjectsRootLease *)rootLease;
 - (BOOL)removePublishedOwnerMarkerAtDescriptor:(int)descriptor;
 - (BOOL)syncPublishedRootDescriptor:(int)descriptor;
+- (nullable DSHLocalProjectLease *)leaseRepositoryForId:(NSString *)projectId
+                                                 mode:(DSHLocalProjectAccessMode)mode
+                                             metadata:(NSDictionary **)metadata
+                                                error:(NSError **)error
+    NS_RETURNS_RETAINED;
 - (nullable DSHLocalProjectLease *)v2LeaseForRoot:(NSDictionary *)root
                                              mode:(DSHLocalProjectAccessMode)mode
                                             error:(NSError **)error;
@@ -998,7 +1003,7 @@ typedef void (^LPCredentialPromptHook)(NSString *host, BOOL chinese,
 
 @implementation LocalProjectsModule
 
-RCT_EXPORT_MODULE(LocalProjects)
+RISH_NATIVE_MODULE(LocalProjects)
 
 + (BOOL)requiresMainQueueSetup {
   return NO;
@@ -1059,8 +1064,11 @@ RCT_EXPORT_MODULE(LocalProjects)
     _v2DetachCheckpoints = [NSMutableDictionary dictionary];
     _v2AttachResults = [NSMutableDictionary dictionary];
     _pushCancelTokens = [NSMutableDictionary dictionary];
-    _projectQueue = dispatch_queue_create(
-      "dev.zseven.rish.local-projects", DISPATCH_QUEUE_SERIAL);
+    // Repository leases own locks. Drain temporary owners before the next
+    // queued operation rather than relying on an idle worker's outer pool.
+    _projectQueue = dispatch_queue_create("dev.zseven.rish.local-projects",
+      dispatch_queue_attr_make_with_autorelease_frequency(
+        DISPATCH_QUEUE_SERIAL, DISPATCH_AUTORELEASE_FREQUENCY_WORK_ITEM));
     NSError *startupError = nil;
     if (_workspaceAccessV2 != nil &&
         ![self v2ReconcileAllAttachStaging:&startupError]) {
@@ -1108,6 +1116,8 @@ RCT_EXPORT_MODULE(LocalProjects)
   return project;
 }
 
+// Preserve the access layer's +1 contract: out-parameter writeback can prevent
+// ARC's autoreleased-return optimization, leaving a completed call's lock held.
 - (DSHLocalProjectLease *)leaseRepositoryForId:(NSString *)projectId
                                           mode:(DSHLocalProjectAccessMode)mode
                                       metadata:(NSDictionary **)metadata
@@ -2817,9 +2827,9 @@ RCT_EXPORT_MODULE(LocalProjects)
   return result;
 }
 
-RCT_REMAP_METHOD(list,
-                 listWithResolver:(RCTPromiseResolveBlock)resolve
-                 rejecter:(RCTPromiseRejectBlock)reject) {
+RISH_NATIVE_METHOD(list,
+                 listWithResolver:(RishResolveBlock)resolve
+                 rejecter:(RishRejectBlock)reject) {
   dispatch_async(self.projectQueue, ^{
     NSError *error = nil;
     NSURL *root = [self projectsRootCreatingIfNeeded:NO error:&error];
@@ -2883,10 +2893,10 @@ RCT_REMAP_METHOD(list,
   });
 }
 
-RCT_REMAP_METHOD(create,
+RISH_NATIVE_METHOD(create,
                  createProjectWithName:(id)nameValue
-                 resolver:(RCTPromiseResolveBlock)resolve
-                 rejecter:(RCTPromiseRejectBlock)reject) {
+                 resolver:(RishResolveBlock)resolve
+                 rejecter:(RishRejectBlock)reject) {
   dispatch_async(self.projectQueue, ^{
     NSError *error = nil;
     NSString *name = LPValidatedProjectName(nameValue, &error);
@@ -2957,9 +2967,9 @@ RCT_REMAP_METHOD(create,
   });
 }
 
-RCT_REMAP_METHOD(startClone,
+RISH_NATIVE_METHOD(startClone,
                  startCloneURL:(id)urlValue name:(id)nameValue options:(id)optionsValue
-                 resolver:(RCTPromiseResolveBlock)resolve rejecter:(RCTPromiseRejectBlock)reject) {
+                 resolver:(RishResolveBlock)resolve rejecter:(RishRejectBlock)reject) {
   NSError *error = nil;
   NSString *proxyURL = LPValidatedHTTPSProxyURL(optionsValue, &error);
   NSString *sshProfileId = error == nil ? LPValidatedSSHProfileId(optionsValue, &error) : nil;
@@ -3000,9 +3010,9 @@ RCT_REMAP_METHOD(startClone,
   });
 }
 
-RCT_REMAP_METHOD(cloneStatus,
+RISH_NATIVE_METHOD(cloneStatus,
                  cloneStatusForOperation:(id)operationIdValue
-                 resolver:(RCTPromiseResolveBlock)resolve rejecter:(RCTPromiseRejectBlock)reject) {
+                 resolver:(RishResolveBlock)resolve rejecter:(RishRejectBlock)reject) {
   LPCloneOperation *operation = nil;
   @synchronized (self) { operation = self.cloneOperation; }
   if (operationIdValue != nil && operationIdValue != NSNull.null &&
@@ -3013,9 +3023,9 @@ RCT_REMAP_METHOD(cloneStatus,
   resolve(operation == nil ? NSNull.null : [operation snapshot]);
 }
 
-RCT_REMAP_METHOD(cancelClone,
+RISH_NATIVE_METHOD(cancelClone,
                  cancelCloneOperation:(id)operationIdValue
-                 resolver:(RCTPromiseResolveBlock)resolve rejecter:(RCTPromiseRejectBlock)reject) {
+                 resolver:(RishResolveBlock)resolve rejecter:(RishRejectBlock)reject) {
   LPCloneOperation *operation = nil;
   @synchronized (self) { operation = self.cloneOperation; }
   if (operation == nil || ![operation.operationId isEqual:LPString(operationIdValue)]) {
@@ -3030,12 +3040,12 @@ RCT_REMAP_METHOD(cancelClone,
   }
 }
 
-RCT_REMAP_METHOD(clone,
+RISH_NATIVE_METHOD(clone,
                  clonePublicRepository:(id)urlValue
                  name:(id)nameValue
                  options:(id)optionsValue
-                 resolver:(RCTPromiseResolveBlock)resolve
-                 rejecter:(RCTPromiseRejectBlock)reject) {
+                 resolver:(RishResolveBlock)resolve
+                 rejecter:(RishRejectBlock)reject) {
   dispatch_async(self.projectQueue, ^{
     NSError *error = nil;
     __attribute__((objc_precise_lifetime)) NSString *proxyURL =
@@ -3074,11 +3084,11 @@ RCT_REMAP_METHOD(clone,
   });
 }
 
-RCT_REMAP_METHOD(fetch,
+RISH_NATIVE_METHOD(fetch,
                  fetchForProject:(id)projectIdValue
                  sshProfileId:(id)profileIdValue
-                 resolver:(RCTPromiseResolveBlock)resolve
-                 rejecter:(RCTPromiseRejectBlock)reject) {
+                 resolver:(RishResolveBlock)resolve
+                 rejecter:(RishRejectBlock)reject) {
   dispatch_async(self.projectQueue, ^{
     NSError *error = nil;
     NSString *projectId = LPString(projectIdValue);
@@ -3129,7 +3139,7 @@ RCT_REMAP_METHOD(fetch,
 }
 
 /// Runs the complete staged, validated public clone. Callers must serialize
-/// access through the project queue; used by the RCT clone method and by the
+/// access through the project queue; used by the native registry clone method and by the
 /// env-gated test fixture driver.
 - (NSDictionary *)clonePublicRepositoryAtURL:(NSURL *)remoteURL
                                         name:(NSString *)name
@@ -3292,10 +3302,10 @@ RCT_REMAP_METHOD(fetch,
   return metadata;
 }
 
-RCT_REMAP_METHOD(status,
+RISH_NATIVE_METHOD(status,
                  statusForProject:(id)projectIdValue
-                 resolver:(RCTPromiseResolveBlock)resolve
-                 rejecter:(RCTPromiseRejectBlock)reject) {
+                 resolver:(RishResolveBlock)resolve
+                 rejecter:(RishRejectBlock)reject) {
   dispatch_async(self.projectQueue, ^{
     NSError *error = nil;
     NSString *projectId = LPString(projectIdValue);
@@ -3517,12 +3527,12 @@ RCT_REMAP_METHOD(status,
   };
 }
 
-RCT_REMAP_METHOD(diff,
+RISH_NATIVE_METHOD(diff,
                  diffForProject:(id)projectIdValue
                  staged:(BOOL)staged
                  contextLines:(nonnull NSNumber *)contextLinesValue
-                 resolver:(RCTPromiseResolveBlock)resolve
-                 rejecter:(RCTPromiseRejectBlock)reject) {
+                 resolver:(RishResolveBlock)resolve
+                 rejecter:(RishRejectBlock)reject) {
   dispatch_async(self.projectQueue, ^{
     NSError *error = nil;
     NSString *projectId = LPString(projectIdValue);
@@ -3553,10 +3563,10 @@ RCT_REMAP_METHOD(diff,
   });
 }
 
-RCT_REMAP_METHOD(diffPage,
+RISH_NATIVE_METHOD(diffPage,
                  diffPageForProject:(id)projectIdValue staged:(BOOL)staged
                  offset:(id)offsetValue snapshot:(id)snapshotValue
-                 resolver:(RCTPromiseResolveBlock)resolve rejecter:(RCTPromiseRejectBlock)reject) {
+                 resolver:(RishResolveBlock)resolve rejecter:(RishRejectBlock)reject) {
   BOOL validOffset = [offsetValue isKindOfClass:NSNumber.class] &&
     CFGetTypeID((__bridge CFTypeRef)offsetValue) != CFBooleanGetTypeID() &&
     isfinite([offsetValue doubleValue]) && [offsetValue doubleValue] >= 0 &&
@@ -3584,10 +3594,10 @@ RCT_REMAP_METHOD(diffPage,
   });
 }
 
-RCT_REMAP_METHOD(stageAll,
+RISH_NATIVE_METHOD(stageAll,
                  stageAllForProject:(id)projectIdValue
-                 resolver:(RCTPromiseResolveBlock)resolve
-                 rejecter:(RCTPromiseRejectBlock)reject) {
+                 resolver:(RishResolveBlock)resolve
+                 rejecter:(RishRejectBlock)reject) {
   dispatch_async(self.projectQueue, ^{
     NSError *error = nil;
     NSString *projectId = LPString(projectIdValue);
@@ -3662,13 +3672,13 @@ static NSString *LPValidatedAuthorEmail(id value, NSError **error) {
   return email;
 }
 
-RCT_REMAP_METHOD(commit,
+RISH_NATIVE_METHOD(commit,
                  commitProject:(id)projectIdValue
                  message:(id)messageValue
                  authorName:(id)authorNameValue
                  authorEmail:(id)authorEmailValue
-                 resolver:(RCTPromiseResolveBlock)resolve
-                 rejecter:(RCTPromiseRejectBlock)reject) {
+                 resolver:(RishResolveBlock)resolve
+                 rejecter:(RishRejectBlock)reject) {
   dispatch_async(self.projectQueue, ^{
     NSError *error = nil;
     NSString *projectId = LPString(projectIdValue);
@@ -3749,11 +3759,11 @@ RCT_REMAP_METHOD(commit,
   });
 }
 
-RCT_REMAP_METHOD(setRemote,
+RISH_NATIVE_METHOD(setRemote,
                  setRemoteForProject:(id)projectIdValue
                  url:(id)urlValue
-                 resolver:(RCTPromiseResolveBlock)resolve
-                 rejecter:(RCTPromiseRejectBlock)reject) {
+                 resolver:(RishResolveBlock)resolve
+                 rejecter:(RishRejectBlock)reject) {
   dispatch_async(self.projectQueue, ^{
     NSError *error = nil;
     NSString *projectId = LPString(projectIdValue);
@@ -3811,10 +3821,10 @@ RCT_REMAP_METHOD(setRemote,
   });
 }
 
-RCT_REMAP_METHOD(credentialStatus,
+RISH_NATIVE_METHOD(credentialStatus,
                  credentialStatusForProject:(id)projectIdValue
-                 resolver:(RCTPromiseResolveBlock)resolve
-                 rejecter:(RCTPromiseRejectBlock)reject) {
+                 resolver:(RishResolveBlock)resolve
+                 rejecter:(RishRejectBlock)reject) {
   dispatch_async(self.projectQueue, ^{
     NSError *error = nil;
     NSString *projectId = LPString(projectIdValue);
@@ -3838,10 +3848,10 @@ RCT_REMAP_METHOD(credentialStatus,
   });
 }
 
-RCT_REMAP_METHOD(sshCredentialStatus,
+RISH_NATIVE_METHOD(sshCredentialStatus,
                  sshCredentialStatusForProfile:(id)profileIdValue
-                 resolver:(RCTPromiseResolveBlock)resolve
-                 rejecter:(RCTPromiseRejectBlock)reject) {
+                 resolver:(RishResolveBlock)resolve
+                 rejecter:(RishRejectBlock)reject) {
   dispatch_async(self.projectQueue, ^{
     NSError *error = nil;
     NSString *profileId = LPString(profileIdValue);
@@ -3857,13 +3867,13 @@ RCT_REMAP_METHOD(sshCredentialStatus,
 /// Opens the native document picker for exactly one private-key file and one
 /// OpenSSH known_hosts file. Selected data is read under the security-scoped
 /// URL and immediately handed to Keychain storage; no filesystem copy is made.
-RCT_REMAP_METHOD(beginSSHCredentialImport,
+RISH_NATIVE_METHOD(beginSSHCredentialImport,
                  beginSSHCredentialImportForProfile:(id)profileIdValue
                  host:(id)hostValue
                  port:(id)portValue
                  username:(id)usernameValue
-                 resolver:(RCTPromiseResolveBlock)resolve
-                 rejecter:(RCTPromiseRejectBlock)reject) {
+                 resolver:(RishResolveBlock)resolve
+                 rejecter:(RishRejectBlock)reject) {
   NSString *profileId = LPString(profileIdValue);
   NSString *host = LPString(hostValue).lowercaseString;
   NSInteger port = [portValue isKindOfClass:NSNumber.class] ? [portValue integerValue] : 0;
@@ -3879,7 +3889,7 @@ RCT_REMAP_METHOD(beginSSHCredentialImport,
         return;
       }
     }
-    UIViewController *presenter = RCTPresentedViewController();
+    UIViewController *presenter = RishPresentedViewController();
     if (presenter == nil || [presenter isKindOfClass:UIAlertController.class]) {
       reject(@"presentation", @"SSH credential picker cannot be presented", nil);
       return;
@@ -3901,7 +3911,7 @@ RCT_REMAP_METHOD(beginSSHCredentialImport,
 
 - (void)documentPickerWasCancelled:(UIDocumentPickerViewController *)controller {
   (void)controller;
-  RCTPromiseResolveBlock resolve = self.sshImportResolve;
+  RishResolveBlock resolve = self.sshImportResolve;
   self.sshImportResolve = nil;
   self.sshImportReject = nil;
   self.sshImportProfileId = nil;
@@ -3914,8 +3924,8 @@ RCT_REMAP_METHOD(beginSSHCredentialImport,
 - (void)documentPicker:(UIDocumentPickerViewController *)controller
  didPickDocumentsAtURLs:(NSArray<NSURL *> *)urls {
   (void)controller;
-  RCTPromiseResolveBlock resolve = self.sshImportResolve;
-  RCTPromiseRejectBlock reject = self.sshImportReject;
+  RishResolveBlock resolve = self.sshImportResolve;
+  RishRejectBlock reject = self.sshImportReject;
   NSString *profileId = self.sshImportProfileId;
   NSString *host = self.sshImportHost;
   NSInteger port = self.sshImportPort;
@@ -3982,11 +3992,11 @@ RCT_REMAP_METHOD(beginSSHCredentialImport,
   resolve(DSHGitSSHCredentialStatusForProfile(profileId, nil));
 }
 
-RCT_REMAP_METHOD(presentCredentialPrompt,
+RISH_NATIVE_METHOD(presentCredentialPrompt,
                  presentCredentialPromptForProject:(id)projectIdValue
                  locale:(id)localeValue
-                 resolver:(RCTPromiseResolveBlock)resolve
-                 rejecter:(RCTPromiseRejectBlock)reject) {
+                 resolver:(RishResolveBlock)resolve
+                 rejecter:(RishRejectBlock)reject) {
   NSString *projectId = LPString(projectIdValue);
   NSString *locale = LPString(localeValue);
   dispatch_async(self.projectQueue, ^{
@@ -4068,14 +4078,14 @@ RCT_REMAP_METHOD(presentCredentialPrompt,
   });
 }
 
-/// The native (non React Native) secure prompt: a username/token alert
+/// The native (non app UI) secure prompt: a username/token alert
 /// followed by an explicit expiry choice. Text fields are cleared as soon as
 /// their values are captured.
 - (void)presentCredentialAlertForHost:(NSString *)host
                               chinese:(BOOL)chinese
                             plaintext:(BOOL)plaintext
                            completion:(LPCredentialPromptCompletion)completion {
-  UIViewController *presenter = RCTPresentedViewController();
+  UIViewController *presenter = RishPresentedViewController();
   if (presenter == nil || [presenter isKindOfClass:UIAlertController.class]) {
     completion(nil, nil, 0, @"presentation");
     return;
@@ -4085,8 +4095,8 @@ RCT_REMAP_METHOD(presentCredentialPrompt,
     ? (chinese ? @"该远程是局域网明文 HTTP 测试地址。" : @" This remote is a plain-HTTP address on the local network.")
     : @"";
   NSString *message = chinese
-    ? [NSString stringWithFormat:@"用于 %@ 的推送。PAT 仅保存在本机 Keychain，永不传回 React Native。%@接下来选择保存时长（1 小时 / 24 小时 / 7 天）。", host, transport]
-    : [NSString stringWithFormat:@"Used to push to %@. The PAT stays in this device's Keychain and is never returned to React Native.%@ Next, choose how long to keep it (1 hour / 24 hours / 7 days).", host, transport];
+    ? [NSString stringWithFormat:@"用于 %@ 的推送。PAT 仅保存在本机 Keychain，不会显示在应用界面中。%@接下来选择保存时长（1 小时 / 24 小时 / 7 天）。", host, transport]
+    : [NSString stringWithFormat:@"Used to push to %@. The PAT stays in this device's Keychain and is never returned to the app interface.%@ Next, choose how long to keep it (1 hour / 24 hours / 7 days).", host, transport];
   UIAlertController *alert = [UIAlertController alertControllerWithTitle:title
     message:message preferredStyle:UIAlertControllerStyleAlert];
   [alert addTextFieldWithConfigurationHandler:^(UITextField *field) {
@@ -4139,7 +4149,7 @@ RCT_REMAP_METHOD(presentCredentialPrompt,
       // expiry choice from the same presenter.
       dispatch_after(dispatch_time(DISPATCH_TIME_NOW, 350 * NSEC_PER_MSEC),
           dispatch_get_main_queue(), ^{
-        UIViewController *nextPresenter = RCTPresentedViewController();
+        UIViewController *nextPresenter = RishPresentedViewController();
         if (nextPresenter == nil) {
           completion(nil, nil, 0, @"presentation");
           return;
@@ -4150,10 +4160,10 @@ RCT_REMAP_METHOD(presentCredentialPrompt,
   [presenter presentViewController:alert animated:YES completion:nil];
 }
 
-RCT_REMAP_METHOD(clearCredential,
+RISH_NATIVE_METHOD(clearCredential,
                  clearCredentialForProject:(id)projectIdValue
-                 resolver:(RCTPromiseResolveBlock)resolve
-                 rejecter:(RCTPromiseRejectBlock)reject) {
+                 resolver:(RishResolveBlock)resolve
+                 rejecter:(RishRejectBlock)reject) {
   dispatch_async(self.projectQueue, ^{
     NSError *error = nil;
     NSString *projectId = LPString(projectIdValue);
@@ -4190,11 +4200,11 @@ RCT_REMAP_METHOD(clearCredential,
   });
 }
 
-RCT_REMAP_METHOD(push,
+RISH_NATIVE_METHOD(push,
                  pushProject:(id)projectIdValue
                  options:(id)optionsValue
-                 resolver:(RCTPromiseResolveBlock)resolve
-                 rejecter:(RCTPromiseRejectBlock)reject) {
+                 resolver:(RishResolveBlock)resolve
+                 rejecter:(RishRejectBlock)reject) {
   dispatch_async(self.projectQueue, ^{
     NSError *error = nil;
     __attribute__((objc_precise_lifetime)) NSString *proxyURL =
@@ -4403,10 +4413,10 @@ RCT_REMAP_METHOD(push,
   return fullName;
 }
 
-RCT_REMAP_METHOD(cancelPush,
+RISH_NATIVE_METHOD(cancelPush,
                  cancelPushForProject:(id)projectIdValue
-                 resolver:(RCTPromiseResolveBlock)resolve
-                 rejecter:(RCTPromiseRejectBlock)reject) {
+                 resolver:(RishResolveBlock)resolve
+                 rejecter:(RishRejectBlock)reject) {
   // Deliberately not queued on projectQueue: the in-flight push blocks that
   // queue while polling the cancel token.
   NSString *projectId = LPString(projectIdValue);
@@ -4426,10 +4436,10 @@ RCT_REMAP_METHOD(cancelPush,
   });
 }
 
-RCT_REMAP_METHOD(pushReceipts,
+RISH_NATIVE_METHOD(pushReceipts,
                  pushReceiptsForProject:(id)projectIdValue
-                 resolver:(RCTPromiseResolveBlock)resolve
-                 rejecter:(RCTPromiseRejectBlock)reject) {
+                 resolver:(RishResolveBlock)resolve
+                 rejecter:(RishRejectBlock)reject) {
   dispatch_async(self.projectQueue, ^{
     NSError *error = nil;
     NSString *projectId = LPString(projectIdValue);
@@ -4471,10 +4481,10 @@ RCT_REMAP_METHOD(pushReceipts,
 
 // MARK: - Workspace-root routed Project/Git V2
 
-RCT_REMAP_METHOD(attachWorkspaceProject,
+RISH_NATIVE_METHOD(attachWorkspaceProject,
                  attachWorkspaceProjectRequest:(id)requestValue
-                 resolver:(RCTPromiseResolveBlock)resolve
-                 rejecter:(RCTPromiseRejectBlock)reject) {
+                 resolver:(RishResolveBlock)resolve
+                 rejecter:(RishRejectBlock)reject) {
   NSDictionary *request = nil;
   NSError *validationError = nil;
   @try {
@@ -4519,10 +4529,10 @@ RCT_REMAP_METHOD(attachWorkspaceProject,
   });
 }
 
-RCT_REMAP_METHOD(projectForWorkspaceV2,
+RISH_NATIVE_METHOD(projectForWorkspaceV2,
                  projectForWorkspaceV2:(id)rootValue
-                 resolver:(RCTPromiseResolveBlock)resolve
-                 rejecter:(RCTPromiseRejectBlock)reject) {
+                 resolver:(RishResolveBlock)resolve
+                 rejecter:(RishRejectBlock)reject) {
   NSDictionary *root = nil;
   NSError *validationError = nil;
   @try {
@@ -4649,17 +4659,17 @@ RCT_REMAP_METHOD(projectForWorkspaceV2,
   }
   // The schema-8 clearance store is the only authority allowed to approve a
   // destructive private-gitdir mutation. This bridge has no access to that
-  // store yet, so fail closed rather than treating a JavaScript UUID as a
+  // store yet, so fail closed rather than treating a the UI UUID as a
   // trust anchor. The checkpoint remains retryable for the mounted owner.
   if (error != nil) *error = LPError(3112, @"Workspace clearance is unavailable");
   return nil;
 
 }
 
-RCT_REMAP_METHOD(prepareProjectDetachV1,
+RISH_NATIVE_METHOD(prepareProjectDetachV1,
                  prepareProjectDetachV1Request:(id)requestValue
-                 resolver:(RCTPromiseResolveBlock)resolve
-                 rejecter:(RCTPromiseRejectBlock)reject) {
+                 resolver:(RishResolveBlock)resolve
+                 rejecter:(RishRejectBlock)reject) {
   NSDictionary *request = nil;
   NSError *validationError = nil;
   NSDictionary *root = nil;
@@ -4700,10 +4710,10 @@ RCT_REMAP_METHOD(prepareProjectDetachV1,
   });
 }
 
-RCT_REMAP_METHOD(commitProjectDetachV1,
+RISH_NATIVE_METHOD(commitProjectDetachV1,
                  commitProjectDetachV1Request:(id)requestValue
-                 resolver:(RCTPromiseResolveBlock)resolve
-                 rejecter:(RCTPromiseRejectBlock)reject) {
+                 resolver:(RishResolveBlock)resolve
+                 rejecter:(RishRejectBlock)reject) {
   NSDictionary *request = LPDictionary(requestValue);
   dispatch_async(self.projectQueue, ^{
     NSError *error = nil;
@@ -4715,10 +4725,10 @@ RCT_REMAP_METHOD(commitProjectDetachV1,
   });
 }
 
-RCT_REMAP_METHOD(statusV2,
+RISH_NATIVE_METHOD(statusV2,
                  statusV2Request:(id)requestValue
-                 resolver:(RCTPromiseResolveBlock)resolve
-                 rejecter:(RCTPromiseRejectBlock)reject) {
+                 resolver:(RishResolveBlock)resolve
+                 rejecter:(RishRejectBlock)reject) {
   NSDictionary *request = nil;
   NSError *validationError = nil;
   NSDictionary *root = nil;
@@ -4756,10 +4766,10 @@ RCT_REMAP_METHOD(statusV2,
   });
 }
 
-RCT_REMAP_METHOD(diffV2,
+RISH_NATIVE_METHOD(diffV2,
                  diffV2Request:(id)requestValue
-                 resolver:(RCTPromiseResolveBlock)resolve
-                 rejecter:(RCTPromiseRejectBlock)reject) {
+                 resolver:(RishResolveBlock)resolve
+                 rejecter:(RishRejectBlock)reject) {
   NSDictionary *request = nil;
   NSError *validationError = nil;
   NSDictionary *root = nil;
@@ -4819,10 +4829,10 @@ RCT_REMAP_METHOD(diffV2,
   });
 }
 
-RCT_REMAP_METHOD(stageAllV2,
+RISH_NATIVE_METHOD(stageAllV2,
                  stageAllV2Request:(id)requestValue
-                 resolver:(RCTPromiseResolveBlock)resolve
-                 rejecter:(RCTPromiseRejectBlock)reject) {
+                 resolver:(RishResolveBlock)resolve
+                 rejecter:(RishRejectBlock)reject) {
   NSDictionary *request = nil;
   NSError *validationError = nil;
   NSDictionary *root = nil;
@@ -4870,10 +4880,10 @@ RCT_REMAP_METHOD(stageAllV2,
   });
 }
 
-RCT_REMAP_METHOD(commitV2,
+RISH_NATIVE_METHOD(commitV2,
                  commitV2Request:(id)requestValue
-                 resolver:(RCTPromiseResolveBlock)resolve
-                 rejecter:(RCTPromiseRejectBlock)reject) {
+                 resolver:(RishResolveBlock)resolve
+                 rejecter:(RishRejectBlock)reject) {
   NSDictionary *request = nil;
   NSError *validationError = nil;
   NSDictionary *root = nil;
@@ -5001,10 +5011,10 @@ RCT_REMAP_METHOD(commitV2,
   });
 }
 
-RCT_REMAP_METHOD(pushV2,
+RISH_NATIVE_METHOD(pushV2,
                  pushV2Request:(id)requestValue
-                 resolver:(RCTPromiseResolveBlock)resolve
-                 rejecter:(RCTPromiseRejectBlock)reject) {
+                 resolver:(RishResolveBlock)resolve
+                 rejecter:(RishRejectBlock)reject) {
   NSDictionary *request = nil;
   NSError *validationError = nil;
   NSDictionary *root = nil;
@@ -5170,7 +5180,7 @@ RCT_REMAP_METHOD(pushV2,
 }
 
 /// The V2 remote descriptor: `url` and `host` are null together when the
-/// project has no origin. What JavaScript renders and what Android answers.
+/// project has no origin. What the UI renders and what Android answers.
 - (NSDictionary *)v2RemoteDescriptorForRoot:(NSDictionary *)root
                                      origin:(nullable NSString *)origin {
   NSString *host = origin == nil ? nil
@@ -5209,10 +5219,10 @@ RCT_REMAP_METHOD(pushV2,
   return origin;
 }
 
-RCT_REMAP_METHOD(setRemoteV2,
+RISH_NATIVE_METHOD(setRemoteV2,
                  setRemoteV2Request:(id)requestValue
-                 resolver:(RCTPromiseResolveBlock)resolve
-                 rejecter:(RCTPromiseRejectBlock)reject) {
+                 resolver:(RishResolveBlock)resolve
+                 rejecter:(RishRejectBlock)reject) {
   NSDictionary *request = nil;
   NSError *validationError = nil;
   NSDictionary *root = nil;
@@ -5272,10 +5282,10 @@ RCT_REMAP_METHOD(setRemoteV2,
   } });
 }
 
-RCT_REMAP_METHOD(remoteV2,
+RISH_NATIVE_METHOD(remoteV2,
                  remoteV2Request:(id)requestValue
-                 resolver:(RCTPromiseResolveBlock)resolve
-                 rejecter:(RCTPromiseRejectBlock)reject) {
+                 resolver:(RishResolveBlock)resolve
+                 rejecter:(RishRejectBlock)reject) {
   NSDictionary *request = nil;
   NSError *validationError = nil;
   NSDictionary *root = nil;
@@ -5311,10 +5321,10 @@ RCT_REMAP_METHOD(remoteV2,
   } });
 }
 
-RCT_REMAP_METHOD(credentialStatusV2,
+RISH_NATIVE_METHOD(credentialStatusV2,
                  credentialStatusV2Request:(id)requestValue
-                 resolver:(RCTPromiseResolveBlock)resolve
-                 rejecter:(RCTPromiseRejectBlock)reject) {
+                 resolver:(RishResolveBlock)resolve
+                 rejecter:(RishRejectBlock)reject) {
   NSDictionary *request = nil;
   NSError *validationError = nil;
   NSDictionary *root = nil;
@@ -5352,10 +5362,10 @@ RCT_REMAP_METHOD(credentialStatusV2,
   } });
 }
 
-RCT_REMAP_METHOD(presentCredentialPromptV2,
+RISH_NATIVE_METHOD(presentCredentialPromptV2,
                  presentCredentialPromptV2Request:(id)requestValue
-                 resolver:(RCTPromiseResolveBlock)resolve
-                 rejecter:(RCTPromiseRejectBlock)reject) {
+                 resolver:(RishResolveBlock)resolve
+                 rejecter:(RishRejectBlock)reject) {
   NSDictionary *request = nil;
   NSError *validationError = nil;
   NSDictionary *root = nil;
@@ -5446,10 +5456,10 @@ RCT_REMAP_METHOD(presentCredentialPromptV2,
   } });
 }
 
-RCT_REMAP_METHOD(clearCredentialV2,
+RISH_NATIVE_METHOD(clearCredentialV2,
                  clearCredentialV2Request:(id)requestValue
-                 resolver:(RCTPromiseResolveBlock)resolve
-                 rejecter:(RCTPromiseRejectBlock)reject) {
+                 resolver:(RishResolveBlock)resolve
+                 rejecter:(RishRejectBlock)reject) {
   NSDictionary *request = nil;
   NSError *validationError = nil;
   NSDictionary *root = nil;
@@ -5553,10 +5563,10 @@ static NSString *LPV2FetchOrigin(git_repository *repository, NSString **hostOut)
   return nil;
 }
 
-RCT_REMAP_METHOD(pushReceiptsV2,
+RISH_NATIVE_METHOD(pushReceiptsV2,
                  pushReceiptsV2Request:(id)requestValue
-                 resolver:(RCTPromiseResolveBlock)resolve
-                 rejecter:(RCTPromiseRejectBlock)reject) {
+                 resolver:(RishResolveBlock)resolve
+                 rejecter:(RishRejectBlock)reject) {
   NSDictionary *request = nil;
   NSError *validationError = nil;
   NSDictionary *root = nil;
@@ -5612,10 +5622,10 @@ RCT_REMAP_METHOD(pushReceiptsV2,
   } });
 }
 
-RCT_REMAP_METHOD(fetchV2,
+RISH_NATIVE_METHOD(fetchV2,
                  fetchV2Request:(id)requestValue
-                 resolver:(RCTPromiseResolveBlock)resolve
-                 rejecter:(RCTPromiseRejectBlock)reject) {
+                 resolver:(RishResolveBlock)resolve
+                 rejecter:(RishRejectBlock)reject) {
   NSDictionary *request = nil;
   NSError *validationError = nil;
   NSDictionary *root = nil;
@@ -5765,10 +5775,10 @@ RCT_REMAP_METHOD(fetchV2,
   } });
 }
 
-RCT_REMAP_METHOD(pullFastForwardV2,
+RISH_NATIVE_METHOD(pullFastForwardV2,
                  pullFastForwardV2Request:(id)requestValue
-                 resolver:(RCTPromiseResolveBlock)resolve
-                 rejecter:(RCTPromiseRejectBlock)reject) {
+                 resolver:(RishResolveBlock)resolve
+                 rejecter:(RishRejectBlock)reject) {
   NSDictionary *request = nil;
   NSError *validationError = nil;
   NSDictionary *root = nil;
@@ -6019,10 +6029,10 @@ static BOOL LPMergeJournalClear(int gitDescriptor) {
   return LPMergeJournalClear(lease.gitDescriptor) ? nil : LPError(3199, @"Git merge journal could not be cleared");
 }
 
-RCT_REMAP_METHOD(mergeRemoteV2,
+RISH_NATIVE_METHOD(mergeRemoteV2,
                  mergeRemoteV2Request:(id)requestValue
-                 resolver:(RCTPromiseResolveBlock)resolve
-                 rejecter:(RCTPromiseRejectBlock)reject) {
+                 resolver:(RishResolveBlock)resolve
+                 rejecter:(RishRejectBlock)reject) {
   NSDictionary *request = nil;
   NSError *validationError = nil;
   NSDictionary *root = nil;
@@ -6197,10 +6207,10 @@ RCT_REMAP_METHOD(mergeRemoteV2,
   } });
 }
 
-RCT_REMAP_METHOD(cancelPushV2,
+RISH_NATIVE_METHOD(cancelPushV2,
                  cancelPushV2Request:(id)requestValue
-                 resolver:(RCTPromiseResolveBlock)resolve
-                 rejecter:(RCTPromiseRejectBlock)reject) {
+                 resolver:(RishResolveBlock)resolve
+                 rejecter:(RishRejectBlock)reject) {
   // Not queued on projectQueue: the in-flight push blocks that queue while
   // polling the cancel token. The token is the project's; the operation id
   // is echoed so the caller can match the answer to the push it meant.

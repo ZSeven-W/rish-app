@@ -1,7 +1,7 @@
 # Tracked GuestAssets provenance
 
 This directory records the evidence for the two binary files tracked under
-`apps/mobile/ios/Rish/GuestAssets/`. It is a provenance and rebuild aid,
+`modules/rish/shared/GuestAssets/`. It is a provenance and rebuild aid,
 not a legal opinion. The package license identifiers below are copied from
 Alpine package metadata; the corresponding source and notice obligations still
 need to be handled by the release owner.

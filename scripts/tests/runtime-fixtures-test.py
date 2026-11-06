@@ -74,6 +74,33 @@ class FixtureTests(unittest.TestCase):
             self.assertFalse(path.exists())
             self.assertFalse(path.with_suffix('.partial').exists())
 
+    def test_offline_missing_or_changed_package_never_opens_network(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / 'package.rishenv'
+            record = {'manifest': {'environment_id': 'python-test'},
+                      'package_bytes': 13, 'package_sha256': 'a' * 64}
+            with patch.object(fixtures, 'build_opener', side_effect=AssertionError('unexpected network')):
+                with self.assertRaises(RuntimeError): fixtures.fetch(record, path, offline=True)
+                path.write_bytes(b'old package')
+                with self.assertRaises(RuntimeError): fixtures.fetch(record, path, offline=True)
+            self.assertEqual(path.read_bytes(), b'old package')
+
+    def test_fixture_identity_must_match_current_catalog(self):
+        current = catalog()
+        fixture = {'schema_version': 1, 'packages': [{
+            'family': r['manifest']['family'],
+            'file': r['manifest']['environment_id'] + '.rishenv',
+            'environment_id': r['manifest']['environment_id'],
+            'package_sha256': r['package_sha256'], 'package_bytes': r['package_bytes'],
+        } for r in current['environments']]}
+        self.assertTrue(fixtures.validate_fixture_catalog(fixture, current))
+        for key, value in [('environment_id', 'python-old'), ('package_sha256', 'd' * 64),
+                           ('package_bytes', 101), ('file', 'old.rishenv')]:
+            stale = copy.deepcopy(fixture); stale['packages'][0][key] = value
+            with self.assertRaises(ValueError): fixtures.validate_fixture_catalog(stale, current)
+        duplicate = copy.deepcopy(fixture); duplicate['packages'][0] = duplicate['packages'][1]
+        with self.assertRaises(ValueError): fixtures.validate_fixture_catalog(duplicate, current)
+
 
 if __name__ == '__main__':
     unittest.main()

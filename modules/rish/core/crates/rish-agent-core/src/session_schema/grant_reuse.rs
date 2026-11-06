@@ -18,10 +18,24 @@ pub(super) fn family(name: &str) -> Option<&'static str> {
         "write_file" => Some("file_write"),
         "git_commit" => Some("git_commit"),
         "git_push" => Some("git_push"),
+        _ if crate::assistant_tools::is_mutation(name) => Some("assistant_metadata"),
         _ if crate::runtime_tools::is_guest(name) => Some("guest_service"),
         _ => None,
     }
 }
+/// Private assistant metadata writes use the assistant's readable root binding;
+/// this grant never grants workspace file, Git, or runtime mutation authority.
+pub(super) fn required_capability(family: &str) -> Option<&'static str> {
+    match family {
+        "assistant_metadata" => Some("file_read"),
+        "file_write" => Some("file_write"),
+        "git_commit" => Some("git_commit"),
+        "git_push" => Some("git_push"),
+        "guest_service" => Some("guest_service"),
+        _ => None,
+    }
+}
+
 /// Only this new shape may bypass the historical non-null approval-token rule.
 pub(super) fn call_shape(call: &Value) -> bool {
     as_str(get(call, "access")) == Some("conversation_confirm")
@@ -48,7 +62,7 @@ pub(super) fn call_shape(call: &Value) -> bool {
 pub(super) fn journal_call_bound(call: &Value, journal: &Value) -> bool {
     let root = get(journal, "root");
     let name = as_str(get(call, "name")).unwrap_or_default();
-    let Some(capability) = family(name) else {
+    let Some(capability) = family(name).and_then(required_capability) else {
         return false;
     };
     call_shape(call)

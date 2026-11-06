@@ -72,18 +72,21 @@
       executionTimeoutMillisecondsForFamily:lease.manifest[@"family"] entryPath:record.arguments[@"entry_path"]] / 1000.0;
   BOOL expired = dispatch_semaphore_wait(startup, dispatch_time(DISPATCH_TIME_NOW, (int64_t)(seconds * NSEC_PER_SEC))) != 0;
   if (expired) [self cancelRecord:record];
-  BOOL ready, cancelled; NSURL *url; NSNumber *exitCode;
+  BOOL ready, cancelled; NSURL *url; NSNumber *exitCode; NSError *serviceError;
   @synchronized (record) {
     ready = record.serviceReady && !record.serviceFinished; cancelled = record.cancelled;
-    url = record.http.url; exitCode = record.serviceExit;
+    url = record.http.url; exitCode = record.serviceExit; serviceError = record.serviceError;
   }
   if (!ready || cancelled || !url || ![self recordCurrent:record execution:NO]) {
     [self cancelRecord:record];
     if (dispatch_group_wait(record.serviceDone, dispatch_time(DISPATCH_TIME_NOW, 30LL * NSEC_PER_SEC)))
       return DSHAgentRuntimeEffect(record.name, @"ambiguous", @{@"schema_version":@1,
           @"failure_code":@"E_AGENT_EXECUTION_AMBIGUOUS"}, record.precondition, YES);
+    BOOL timedOut = expired || (!cancelled &&
+        [serviceError.domain isEqual:DSHRuntimeProgramErrorDomain] &&
+        [serviceError.userInfo[@"code"] isEqual:@"E_PROGRAM_TIMEOUT"]);
     return DSHAgentRuntimeFailure(record, cancelled ? @"E_AGENT_CANCELLED" : @"E_AGENT_TOOL_FAILED",
-        expired ? @"service_start_timed_out" : (cancelled ? @"runtime_cancelled" : @"service_start_failed"), exitCode);
+        timedOut ? @"service_start_timed_out" : (cancelled ? @"runtime_cancelled" : @"service_start_failed"), exitCode);
   }
   return DSHAgentRuntimeEffect(record.name, @"ok", @{@"schema_version":@1,
       @"environment_id":record.arguments[@"environment_id"], @"status":@"running",

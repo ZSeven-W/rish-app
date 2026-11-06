@@ -10,7 +10,7 @@ secure_stdin = ARGV.delete('--secure-stdin')
 udid = ARGV.fetch(0) do
   abort 'usage: provision-simulator-key.rb [--secure-stdin] <simulator-udid> [bundle-id] [credential-slot]'
 end
-bundle_id = ARGV.fetch(1, 'tech.zseven.rish')
+bundle_id = ARGV.fetch(1, 'tech.zseven.rish.gpui')
 slot = ARGV.fetch(2, 'DEEPSEEK_API_KEY')
 abort 'unknown credential slot' unless %w[DEEPSEEK_API_KEY ANTHROPIC_API_KEY OPENAI_API_KEY].include?(slot)
 credentials_path = ENV['DSH_CREDENTIALS']

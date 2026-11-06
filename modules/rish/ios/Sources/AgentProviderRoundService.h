@@ -9,7 +9,7 @@
 NS_ASSUME_NONNULL_BEGIN
 
 /// Native-only credential/history/body providers.  They are injected by the
-/// existing LocalRuntime owner; none of these values are part of the RN
+/// existing LocalRuntime owner; none of these values are part of the UI
 /// request or any service result. The credential provider receives the
 /// harness id from the round request so the generic runtime can key the
 /// Keychain slot (DEEPSEEK_API_KEY / ANTHROPIC_API_KEY / OPENAI_API_KEY /
@@ -32,7 +32,7 @@ typedef void (^DSHAgentProviderRoundPreviewSink)(NSDictionary<NSString *, id> *e
 /// receipt appears in the completed public result.
 
 /// Native-only coordinator for one transactional provider round.  The
-/// request/result seam is intentionally not exported through React Native:
+/// request/result seam is intentionally not exported through the app UI:
 /// callers provide only frozen authority assertions and receive redacted
 /// receipts/projections.  Provider arguments and transcript messages stay in
 /// native stores.
@@ -91,7 +91,7 @@ typedef void (^DSHAgentProviderRoundPreviewSink)(NSDictionary<NSString *, id> *e
 
 /// Synchronously composes one native round around the asynchronous provider
 /// transport.  The blocking wait is confined to this native-private helper;
-/// the future RN facade should invoke it off the main thread.
+/// the future UI facade should invoke it off the main thread.
 - (nullable NSDictionary *)completeAgentRoundV2WithRequest:(NSDictionary *)request
                                                      error:(NSError **)error;
 

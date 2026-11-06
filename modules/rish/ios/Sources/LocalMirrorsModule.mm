@@ -1,7 +1,7 @@
 #import "DSHGuestRuntimeState.h"
 
 #import <Foundation/Foundation.h>
-#import <React/RCTBridgeModule.h>
+#import <RishNative/RishNativeModule.h>
 
 #include <sys/stat.h>
 
@@ -19,13 +19,13 @@ static NSNumber *LMBool(id value) {
   return [value isKindOfClass:NSNumber.class] ? value : nil;
 }
 
-@interface LocalMirrorsModule : NSObject <RCTBridgeModule>
+@interface LocalMirrorsModule : NSObject <RishNativeModule>
 @property(nonatomic, strong) dispatch_queue_t queue;
 @end
 
 @implementation LocalMirrorsModule
 
-RCT_EXPORT_MODULE(LocalMirrors)
+RISH_NATIVE_MODULE(LocalMirrors)
 
 + (BOOL)requiresMainQueueSetup { return NO; }
 
@@ -174,10 +174,10 @@ RCT_EXPORT_MODULE(LocalMirrors)
   return receipt;
 }
 
-RCT_REMAP_METHOD(applyMirrors,
+RISH_NATIVE_METHOD(applyMirrors,
                  applyMirrorsValue:(NSDictionary *)mirrors
-                 resolver:(RCTPromiseResolveBlock)resolve
-                 rejecter:(RCTPromiseRejectBlock)reject) {
+                 resolver:(RishResolveBlock)resolve
+                 rejecter:(RishRejectBlock)reject) {
   dispatch_async(self.queue, ^{
     NSError *error = nil;
     NSDictionary *receipt = [self apply:mirrors error:&error];
@@ -189,9 +189,9 @@ RCT_REMAP_METHOD(applyMirrors,
   });
 }
 
-RCT_REMAP_METHOD(mirrorStatus,
-                 mirrorStatusWithResolver:(RCTPromiseResolveBlock)resolve
-                 rejecter:(RCTPromiseRejectBlock)reject) {
+RISH_NATIVE_METHOD(mirrorStatus,
+                 mirrorStatusWithResolver:(RishResolveBlock)resolve
+                 rejecter:(RishRejectBlock)reject) {
   dispatch_async(self.queue, ^{
     NSError *error = nil;
     NSURL *root = [self overlayRoot:&error];

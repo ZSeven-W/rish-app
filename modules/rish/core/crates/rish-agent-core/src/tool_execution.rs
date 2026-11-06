@@ -43,7 +43,9 @@ fn or_null(value: Option<&Value>) -> Value {
 }
 
 fn is_mutation(name: &str) -> bool {
-    matches!(name, "write_file" | "git_commit" | "git_push") || crate::runtime_tools::is_guest(name)
+    matches!(name, "write_file" | "git_commit" | "git_push")
+        || crate::runtime_tools::is_guest(name)
+        || crate::assistant_tools::is_mutation(name)
 }
 
 // MARK: - request
@@ -86,7 +88,7 @@ fn execution_transcript(value: Option<&Value>) -> bool {
 /// `validateExecuteRequest:` — `Err(InvalidArgument)` for a malformed shape,
 /// `Err(Conflict)` when the CAS and checkpoint disagree.
 pub fn execute_request(request: &Value) -> Result<(), StoreError> {
-    let keys = [
+    let mut keys = vec![
         "schema_version",
         "operation_id",
         "controller_cas",
@@ -110,6 +112,14 @@ pub fn execute_request(request: &Value) -> Result<(), StoreError> {
         "approval_reference",
     ];
     let r = |key: &str| get(request, key);
+    if let Some(response) = r("user_response") {
+        if r("name").and_then(Value::as_str) != Some(crate::user_question::NAME)
+            || !crate::user_question::response_shape(response)
+        {
+            return Err(StoreError::InvalidArgument);
+        }
+        keys.push("user_response");
+    }
     if exact_keys(Some(request), &keys).is_none()
         || r("schema_version") != Some(&json!(2))
         || !canonical_uuid(r("operation_id"))
@@ -350,6 +360,10 @@ fn conversation_grant_bound(grants: Option<&[Value]>, request: &Value) -> bool {
     let name = as_str(get(request, "name")).unwrap_or_default();
     let family = match name {
         "write_file" => "file_write",
+        "create_assistant_task"
+        | "update_assistant_task"
+        | "remember_assistant_memory"
+        | "forget_assistant_memory" => "assistant_metadata",
         "git_commit" => "git_commit",
         "git_push" => "git_push",
         _ if crate::runtime_tools::is_mutation(name) || name.ends_with("_guest_cgi") => {
@@ -604,6 +618,14 @@ pub fn execute_precheck(request: &Value, view: &ExecuteView) -> Result<Value, St
     {
         return Ok(conflict("E_AGENT_CONFLICT"));
     }
+    if as_str(get(request, "name")).is_some_and(crate::assistant_tools::is_assistant)
+        && (!crate::assistant_context::authority_valid(authority)
+            || row["precondition"]["conversation_id"] != request["conversation_id"]
+            || authority["conversation_id"] != request["conversation_id"]
+            || authority["registry"]["registry_version"] != 5)
+    {
+        return Ok(conflict("E_AGENT_CAPABILITY"));
+    }
     // A later call cannot overtake an earlier executable call in the same round.
     let call_index = get(request, "call_index")
         .and_then(Value::as_u64)
@@ -738,6 +760,25 @@ pub fn generic_failure_effect(name: Option<&Value>) -> Result<Value, StoreError>
     }))
 }
 
+/// Only a native pre-effect refusal may use this failed effect. Persistence
+/// uncertainty must stay recoverable and probe its durable store receipt.
+pub fn assistant_failure_effect(name: &str, code: &str) -> Result<Value, StoreError> {
+    if !crate::assistant_tools::is_assistant(name)
+        || !matches!(
+            code,
+            "E_AGENT_CONFLICT" | "E_AGENT_BAD_ARGUMENTS" | "E_AGENT_NOT_FOUND"
+        )
+    {
+        return Err(StoreError::InvalidArgument);
+    }
+    let feedback = feedback_string(&json!({"schema_version":1,"name":name,"outcome":"failed",
+        "payload":{"schema_version":1,"failure_code":code}}))?;
+    Ok(
+        json!({"schema_version":1,"status":"failed","feedback":feedback,"settled_facts":null,
+        "truncated":false,"effect_may_have_occurred":false}),
+    )
+}
+
 /// The ambiguous effect recorded when a guest service's session vanished
 /// under it.
 pub fn ambiguous_effect(name: Option<&Value>) -> Result<Value, StoreError> {
@@ -766,10 +807,23 @@ pub fn settlement_plan(
         return Err(StoreError::InvalidArgument);
     };
     let runtime = as_str(get(request, "name")).is_some_and(crate::runtime_tools::is_runtime);
-    let expected_state = if runtime {
+    let assistant = as_str(get(request, "name")).is_some_and(crate::assistant_tools::is_assistant);
+    let expected_state = if request["name"] == crate::user_question::NAME {
+        let feedback: Value =
+            serde_json::from_str(feedback_text).map_err(|_| StoreError::InvalidArgument)?;
+        if row["state"] != "intent"
+            || !crate::user_question::facts_match(row, &feedback, &effect["settled_facts"])
+        {
+            return Err(StoreError::Conflict);
+        }
+        "intent"
+    } else if runtime || assistant {
         if get(row, "name") != get(request, "name")
             || get(row, "arguments_sha256") != get(request, "arguments_sha256")
-            || !crate::runtime_tools::effect_valid(row, effect)
+            || (runtime && !crate::runtime_tools::effect_valid(row, effect))
+            || (assistant
+                && (!crate::assistant_tools::effect_valid(row, effect)
+                    || row["precondition"]["conversation_id"] != request["conversation_id"]))
         {
             return Err(StoreError::Conflict);
         }
@@ -813,7 +867,7 @@ pub fn settlement_plan(
     Ok(json!({
         "cas": execution_cas(row, expected_state),
         "patch": {
-            "state": if ambiguous { "ambiguous" } else if runtime && outcome == "cancelled" { "cancelled" } else { "settled" },
+            "state": if ambiguous { "ambiguous" } else if (runtime || assistant) && outcome == "cancelled" { "cancelled" } else { "settled" },
             "settled_facts": get(effect, "settled_facts"), "receipt": receipt,
         },
         "message": message,
@@ -866,10 +920,14 @@ pub fn recover_plan(request: &Value, row: &Value, recovered: &Value) -> Result<V
             Some("running" | "cancel_requested")
         )
     {
-        if crate::runtime_tools::is_runtime(name) {
-            if let Some(effect) =
-                get(recovered, "effect").filter(|e| crate::runtime_tools::effect_valid(row, e))
-            {
+        if crate::runtime_tools::is_runtime(name) || crate::assistant_tools::is_assistant(name) {
+            if let Some(effect) = get(recovered, "effect").filter(|e| {
+                if crate::assistant_tools::is_assistant(name) {
+                    crate::assistant_tools::effect_valid(row, e)
+                } else {
+                    crate::runtime_tools::effect_valid(row, e)
+                }
+            }) {
                 let recovery_sha = hash_json(
                     "agent-operation-request",
                     &json!({ "operation_kind": "execute_agent_tool", "request": request }),
@@ -1019,6 +1077,33 @@ fn reduce_json_inner(input: &str) -> Result<Value, StoreError> {
         _ => None,
     };
     match op {
+        "question_response" => {
+            let row = field("row")?;
+            if request["name"] != crate::user_question::NAME
+                || row["name"] != crate::user_question::NAME
+                || !crate::user_question::question_shape(row.get("precondition"))
+                || !crate::user_question::response_valid(
+                    &row["precondition"]["question"],
+                    &request["user_response"],
+                )
+            {
+                return Err(StoreError::InvalidArgument);
+            }
+            if row["state"] == "settled"
+                && crate::canonical::hash_json("agent-user-response", &request["user_response"])
+                    .as_deref()
+                    != row["settled_facts"]["response_sha256"].as_str()
+            {
+                return Err(StoreError::Conflict);
+            }
+            Ok(json!({}))
+        }
+        "question_settlement" => crate::user_question::settlement(
+            request,
+            field("row")?,
+            field("arguments")?,
+            field("request_sha256")?,
+        ),
         "request" => {
             execute_request(request)?;
             Ok(json!({}))
@@ -1067,6 +1152,9 @@ fn reduce_json_inner(input: &str) -> Result<Value, StoreError> {
         )})),
         "safe_result" => Ok(json!({ "result": safe_result(request, field("row")?) })),
         "generic_failure" => Ok(json!({ "effect": generic_failure_effect(get(request, "name"))? })),
+        "assistant_failure" => Ok(json!({"effect":assistant_failure_effect(
+            as_str(get(request,"name")).ok_or(StoreError::InvalidArgument)?,
+            as_str(get(&envelope,"failure_code")).ok_or(StoreError::InvalidArgument)?)?})),
         "ambiguous_effect" => Ok(json!({ "effect": ambiguous_effect(get(request, "name"))? })),
         "settlement" => settlement_plan(
             request,

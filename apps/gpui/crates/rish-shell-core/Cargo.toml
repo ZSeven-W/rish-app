@@ -1,0 +1,17 @@
+[package]
+name = "rish-shell-core"
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+
+[features]
+test-support = []
+
+[dependencies]
+serde = { version = "1", features = ["derive"] }
+rish-pi-runtime = { path = "../rish-pi-runtime", default-features = false }
+libc = "0.2"
+rish-agent-core = { path = "../../../../modules/rish/core/crates/rish-agent-core" }
+serde_json = { version = "1.0", features = ["arbitrary_precision"] }
+uuid = { version = "1", features = ["v4"] }
+url = "2"

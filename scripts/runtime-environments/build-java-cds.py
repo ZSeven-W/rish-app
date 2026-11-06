@@ -151,8 +151,8 @@ def main(receipt_path, work, wall_seconds):
     classlist, classproof = make_classlist(rootfs)
     if classproof['classlist_sha256'] != '4128f0378e76ed20bfae8f1036b75a8062343a3626649c9c6233ba17e9af3693':
         raise ValueError('classlist differs from reviewed exact JDK module inventory')
-    base = controlled_asset('apps/mobile/ios/Rish/GuestAssets/rish-container.cpio')
-    kernel = controlled_asset('apps/mobile/ios/Rish/GuestAssets/vmlinuz-virt-6.18.35')
+    base = controlled_asset('modules/rish/shared/GuestAssets/rish-container.cpio')
+    kernel = controlled_asset('modules/rish/shared/GuestAssets/vmlinuz-virt-6.18.35')
     work.mkdir(parents=True, exist_ok=False)
     (work / 'compiler-http.classlist').write_bytes(classlist)
     (work / 'classlist-receipt.json').write_text(json.dumps(classproof, indent=2) + '\n')

@@ -1,0 +1,114 @@
+plugins {
+    id "com.android.application"
+    id "org.jetbrains.kotlin.android"
+}
+
+def nativeAndroid = file("../../../../modules/rish/android")
+def coreDir = file(providers.gradleProperty("rishAgentCoreDir").getOrElse(new File(nativeAndroid, "rish-agent-core").absolutePath))
+def gitDir = file(providers.gradleProperty("rishLibgit2Dir").getOrElse(new File(nativeAndroid, "rish-libgit2").absolutePath))
+def ffiDir = file(providers.gradleProperty("rishFfiDir").getOrElse(new File(nativeAndroid, "rish-ffi").absolutePath))
+def guestAssets = file("../../../../modules/rish/shared/GuestAssets")
+def nativeDir = file(providers.gradleProperty("rishGpuiJniDir").getOrElse("src/main/jniLibs"))
+def abis = providers.gradleProperty("rishArchitectures").getOrElse("arm64-v8a").split(",").collect { it.trim() }
+def coreEnabled = abis.every { new File(coreDir, "jniLibs/${it}/librish_agent_ffi.so").isFile() }
+def gitEnabled = abis.every { new File(gitDir, "${it}/libgit2.a").isFile() }
+def guestEnabled = abis.every { new File(ffiDir, "jniLibs/${it}/librish_ffi.so").isFile() }
+if (providers.gradleProperty("rishAgentCoreDir").isPresent() && !coreEnabled) {
+    throw new GradleException("rishAgentCoreDir does not contain librish_agent_ffi.so for every requested ABI")
+}
+if (providers.gradleProperty("rishLibgit2Dir").isPresent() && !gitEnabled) {
+    throw new GradleException("rishLibgit2Dir does not contain libgit2.a for every requested ABI")
+}
+if (providers.gradleProperty("rishFfiDir").isPresent() && !guestEnabled) {
+    throw new GradleException("rishFfiDir does not contain librish_ffi.so for every requested ABI")
+}
+if (guestEnabled && !new File(guestAssets, "SHA256SUMS").isFile()) {
+    throw new GradleException("The staged guest runtime requires modules/rish/shared/GuestAssets")
+}
+
+android {
+    // Existing runtime classes refer to tech.zseven.rish.BuildConfig.
+    namespace "tech.zseven.rish"
+    compileSdk 36
+    ndkVersion "27.1.12297006"
+    defaultConfig {
+        // Parallel installation keeps the existing app and its data intact.
+        applicationId "tech.zseven.rish.gpui"
+        minSdk 26
+        targetSdk 36
+        versionCode 1
+        versionName "0.1.0"
+        testInstrumentationRunner "androidx.test.runner.AndroidJUnitRunner"
+        ndk { abiFilters.addAll(abis) }
+        buildConfigField "boolean", "RISH_OFFICIAL_CLI_ENABLED", "false"
+        buildConfigField "boolean", "RISH_GUEST_RUNTIME_BUNDLED", guestEnabled.toString()
+        buildConfigField "String", "RISH_BUILD_COMMIT", '"gpui-local"'
+        if (coreEnabled || gitEnabled || guestEnabled) {
+            externalNativeBuild {
+                cmake {
+                    arguments "-DANDROID_SUPPORT_FLEXIBLE_PAGE_SIZES=ON",
+                        "-DRISH_ANDROID_CPP=${new File(nativeAndroid, 'src/main/cpp').absolutePath}"
+                    if (coreEnabled) arguments "-DRISH_AGENT_CORE_DIR=${coreDir.absolutePath}"
+                    if (gitEnabled) arguments "-DRISH_LIBGIT2_DIR=${gitDir.absolutePath}"
+                    if (guestEnabled) arguments "-DRISH_FFI_DIR=${ffiDir.absolutePath}"
+                }
+            }
+        }
+    }
+    buildFeatures { buildConfig true }
+    sourceSets {
+        main {
+            java.srcDirs += [new File(nativeAndroid, "src/main/java")]
+            res.srcDirs += [new File(nativeAndroid, "src/main/res")]
+            jniLibs.srcDirs = [nativeDir]
+            if (coreEnabled) jniLibs.srcDirs += [new File(coreDir, "jniLibs")]
+            if (guestEnabled) {
+                jniLibs.srcDirs += [new File(ffiDir, "jniLibs")]
+                assets.srcDirs += [guestAssets]
+            }
+        }
+        test { java.srcDirs += [new File(nativeAndroid, "src/test/java")] }
+        androidTest {
+            java.srcDirs += [new File(nativeAndroid, "src/androidTest/java")]
+            assets.srcDirs += [file("../../../../modules/rish/ios/Tests/Fixtures")]
+            assets.srcDirs += [file("../../../../modules/rish/core/fixtures")]
+        }
+    }
+    if (coreEnabled || gitEnabled || guestEnabled) {
+        externalNativeBuild { cmake { path file("src/main/cpp/CMakeLists.txt"); version "3.22.1" } }
+    }
+    compileOptions {
+        sourceCompatibility JavaVersion.VERSION_17
+        targetCompatibility JavaVersion.VERSION_17
+    }
+    kotlinOptions { jvmTarget = "17" }
+    buildTypes {
+        debug { debuggable true; jniDebuggable true }
+        release { minifyEnabled false }
+    }
+    packaging { jniLibs { useLegacyPackaging = true; keepDebugSymbols += ["**/librish_gpui.so"] } }
+}
+
+// Never emit an apparently usable APK without its renderer or session reducer.
+tasks.configureEach { task ->
+    if (task.name.matches("(package|bundle|install)(Debug|Release)")) {
+        task.doFirst {
+            abis.each { abi ->
+                if (!new File(nativeDir, "${abi}/librish_gpui.so").isFile()) {
+                    throw new GradleException("Missing ${abi}/librish_gpui.so: build the GPUI Rust library first")
+                }
+            }
+            if (!coreEnabled) throw new GradleException("Missing shared agent core: run scripts/prepare-rish-agent-core-android.sh before packaging")
+        }
+    }
+}
+
+dependencies {
+    implementation "androidx.core:core-ktx:1.13.1"
+    implementation "com.squareup.okhttp3:okhttp:4.12.0"
+    testImplementation "junit:junit:4.13.2"
+    testImplementation "org.json:json:20240303"
+    androidTestImplementation "androidx.test.ext:junit:1.2.1"
+    androidTestImplementation "androidx.test:core:1.6.1"
+    androidTestImplementation "androidx.test:runner:1.6.2"
+}

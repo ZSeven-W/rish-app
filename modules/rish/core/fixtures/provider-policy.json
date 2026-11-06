@@ -1,0 +1,609 @@
+{
+  "cases": [
+    {
+      "name": "harnesses",
+      "input": {"op":"harnesses"},
+      "expected": {"ok":true,"value":["claude-code","codex","dsh","glm"]}
+    },
+    {
+      "name": "known-slot",
+      "input": {"op":"harness_for_slot","slot":"OPENAI_API_KEY"},
+      "expected": {"ok":true,"value":"codex"}
+    },
+    {
+      "name": "unknown-slot-preserved",
+      "input": {"op":"credential_account","slot":"OTHER_KEY","configuration":null},
+      "expected": {"ok":true,"value":"OTHER_KEY"}
+    },
+    {
+      "name": "missing-profile-no-account",
+      "input": {"op":"credential_account","slot":"OPENAI_API_KEY","configuration":null},
+      "expected": {"ok":true,"value":null}
+    },
+    {
+      "name": "legacy-ios-0-configuration",
+      "input": {"op":"validate_configuration","configuration":{"auth_type":"bearer","endpoint_url":"https://relay.example/v1/messages","full_url":false,"harness_id":"claude-code","model_mappings":{"claude-sonnet-5":"relay-model"},"name":"Relay","protocol":"messages","schema_version":1,"send_reasoning":false},"harness_by_model":{"claude-sonnet-5":"claude-code"}},
+      "expected": {"ok":true,"value":{"auth_type":"bearer","endpoint_url":"https://relay.example/v1/messages","full_url":false,"harness_id":"claude-code","model_mappings":{"claude-sonnet-5":"relay-model"},"name":"Relay","protocol":"messages","schema_version":1,"send_reasoning":false}}
+    },
+    {
+      "name": "legacy-ios-0-binding",
+      "input": {"op":"binding","configuration":{"auth_type":"bearer","endpoint_url":"https://relay.example/v1/messages","full_url":false,"harness_id":"claude-code","model_mappings":{"claude-sonnet-5":"relay-model"},"name":"Relay","protocol":"messages","schema_version":1,"send_reasoning":false},"logical_model":"claude-sonnet-5","model_harness":"claude-code"},
+      "expected": {"ok":true,"value":{"auth_type":"bearer","endpoint_url":"https://relay.example/v1/messages","harness_id":"claude-code","model_id":"relay-model","profile_id":"c46b19792871c609d55f72b0de87c6ccc85fa7f21fa0dacd57ce8a3ea9a12db7","protocol":"messages","schema_version":1,"send_reasoning":false}}
+    },
+    {
+      "name": "legacy-ios-0-account",
+      "input": {"op":"credential_account","slot":"ANTHROPIC_API_KEY","configuration":{"auth_type":"bearer","endpoint_url":"https://relay.example/v1/messages","full_url":false,"harness_id":"claude-code","model_mappings":{"claude-sonnet-5":"relay-model"},"name":"Relay","protocol":"messages","schema_version":1,"send_reasoning":false}},
+      "expected": {"ok":true,"value":"CUSTOM_PROVIDER_claude-code_265b8b09dcafae78fa752808e8e4541401a21e17769261782ed791854533a8c1"}
+    },
+    {
+      "name": "legacy-ios-0-valid-binding",
+      "input": {"op":"validate_binding","binding":{"auth_type":"bearer","endpoint_url":"https://relay.example/v1/messages","harness_id":"claude-code","model_id":"relay-model","profile_id":"c46b19792871c609d55f72b0de87c6ccc85fa7f21fa0dacd57ce8a3ea9a12db7","protocol":"messages","schema_version":1,"send_reasoning":false},"logical_model":"claude-sonnet-5","model_harness":"claude-code","endpoint_is_canonical":true},
+      "expected": {"ok":true,"value":true}
+    },
+    {
+      "name": "legacy-ios-1-configuration",
+      "input": {"op":"validate_configuration","configuration":{"auth_type":"bearer","endpoint_url":"https://relay.example:443/root/chat/completions","full_url":false,"harness_id":"claude-code","model_mappings":{"claude-sonnet-5":"relay-model"},"name":"Relay","protocol":"chat-completions","schema_version":1,"send_reasoning":false},"harness_by_model":{"claude-sonnet-5":"claude-code"}},
+      "expected": {"ok":true,"value":{"auth_type":"bearer","endpoint_url":"https://relay.example:443/root/chat/completions","full_url":false,"harness_id":"claude-code","model_mappings":{"claude-sonnet-5":"relay-model"},"name":"Relay","protocol":"chat-completions","schema_version":1,"send_reasoning":false}}
+    },
+    {
+      "name": "legacy-ios-1-binding",
+      "input": {"op":"binding","configuration":{"auth_type":"bearer","endpoint_url":"https://relay.example:443/root/chat/completions","full_url":false,"harness_id":"claude-code","model_mappings":{"claude-sonnet-5":"relay-model"},"name":"Relay","protocol":"chat-completions","schema_version":1,"send_reasoning":false},"logical_model":"claude-sonnet-5","model_harness":"claude-code"},
+      "expected": {"ok":true,"value":{"auth_type":"bearer","endpoint_url":"https://relay.example:443/root/chat/completions","harness_id":"claude-code","model_id":"relay-model","profile_id":"f1ab2487e643f027517d42b8f11c67b1f64ddb6d4b02d6817ee97b99df429413","protocol":"chat-completions","schema_version":1,"send_reasoning":false}}
+    },
+    {
+      "name": "legacy-ios-1-account",
+      "input": {"op":"credential_account","slot":"ANTHROPIC_API_KEY","configuration":{"auth_type":"bearer","endpoint_url":"https://relay.example:443/root/chat/completions","full_url":false,"harness_id":"claude-code","model_mappings":{"claude-sonnet-5":"relay-model"},"name":"Relay","protocol":"chat-completions","schema_version":1,"send_reasoning":false}},
+      "expected": {"ok":true,"value":"CUSTOM_PROVIDER_claude-code_8ebab02a07b58535bfbb9ff6130f954612f244732ac888383f3b3dab24067309"}
+    },
+    {
+      "name": "legacy-ios-1-valid-binding",
+      "input": {"op":"validate_binding","binding":{"auth_type":"bearer","endpoint_url":"https://relay.example:443/root/chat/completions","harness_id":"claude-code","model_id":"relay-model","profile_id":"f1ab2487e643f027517d42b8f11c67b1f64ddb6d4b02d6817ee97b99df429413","protocol":"chat-completions","schema_version":1,"send_reasoning":false},"logical_model":"claude-sonnet-5","model_harness":"claude-code","endpoint_is_canonical":true},
+      "expected": {"ok":true,"value":true}
+    },
+    {
+      "name": "legacy-ios-2-configuration",
+      "input": {"op":"validate_configuration","configuration":{"auth_type":"bearer","endpoint_url":"http://localhost:8080/api/v1/responses","full_url":false,"harness_id":"claude-code","model_mappings":{"claude-sonnet-5":"relay-model"},"name":"Relay","protocol":"responses","schema_version":1,"send_reasoning":false},"harness_by_model":{"claude-sonnet-5":"claude-code"}},
+      "expected": {"ok":true,"value":{"auth_type":"bearer","endpoint_url":"http://localhost:8080/api/v1/responses","full_url":false,"harness_id":"claude-code","model_mappings":{"claude-sonnet-5":"relay-model"},"name":"Relay","protocol":"responses","schema_version":1,"send_reasoning":false}}
+    },
+    {
+      "name": "legacy-ios-2-binding",
+      "input": {"op":"binding","configuration":{"auth_type":"bearer","endpoint_url":"http://localhost:8080/api/v1/responses","full_url":false,"harness_id":"claude-code","model_mappings":{"claude-sonnet-5":"relay-model"},"name":"Relay","protocol":"responses","schema_version":1,"send_reasoning":false},"logical_model":"claude-sonnet-5","model_harness":"claude-code"},
+      "expected": {"ok":true,"value":{"auth_type":"bearer","endpoint_url":"http://localhost:8080/api/v1/responses","harness_id":"claude-code","model_id":"relay-model","profile_id":"b95103bf03aca47d2c5b5ef5b14304b500ea8754db1e845aead6d5bba5a6571f","protocol":"responses","schema_version":1,"send_reasoning":false}}
+    },
+    {
+      "name": "legacy-ios-2-account",
+      "input": {"op":"credential_account","slot":"ANTHROPIC_API_KEY","configuration":{"auth_type":"bearer","endpoint_url":"http://localhost:8080/api/v1/responses","full_url":false,"harness_id":"claude-code","model_mappings":{"claude-sonnet-5":"relay-model"},"name":"Relay","protocol":"responses","schema_version":1,"send_reasoning":false}},
+      "expected": {"ok":true,"value":"CUSTOM_PROVIDER_claude-code_93a1dacddaf283e7790b6f9413a47847cd30e319906d6473e36be96fbe08f2e2"}
+    },
+    {
+      "name": "legacy-ios-2-valid-binding",
+      "input": {"op":"validate_binding","binding":{"auth_type":"bearer","endpoint_url":"http://localhost:8080/api/v1/responses","harness_id":"claude-code","model_id":"relay-model","profile_id":"b95103bf03aca47d2c5b5ef5b14304b500ea8754db1e845aead6d5bba5a6571f","protocol":"responses","schema_version":1,"send_reasoning":false},"logical_model":"claude-sonnet-5","model_harness":"claude-code","endpoint_is_canonical":true},
+      "expected": {"ok":true,"value":true}
+    },
+    {
+      "name": "legacy-ios-3-configuration",
+      "input": {"op":"validate_configuration","configuration":{"auth_type":"bearer","endpoint_url":"http://[::1]:9999/v1/messages","full_url":false,"harness_id":"claude-code","model_mappings":{"claude-sonnet-5":"relay-model"},"name":"Relay","protocol":"messages","schema_version":1,"send_reasoning":false},"harness_by_model":{"claude-sonnet-5":"claude-code"}},
+      "expected": {"ok":true,"value":{"auth_type":"bearer","endpoint_url":"http://[::1]:9999/v1/messages","full_url":false,"harness_id":"claude-code","model_mappings":{"claude-sonnet-5":"relay-model"},"name":"Relay","protocol":"messages","schema_version":1,"send_reasoning":false}}
+    },
+    {
+      "name": "legacy-ios-3-binding",
+      "input": {"op":"binding","configuration":{"auth_type":"bearer","endpoint_url":"http://[::1]:9999/v1/messages","full_url":false,"harness_id":"claude-code","model_mappings":{"claude-sonnet-5":"relay-model"},"name":"Relay","protocol":"messages","schema_version":1,"send_reasoning":false},"logical_model":"claude-sonnet-5","model_harness":"claude-code"},
+      "expected": {"ok":true,"value":{"auth_type":"bearer","endpoint_url":"http://[::1]:9999/v1/messages","harness_id":"claude-code","model_id":"relay-model","profile_id":"50bec14aea69487b1c3bdeab81743869ec90e35d4d04d12ec97760fdb6376243","protocol":"messages","schema_version":1,"send_reasoning":false}}
+    },
+    {
+      "name": "legacy-ios-3-account",
+      "input": {"op":"credential_account","slot":"ANTHROPIC_API_KEY","configuration":{"auth_type":"bearer","endpoint_url":"http://[::1]:9999/v1/messages","full_url":false,"harness_id":"claude-code","model_mappings":{"claude-sonnet-5":"relay-model"},"name":"Relay","protocol":"messages","schema_version":1,"send_reasoning":false}},
+      "expected": {"ok":true,"value":"CUSTOM_PROVIDER_claude-code_f8f3222fea5b79fa9b18b9e41c80835bd6ea20bf6163bfa779952e2984f72e6a"}
+    },
+    {
+      "name": "legacy-ios-3-valid-binding",
+      "input": {"op":"validate_binding","binding":{"auth_type":"bearer","endpoint_url":"http://[::1]:9999/v1/messages","harness_id":"claude-code","model_id":"relay-model","profile_id":"50bec14aea69487b1c3bdeab81743869ec90e35d4d04d12ec97760fdb6376243","protocol":"messages","schema_version":1,"send_reasoning":false},"logical_model":"claude-sonnet-5","model_harness":"claude-code","endpoint_is_canonical":true},
+      "expected": {"ok":true,"value":true}
+    },
+    {
+      "name": "legacy-ios-4-configuration",
+      "input": {"op":"validate_configuration","configuration":{"auth_type":"bearer","endpoint_url":"https://relay.example/a/b/%E4%B8%AD%E6%96%87/v1/messages","full_url":false,"harness_id":"claude-code","model_mappings":{"claude-sonnet-5":"relay-model"},"name":"Relay","protocol":"messages","schema_version":1,"send_reasoning":false},"harness_by_model":{"claude-sonnet-5":"claude-code"}},
+      "expected": {"ok":true,"value":{"auth_type":"bearer","endpoint_url":"https://relay.example/a/b/%E4%B8%AD%E6%96%87/v1/messages","full_url":false,"harness_id":"claude-code","model_mappings":{"claude-sonnet-5":"relay-model"},"name":"Relay","protocol":"messages","schema_version":1,"send_reasoning":false}}
+    },
+    {
+      "name": "legacy-ios-4-binding",
+      "input": {"op":"binding","configuration":{"auth_type":"bearer","endpoint_url":"https://relay.example/a/b/%E4%B8%AD%E6%96%87/v1/messages","full_url":false,"harness_id":"claude-code","model_mappings":{"claude-sonnet-5":"relay-model"},"name":"Relay","protocol":"messages","schema_version":1,"send_reasoning":false},"logical_model":"claude-sonnet-5","model_harness":"claude-code"},
+      "expected": {"ok":true,"value":{"auth_type":"bearer","endpoint_url":"https://relay.example/a/b/%E4%B8%AD%E6%96%87/v1/messages","harness_id":"claude-code","model_id":"relay-model","profile_id":"d31e37776e7d94ea1f93b9a8ca714dadbb86ed90bda94ba80d8a4be438d1db67","protocol":"messages","schema_version":1,"send_reasoning":false}}
+    },
+    {
+      "name": "legacy-ios-4-account",
+      "input": {"op":"credential_account","slot":"ANTHROPIC_API_KEY","configuration":{"auth_type":"bearer","endpoint_url":"https://relay.example/a/b/%E4%B8%AD%E6%96%87/v1/messages","full_url":false,"harness_id":"claude-code","model_mappings":{"claude-sonnet-5":"relay-model"},"name":"Relay","protocol":"messages","schema_version":1,"send_reasoning":false}},
+      "expected": {"ok":true,"value":"CUSTOM_PROVIDER_claude-code_d990dc8644a082299f114c074e2bcc650747d7439f517acf8a1da3163cedc416"}
+    },
+    {
+      "name": "legacy-ios-4-valid-binding",
+      "input": {"op":"validate_binding","binding":{"auth_type":"bearer","endpoint_url":"https://relay.example/a/b/%E4%B8%AD%E6%96%87/v1/messages","harness_id":"claude-code","model_id":"relay-model","profile_id":"d31e37776e7d94ea1f93b9a8ca714dadbb86ed90bda94ba80d8a4be438d1db67","protocol":"messages","schema_version":1,"send_reasoning":false},"logical_model":"claude-sonnet-5","model_harness":"claude-code","endpoint_is_canonical":true},
+      "expected": {"ok":true,"value":true}
+    },
+    {
+      "name": "legacy-ios-5-configuration",
+      "input": {"op":"validate_configuration","configuration":{"auth_type":"bearer","endpoint_url":"https://relay.example/a%2Fb/%E4%B8%AD%E6%96%87","full_url":true,"harness_id":"claude-code","model_mappings":{"claude-sonnet-5":"relay-model"},"name":"Relay","protocol":"responses","schema_version":1,"send_reasoning":false},"harness_by_model":{"claude-sonnet-5":"claude-code"}},
+      "expected": {"ok":true,"value":{"auth_type":"bearer","endpoint_url":"https://relay.example/a%2Fb/%E4%B8%AD%E6%96%87","full_url":true,"harness_id":"claude-code","model_mappings":{"claude-sonnet-5":"relay-model"},"name":"Relay","protocol":"responses","schema_version":1,"send_reasoning":false}}
+    },
+    {
+      "name": "legacy-ios-5-binding",
+      "input": {"op":"binding","configuration":{"auth_type":"bearer","endpoint_url":"https://relay.example/a%2Fb/%E4%B8%AD%E6%96%87","full_url":true,"harness_id":"claude-code","model_mappings":{"claude-sonnet-5":"relay-model"},"name":"Relay","protocol":"responses","schema_version":1,"send_reasoning":false},"logical_model":"claude-sonnet-5","model_harness":"claude-code"},
+      "expected": {"ok":true,"value":{"auth_type":"bearer","endpoint_url":"https://relay.example/a%2Fb/%E4%B8%AD%E6%96%87","harness_id":"claude-code","model_id":"relay-model","profile_id":"d43f8f2851762f231fab0fedef895471dccff00c0377b1be4748abe778d646c7","protocol":"responses","schema_version":1,"send_reasoning":false}}
+    },
+    {
+      "name": "legacy-ios-5-account",
+      "input": {"op":"credential_account","slot":"ANTHROPIC_API_KEY","configuration":{"auth_type":"bearer","endpoint_url":"https://relay.example/a%2Fb/%E4%B8%AD%E6%96%87","full_url":true,"harness_id":"claude-code","model_mappings":{"claude-sonnet-5":"relay-model"},"name":"Relay","protocol":"responses","schema_version":1,"send_reasoning":false}},
+      "expected": {"ok":true,"value":"CUSTOM_PROVIDER_claude-code_75f2a4db674f3e70d12846f9d5921d549ba7405673bc0d243f2f6dbc7a74f1cc"}
+    },
+    {
+      "name": "legacy-ios-5-valid-binding",
+      "input": {"op":"validate_binding","binding":{"auth_type":"bearer","endpoint_url":"https://relay.example/a%2Fb/%E4%B8%AD%E6%96%87","harness_id":"claude-code","model_id":"relay-model","profile_id":"d43f8f2851762f231fab0fedef895471dccff00c0377b1be4748abe778d646c7","protocol":"responses","schema_version":1,"send_reasoning":false},"logical_model":"claude-sonnet-5","model_harness":"claude-code","endpoint_is_canonical":true},
+      "expected": {"ok":true,"value":true}
+    },
+    {
+      "name": "legacy-ios-6-configuration",
+      "input": {"op":"validate_configuration","configuration":{"auth_type":"bearer","endpoint_url":"https://relay.example/%252F/with%20space","full_url":true,"harness_id":"claude-code","model_mappings":{"claude-sonnet-5":"relay-model"},"name":"Relay","protocol":"chat-completions","schema_version":1,"send_reasoning":false},"harness_by_model":{"claude-sonnet-5":"claude-code"}},
+      "expected": {"ok":true,"value":{"auth_type":"bearer","endpoint_url":"https://relay.example/%252F/with%20space","full_url":true,"harness_id":"claude-code","model_mappings":{"claude-sonnet-5":"relay-model"},"name":"Relay","protocol":"chat-completions","schema_version":1,"send_reasoning":false}}
+    },
+    {
+      "name": "legacy-ios-6-binding",
+      "input": {"op":"binding","configuration":{"auth_type":"bearer","endpoint_url":"https://relay.example/%252F/with%20space","full_url":true,"harness_id":"claude-code","model_mappings":{"claude-sonnet-5":"relay-model"},"name":"Relay","protocol":"chat-completions","schema_version":1,"send_reasoning":false},"logical_model":"claude-sonnet-5","model_harness":"claude-code"},
+      "expected": {"ok":true,"value":{"auth_type":"bearer","endpoint_url":"https://relay.example/%252F/with%20space","harness_id":"claude-code","model_id":"relay-model","profile_id":"d83f1010e8f46610ddc17711fc612d42a9d12f87140a59e052d17d9435791669","protocol":"chat-completions","schema_version":1,"send_reasoning":false}}
+    },
+    {
+      "name": "legacy-ios-6-account",
+      "input": {"op":"credential_account","slot":"ANTHROPIC_API_KEY","configuration":{"auth_type":"bearer","endpoint_url":"https://relay.example/%252F/with%20space","full_url":true,"harness_id":"claude-code","model_mappings":{"claude-sonnet-5":"relay-model"},"name":"Relay","protocol":"chat-completions","schema_version":1,"send_reasoning":false}},
+      "expected": {"ok":true,"value":"CUSTOM_PROVIDER_claude-code_27e836a7f653c47b1a05310414837a6b1bec3a0b0177c9805fb5c2855e964c1d"}
+    },
+    {
+      "name": "legacy-ios-6-valid-binding",
+      "input": {"op":"validate_binding","binding":{"auth_type":"bearer","endpoint_url":"https://relay.example/%252F/with%20space","harness_id":"claude-code","model_id":"relay-model","profile_id":"d83f1010e8f46610ddc17711fc612d42a9d12f87140a59e052d17d9435791669","protocol":"chat-completions","schema_version":1,"send_reasoning":false},"logical_model":"claude-sonnet-5","model_harness":"claude-code","endpoint_is_canonical":true},
+      "expected": {"ok":true,"value":true}
+    },
+    {
+      "name": "legacy-ios-7-configuration",
+      "input": {"op":"validate_configuration","configuration":{"auth_type":"bearer","endpoint_url":"https://relay.example/v1/messages","full_url":false,"harness_id":"claude-code","model_mappings":{"claude-sonnet-5":"relay-model"},"name":"Relay","protocol":"messages","schema_version":1,"send_reasoning":false},"harness_by_model":{"claude-sonnet-5":"claude-code"}},
+      "expected": {"ok":true,"value":{"auth_type":"bearer","endpoint_url":"https://relay.example/v1/messages","full_url":false,"harness_id":"claude-code","model_mappings":{"claude-sonnet-5":"relay-model"},"name":"Relay","protocol":"messages","schema_version":1,"send_reasoning":false}}
+    },
+    {
+      "name": "legacy-ios-7-binding",
+      "input": {"op":"binding","configuration":{"auth_type":"bearer","endpoint_url":"https://relay.example/v1/messages","full_url":false,"harness_id":"claude-code","model_mappings":{"claude-sonnet-5":"relay-model"},"name":"Relay","protocol":"messages","schema_version":1,"send_reasoning":false},"logical_model":"claude-sonnet-5","model_harness":"claude-code"},
+      "expected": {"ok":true,"value":{"auth_type":"bearer","endpoint_url":"https://relay.example/v1/messages","harness_id":"claude-code","model_id":"relay-model","profile_id":"c46b19792871c609d55f72b0de87c6ccc85fa7f21fa0dacd57ce8a3ea9a12db7","protocol":"messages","schema_version":1,"send_reasoning":false}}
+    },
+    {
+      "name": "legacy-ios-7-account",
+      "input": {"op":"credential_account","slot":"ANTHROPIC_API_KEY","configuration":{"auth_type":"bearer","endpoint_url":"https://relay.example/v1/messages","full_url":false,"harness_id":"claude-code","model_mappings":{"claude-sonnet-5":"relay-model"},"name":"Relay","protocol":"messages","schema_version":1,"send_reasoning":false}},
+      "expected": {"ok":true,"value":"CUSTOM_PROVIDER_claude-code_265b8b09dcafae78fa752808e8e4541401a21e17769261782ed791854533a8c1"}
+    },
+    {
+      "name": "legacy-ios-7-valid-binding",
+      "input": {"op":"validate_binding","binding":{"auth_type":"bearer","endpoint_url":"https://relay.example/v1/messages","harness_id":"claude-code","model_id":"relay-model","profile_id":"c46b19792871c609d55f72b0de87c6ccc85fa7f21fa0dacd57ce8a3ea9a12db7","protocol":"messages","schema_version":1,"send_reasoning":false},"logical_model":"claude-sonnet-5","model_harness":"claude-code","endpoint_is_canonical":true},
+      "expected": {"ok":true,"value":true}
+    },
+    {
+      "name": "legacy-ios-8-configuration",
+      "input": {"op":"validate_configuration","configuration":{"auth_type":"bearer","endpoint_url":"https://relay.example/custom/responses","full_url":false,"harness_id":"claude-code","model_mappings":{"claude-sonnet-5":"relay-model"},"name":"Relay","protocol":"responses","schema_version":1,"send_reasoning":false},"harness_by_model":{"claude-sonnet-5":"claude-code"}},
+      "expected": {"ok":true,"value":{"auth_type":"bearer","endpoint_url":"https://relay.example/custom/responses","full_url":false,"harness_id":"claude-code","model_mappings":{"claude-sonnet-5":"relay-model"},"name":"Relay","protocol":"responses","schema_version":1,"send_reasoning":false}}
+    },
+    {
+      "name": "legacy-ios-8-binding",
+      "input": {"op":"binding","configuration":{"auth_type":"bearer","endpoint_url":"https://relay.example/custom/responses","full_url":false,"harness_id":"claude-code","model_mappings":{"claude-sonnet-5":"relay-model"},"name":"Relay","protocol":"responses","schema_version":1,"send_reasoning":false},"logical_model":"claude-sonnet-5","model_harness":"claude-code"},
+      "expected": {"ok":true,"value":{"auth_type":"bearer","endpoint_url":"https://relay.example/custom/responses","harness_id":"claude-code","model_id":"relay-model","profile_id":"d3d57b6cef5c8ea71f78f8bceb808bebeebe66fed4490ba73f6c5f052b2d3773","protocol":"responses","schema_version":1,"send_reasoning":false}}
+    },
+    {
+      "name": "legacy-ios-8-account",
+      "input": {"op":"credential_account","slot":"ANTHROPIC_API_KEY","configuration":{"auth_type":"bearer","endpoint_url":"https://relay.example/custom/responses","full_url":false,"harness_id":"claude-code","model_mappings":{"claude-sonnet-5":"relay-model"},"name":"Relay","protocol":"responses","schema_version":1,"send_reasoning":false}},
+      "expected": {"ok":true,"value":"CUSTOM_PROVIDER_claude-code_1ccf969e19625b431d44d5e0102edb1438e8a2aa4a2a47ff933f8d6b4c5c694b"}
+    },
+    {
+      "name": "legacy-ios-8-valid-binding",
+      "input": {"op":"validate_binding","binding":{"auth_type":"bearer","endpoint_url":"https://relay.example/custom/responses","harness_id":"claude-code","model_id":"relay-model","profile_id":"d3d57b6cef5c8ea71f78f8bceb808bebeebe66fed4490ba73f6c5f052b2d3773","protocol":"responses","schema_version":1,"send_reasoning":false},"logical_model":"claude-sonnet-5","model_harness":"claude-code","endpoint_is_canonical":true},
+      "expected": {"ok":true,"value":true}
+    },
+    {
+      "name": "legacy-ios-9-configuration",
+      "input": {"op":"validate_configuration","configuration":{"auth_type":"bearer","endpoint_url":"https://relay.example/custom","full_url":true,"harness_id":"claude-code","model_mappings":{"claude-sonnet-5":"relay-model"},"name":"Relay","protocol":"messages","schema_version":1,"send_reasoning":false},"harness_by_model":{"claude-sonnet-5":"claude-code"}},
+      "expected": {"ok":true,"value":{"auth_type":"bearer","endpoint_url":"https://relay.example/custom","full_url":true,"harness_id":"claude-code","model_mappings":{"claude-sonnet-5":"relay-model"},"name":"Relay","protocol":"messages","schema_version":1,"send_reasoning":false}}
+    },
+    {
+      "name": "legacy-ios-9-binding",
+      "input": {"op":"binding","configuration":{"auth_type":"bearer","endpoint_url":"https://relay.example/custom","full_url":true,"harness_id":"claude-code","model_mappings":{"claude-sonnet-5":"relay-model"},"name":"Relay","protocol":"messages","schema_version":1,"send_reasoning":false},"logical_model":"claude-sonnet-5","model_harness":"claude-code"},
+      "expected": {"ok":true,"value":{"auth_type":"bearer","endpoint_url":"https://relay.example/custom","harness_id":"claude-code","model_id":"relay-model","profile_id":"80bbe8093efa6afb9c07f7d58fd303585a34934d914b94d5aa2034f946bbf2f4","protocol":"messages","schema_version":1,"send_reasoning":false}}
+    },
+    {
+      "name": "legacy-ios-9-account",
+      "input": {"op":"credential_account","slot":"ANTHROPIC_API_KEY","configuration":{"auth_type":"bearer","endpoint_url":"https://relay.example/custom","full_url":true,"harness_id":"claude-code","model_mappings":{"claude-sonnet-5":"relay-model"},"name":"Relay","protocol":"messages","schema_version":1,"send_reasoning":false}},
+      "expected": {"ok":true,"value":"CUSTOM_PROVIDER_claude-code_ea3565b89e48905029690509a441f47f70984027877ad866849e946f0957dee0"}
+    },
+    {
+      "name": "legacy-ios-9-valid-binding",
+      "input": {"op":"validate_binding","binding":{"auth_type":"bearer","endpoint_url":"https://relay.example/custom","harness_id":"claude-code","model_id":"relay-model","profile_id":"80bbe8093efa6afb9c07f7d58fd303585a34934d914b94d5aa2034f946bbf2f4","protocol":"messages","schema_version":1,"send_reasoning":false},"logical_model":"claude-sonnet-5","model_harness":"claude-code","endpoint_is_canonical":true},
+      "expected": {"ok":true,"value":true}
+    },
+    {
+      "name": "independent-codex-relay",
+      "input": {"op":"profile_digest","identity":{"schema_version":1,"harness_id":"codex","endpoint_url":"https://relay.example/v1/responses","protocol":"responses","auth_type":"bearer","send_reasoning":true,"model_id":"gpt-5.6"}},
+      "expected": {"ok":true,"value":"3d3bd3e2e1e00c22a529c154d5daf0befd51b0eb725f1caba931a288485c620d"}
+    },
+    {
+      "name": "independent-unicode-wire",
+      "input": {"op":"profile_digest","identity":{"schema_version":1,"harness_id":"claude-code","endpoint_url":"https://relay.example/%E4%B8%AD%E6%96%87/v1/messages","protocol":"messages","auth_type":"x-api-key","send_reasoning":false,"model_id":"relay/模型😀"}},
+      "expected": {"ok":true,"value":"aec8864c9a72e198865c6613c17f68be9415cfb0d2843f90e1393b76c8f15a3b"}
+    },
+    {
+      "name": "independent-explicit-port",
+      "input": {"op":"profile_digest","identity":{"schema_version":1,"harness_id":"dsh","endpoint_url":"https://relay.example:443/v1/chat/completions","protocol":"chat-completions","auth_type":"api-key","send_reasoning":true,"model_id":"vendor/model"}},
+      "expected": {"ok":true,"value":"352b88da87685974118c828e47a50a1f0ca7fd169d41c309f23ea0bceeae57a1"}
+    },
+    {
+      "name": "independent-full-url",
+      "input": {"op":"profile_digest","identity":{"schema_version":1,"harness_id":"glm","endpoint_url":"http://[::1]:9999/custom/","protocol":"messages","auth_type":"bearer","send_reasoning":false,"model_id":"GLM-5.3"}},
+      "expected": {"ok":true,"value":"01e01ebd4a63f02872403061d2b0519b385cf732be60d4d4863cde2b992512b8"}
+    },
+    {
+      "name": "shared-suffix-plan",
+      "input": {"op":"endpoint_plan","raw":"HTTPS://Relay.Example/root/responses/","protocol":"chat-completions","full_url":false,"parts":{"scheme":"HTTPS","host":"Relay.Example","port":443,"has_user":false,"has_password":false,"has_query":false,"has_fragment":false,"path":"/root/responses/"},"codec":"foundation"},
+      "expected": {"ok":true,"value":{"scheme":"https","host":"relay.example","path":"/root/chat/completions"}}
+    },
+    {
+      "name": "reject-has_user",
+      "input": {"op":"endpoint_plan","raw":"HTTPS://Relay.Example/root/responses/","protocol":"chat-completions","full_url":false,"parts":{"scheme":"HTTPS","host":"Relay.Example","port":443,"has_user":true,"has_password":false,"has_query":false,"has_fragment":false,"path":"/root/responses/"},"codec":"foundation"},
+      "expected": {"ok":false,"error":"E_PROVIDER_CONFIGURATION"}
+    },
+    {
+      "name": "reject-has_password",
+      "input": {"op":"endpoint_plan","raw":"HTTPS://Relay.Example/root/responses/","protocol":"chat-completions","full_url":false,"parts":{"scheme":"HTTPS","host":"Relay.Example","port":443,"has_user":false,"has_password":true,"has_query":false,"has_fragment":false,"path":"/root/responses/"},"codec":"foundation"},
+      "expected": {"ok":false,"error":"E_PROVIDER_CONFIGURATION"}
+    },
+    {
+      "name": "reject-has_query",
+      "input": {"op":"endpoint_plan","raw":"HTTPS://Relay.Example/root/responses/","protocol":"chat-completions","full_url":false,"parts":{"scheme":"HTTPS","host":"Relay.Example","port":443,"has_user":false,"has_password":false,"has_query":true,"has_fragment":false,"path":"/root/responses/"},"codec":"foundation"},
+      "expected": {"ok":false,"error":"E_PROVIDER_CONFIGURATION"}
+    },
+    {
+      "name": "reject-has_fragment",
+      "input": {"op":"endpoint_plan","raw":"HTTPS://Relay.Example/root/responses/","protocol":"chat-completions","full_url":false,"parts":{"scheme":"HTTPS","host":"Relay.Example","port":443,"has_user":false,"has_password":false,"has_query":false,"has_fragment":true,"path":"/root/responses/"},"codec":"foundation"},
+      "expected": {"ok":false,"error":"E_PROVIDER_CONFIGURATION"}
+    },
+    {
+      "name": "reject-scheme-http",
+      "input": {"op":"endpoint_plan","raw":"HTTPS://Relay.Example/root/responses/","protocol":"chat-completions","full_url":false,"parts":{"scheme":"http","host":"Relay.Example","port":443,"has_user":false,"has_password":false,"has_query":false,"has_fragment":false,"path":"/root/responses/"},"codec":"foundation"},
+      "expected": {"ok":false,"error":"E_PROVIDER_CONFIGURATION"}
+    },
+    {
+      "name": "reject-port-0",
+      "input": {"op":"endpoint_plan","raw":"HTTPS://Relay.Example/root/responses/","protocol":"chat-completions","full_url":false,"parts":{"scheme":"HTTPS","host":"Relay.Example","port":0,"has_user":false,"has_password":false,"has_query":false,"has_fragment":false,"path":"/root/responses/"},"codec":"foundation"},
+      "expected": {"ok":false,"error":"E_PROVIDER_CONFIGURATION"}
+    },
+    {
+      "name": "reject-port-65536",
+      "input": {"op":"endpoint_plan","raw":"HTTPS://Relay.Example/root/responses/","protocol":"chat-completions","full_url":false,"parts":{"scheme":"HTTPS","host":"Relay.Example","port":65536,"has_user":false,"has_password":false,"has_query":false,"has_fragment":false,"path":"/root/responses/"},"codec":"foundation"},
+      "expected": {"ok":false,"error":"E_PROVIDER_CONFIGURATION"}
+    },
+    {
+      "name": "binding-digest-tamper",
+      "input": {"op":"validate_binding","binding":{"auth_type":"bearer","endpoint_url":"https://relay.example/v1/messages","harness_id":"claude-code","model_id":"other-model","profile_id":"c46b19792871c609d55f72b0de87c6ccc85fa7f21fa0dacd57ce8a3ea9a12db7","protocol":"messages","schema_version":1,"send_reasoning":false},"logical_model":"claude-sonnet-5","model_harness":"claude-code","endpoint_is_canonical":true},
+      "expected": {"ok":true,"value":false}
+    },
+    {
+      "name": "forged-official",
+      "input": {"op":"validate_configuration","configuration":{"auth_type":"bearer","endpoint_url":"https://relay.example/v1/messages","full_url":false,"harness_id":"claude-code","model_mappings":{"claude-sonnet-5":"relay-model"},"name":"Relay","protocol":"messages","schema_version":1,"send_reasoning":false,"official":true},"harness_by_model":{"claude-sonnet-5":"claude-code"}},
+      "expected": {"ok":false,"error":"E_PROVIDER_CONFIGURATION"}
+    },
+    {
+      "name": "foundation-repeated-0-save",
+      "input": {"op":"endpoint_plan","codec":"foundation","raw":"https://relay.example/root/messages/messages","protocol":"messages","full_url":false,"parts":{"scheme":"https","host":"relay.example","port":null,"has_user":false,"has_password":false,"has_query":false,"has_fragment":false,"path":"/root/messages/messages"}},
+      "expected": {"ok":true,"value":{"scheme":"https","host":"relay.example","path":"/root/messages"}}
+    },
+    {
+      "name": "foundation-repeated-0-read",
+      "input": {"op":"endpoint_plan","codec":"foundation","raw":"https://relay.example/root/messages","protocol":"messages","full_url":false,"parts":{"scheme":"https","host":"relay.example","port":null,"has_user":false,"has_password":false,"has_query":false,"has_fragment":false,"path":"/root/messages"}},
+      "expected": {"ok":true,"value":{"scheme":"https","host":"relay.example","path":"/root/messages"}}
+    },
+    {
+      "name": "foundation-repeated-0-account",
+      "input": {"op":"credential_account","slot":"ANTHROPIC_API_KEY","configuration":{"auth_type":"bearer","endpoint_url":"https://relay.example/root/messages","full_url":false,"harness_id":"claude-code","model_mappings":{"claude-sonnet-5":"relay-model"},"name":"Repeat relay","protocol":"messages","schema_version":1,"send_reasoning":false}},
+      "expected": {"ok":true,"value":"CUSTOM_PROVIDER_claude-code_59f1bacbc029f66e86509a3e3d853fc9cfdcfcbb984a451c4907095ac4bff6f2"}
+    },
+    {
+      "name": "foundation-repeated-0-binding",
+      "input": {"op":"binding","configuration":{"auth_type":"bearer","endpoint_url":"https://relay.example/root/messages","full_url":false,"harness_id":"claude-code","model_mappings":{"claude-sonnet-5":"relay-model"},"name":"Repeat relay","protocol":"messages","schema_version":1,"send_reasoning":false},"logical_model":"claude-sonnet-5","model_harness":"claude-code"},
+      "expected": {"ok":true,"value":{"auth_type":"bearer","endpoint_url":"https://relay.example/root/messages","harness_id":"claude-code","model_id":"relay-model","profile_id":"47aff69a332dc2b6077ba60d62ede586c7d13907ed178146d890c29ff93bb392","protocol":"messages","schema_version":1,"send_reasoning":false}}
+    },
+    {
+      "name": "okhttp-repeated-0-save",
+      "input": {"op":"endpoint_plan","codec":"okhttp","raw":"https://relay.example/root/messages/messages","protocol":"messages","full_url":false,"parts":{"scheme":"https","host":"relay.example","port":null,"has_user":false,"has_password":false,"has_query":false,"has_fragment":false,"path":"/root/messages/messages"}},
+      "expected": {"ok":true,"value":{"scheme":"https","host":"relay.example","path":"/root/messages/messages"}}
+    },
+    {
+      "name": "okhttp-repeated-0-read",
+      "input": {"op":"endpoint_plan","codec":"okhttp","raw":"https://relay.example/root/messages/messages","protocol":"messages","full_url":false,"parts":{"scheme":"https","host":"relay.example","port":null,"has_user":false,"has_password":false,"has_query":false,"has_fragment":false,"path":"/root/messages/messages"}},
+      "expected": {"ok":true,"value":{"scheme":"https","host":"relay.example","path":"/root/messages/messages"}}
+    },
+    {
+      "name": "okhttp-repeated-0-account",
+      "input": {"op":"credential_account","slot":"ANTHROPIC_API_KEY","configuration":{"auth_type":"bearer","endpoint_url":"https://relay.example/root/messages/messages","harness_id":"claude-code","model_mappings":{"claude-sonnet-5":"relay-model"},"name":"Repeat relay","protocol":"messages","schema_version":1,"send_reasoning":false,"full_url":false}},
+      "expected": {"ok":true,"value":"CUSTOM_PROVIDER_claude-code_3b177dc1ec61a9614d0b717d10dd1edd93786a68926365671839ed2a1c86896b"}
+    },
+    {
+      "name": "okhttp-repeated-0-binding",
+      "input": {"op":"binding","configuration":{"auth_type":"bearer","endpoint_url":"https://relay.example/root/messages/messages","harness_id":"claude-code","model_mappings":{"claude-sonnet-5":"relay-model"},"name":"Repeat relay","protocol":"messages","schema_version":1,"send_reasoning":false,"full_url":false},"logical_model":"claude-sonnet-5","model_harness":"claude-code"},
+      "expected": {"ok":true,"value":{"schema_version":1,"harness_id":"claude-code","endpoint_url":"https://relay.example/root/messages/messages","protocol":"messages","auth_type":"bearer","send_reasoning":false,"model_id":"relay-model","profile_id":"e6ef6227ff3085ecf5e6a65f1335c8dd463c3e3b6e6210fdbc4fa17ada475c36"}}
+    },
+    {
+      "name": "foundation-repeated-1-save",
+      "input": {"op":"endpoint_plan","codec":"foundation","raw":"https://relay.example/root/messages/messages/messages","protocol":"messages","full_url":false,"parts":{"scheme":"https","host":"relay.example","port":null,"has_user":false,"has_password":false,"has_query":false,"has_fragment":false,"path":"/root/messages/messages/messages"}},
+      "expected": {"ok":true,"value":{"scheme":"https","host":"relay.example","path":"/root/messages/messages"}}
+    },
+    {
+      "name": "foundation-repeated-1-read",
+      "input": {"op":"endpoint_plan","codec":"foundation","raw":"https://relay.example/root/messages/messages","protocol":"messages","full_url":false,"parts":{"scheme":"https","host":"relay.example","port":null,"has_user":false,"has_password":false,"has_query":false,"has_fragment":false,"path":"/root/messages/messages"}},
+      "expected": {"ok":true,"value":{"scheme":"https","host":"relay.example","path":"/root/messages"}}
+    },
+    {
+      "name": "foundation-repeated-1-account",
+      "input": {"op":"credential_account","slot":"ANTHROPIC_API_KEY","configuration":{"auth_type":"bearer","endpoint_url":"https://relay.example/root/messages","full_url":false,"harness_id":"claude-code","model_mappings":{"claude-sonnet-5":"relay-model"},"name":"Repeat relay","protocol":"messages","schema_version":1,"send_reasoning":false}},
+      "expected": {"ok":true,"value":"CUSTOM_PROVIDER_claude-code_59f1bacbc029f66e86509a3e3d853fc9cfdcfcbb984a451c4907095ac4bff6f2"}
+    },
+    {
+      "name": "foundation-repeated-1-binding",
+      "input": {"op":"binding","configuration":{"auth_type":"bearer","endpoint_url":"https://relay.example/root/messages","full_url":false,"harness_id":"claude-code","model_mappings":{"claude-sonnet-5":"relay-model"},"name":"Repeat relay","protocol":"messages","schema_version":1,"send_reasoning":false},"logical_model":"claude-sonnet-5","model_harness":"claude-code"},
+      "expected": {"ok":true,"value":{"auth_type":"bearer","endpoint_url":"https://relay.example/root/messages","harness_id":"claude-code","model_id":"relay-model","profile_id":"47aff69a332dc2b6077ba60d62ede586c7d13907ed178146d890c29ff93bb392","protocol":"messages","schema_version":1,"send_reasoning":false}}
+    },
+    {
+      "name": "okhttp-repeated-1-save",
+      "input": {"op":"endpoint_plan","codec":"okhttp","raw":"https://relay.example/root/messages/messages/messages","protocol":"messages","full_url":false,"parts":{"scheme":"https","host":"relay.example","port":null,"has_user":false,"has_password":false,"has_query":false,"has_fragment":false,"path":"/root/messages/messages/messages"}},
+      "expected": {"ok":true,"value":{"scheme":"https","host":"relay.example","path":"/root/messages/messages/messages"}}
+    },
+    {
+      "name": "okhttp-repeated-1-read",
+      "input": {"op":"endpoint_plan","codec":"okhttp","raw":"https://relay.example/root/messages/messages/messages","protocol":"messages","full_url":false,"parts":{"scheme":"https","host":"relay.example","port":null,"has_user":false,"has_password":false,"has_query":false,"has_fragment":false,"path":"/root/messages/messages/messages"}},
+      "expected": {"ok":true,"value":{"scheme":"https","host":"relay.example","path":"/root/messages/messages/messages"}}
+    },
+    {
+      "name": "okhttp-repeated-1-account",
+      "input": {"op":"credential_account","slot":"ANTHROPIC_API_KEY","configuration":{"auth_type":"bearer","endpoint_url":"https://relay.example/root/messages/messages/messages","harness_id":"claude-code","model_mappings":{"claude-sonnet-5":"relay-model"},"name":"Repeat relay","protocol":"messages","schema_version":1,"send_reasoning":false,"full_url":false}},
+      "expected": {"ok":true,"value":"CUSTOM_PROVIDER_claude-code_655198609aa5dca81b28e4e50774b51bb139be1539c6776fd9892a8eca974fe5"}
+    },
+    {
+      "name": "okhttp-repeated-1-binding",
+      "input": {"op":"binding","configuration":{"auth_type":"bearer","endpoint_url":"https://relay.example/root/messages/messages/messages","harness_id":"claude-code","model_mappings":{"claude-sonnet-5":"relay-model"},"name":"Repeat relay","protocol":"messages","schema_version":1,"send_reasoning":false,"full_url":false},"logical_model":"claude-sonnet-5","model_harness":"claude-code"},
+      "expected": {"ok":true,"value":{"schema_version":1,"harness_id":"claude-code","endpoint_url":"https://relay.example/root/messages/messages/messages","protocol":"messages","auth_type":"bearer","send_reasoning":false,"model_id":"relay-model","profile_id":"8759913149c218239ddbc3e861b32cdbfd2dbab9ef206691808da4b7345993e5"}}
+    },
+    {
+      "name": "foundation-repeated-2-save",
+      "input": {"op":"endpoint_plan","codec":"foundation","raw":"https://relay.example/root/responses/responses","protocol":"responses","full_url":false,"parts":{"scheme":"https","host":"relay.example","port":null,"has_user":false,"has_password":false,"has_query":false,"has_fragment":false,"path":"/root/responses/responses"}},
+      "expected": {"ok":true,"value":{"scheme":"https","host":"relay.example","path":"/root/responses"}}
+    },
+    {
+      "name": "foundation-repeated-2-read",
+      "input": {"op":"endpoint_plan","codec":"foundation","raw":"https://relay.example/root/responses","protocol":"responses","full_url":false,"parts":{"scheme":"https","host":"relay.example","port":null,"has_user":false,"has_password":false,"has_query":false,"has_fragment":false,"path":"/root/responses"}},
+      "expected": {"ok":true,"value":{"scheme":"https","host":"relay.example","path":"/root/responses"}}
+    },
+    {
+      "name": "foundation-repeated-2-account",
+      "input": {"op":"credential_account","slot":"ANTHROPIC_API_KEY","configuration":{"auth_type":"bearer","endpoint_url":"https://relay.example/root/responses","full_url":false,"harness_id":"claude-code","model_mappings":{"claude-sonnet-5":"relay-model"},"name":"Repeat relay","protocol":"responses","schema_version":1,"send_reasoning":false}},
+      "expected": {"ok":true,"value":"CUSTOM_PROVIDER_claude-code_c910ab882f940ecc7f40532749978ba8f26c1c26b697bcb470b6c72d49e9f19a"}
+    },
+    {
+      "name": "foundation-repeated-2-binding",
+      "input": {"op":"binding","configuration":{"auth_type":"bearer","endpoint_url":"https://relay.example/root/responses","full_url":false,"harness_id":"claude-code","model_mappings":{"claude-sonnet-5":"relay-model"},"name":"Repeat relay","protocol":"responses","schema_version":1,"send_reasoning":false},"logical_model":"claude-sonnet-5","model_harness":"claude-code"},
+      "expected": {"ok":true,"value":{"auth_type":"bearer","endpoint_url":"https://relay.example/root/responses","harness_id":"claude-code","model_id":"relay-model","profile_id":"4e4203f305aedd92756c70dfaf50ce0b1686584f1f6c4bb50e4eb6cfd8dda24b","protocol":"responses","schema_version":1,"send_reasoning":false}}
+    },
+    {
+      "name": "okhttp-repeated-2-save",
+      "input": {"op":"endpoint_plan","codec":"okhttp","raw":"https://relay.example/root/responses/responses","protocol":"responses","full_url":false,"parts":{"scheme":"https","host":"relay.example","port":null,"has_user":false,"has_password":false,"has_query":false,"has_fragment":false,"path":"/root/responses/responses"}},
+      "expected": {"ok":true,"value":{"scheme":"https","host":"relay.example","path":"/root/responses/responses"}}
+    },
+    {
+      "name": "okhttp-repeated-2-read",
+      "input": {"op":"endpoint_plan","codec":"okhttp","raw":"https://relay.example/root/responses/responses","protocol":"responses","full_url":false,"parts":{"scheme":"https","host":"relay.example","port":null,"has_user":false,"has_password":false,"has_query":false,"has_fragment":false,"path":"/root/responses/responses"}},
+      "expected": {"ok":true,"value":{"scheme":"https","host":"relay.example","path":"/root/responses/responses"}}
+    },
+    {
+      "name": "okhttp-repeated-2-account",
+      "input": {"op":"credential_account","slot":"ANTHROPIC_API_KEY","configuration":{"auth_type":"bearer","endpoint_url":"https://relay.example/root/responses/responses","harness_id":"claude-code","model_mappings":{"claude-sonnet-5":"relay-model"},"name":"Repeat relay","protocol":"responses","schema_version":1,"send_reasoning":false,"full_url":false}},
+      "expected": {"ok":true,"value":"CUSTOM_PROVIDER_claude-code_95f1607c5bf2314c600766781310df8c41d871838143e3aa6e46822395051f15"}
+    },
+    {
+      "name": "okhttp-repeated-2-binding",
+      "input": {"op":"binding","configuration":{"auth_type":"bearer","endpoint_url":"https://relay.example/root/responses/responses","harness_id":"claude-code","model_mappings":{"claude-sonnet-5":"relay-model"},"name":"Repeat relay","protocol":"responses","schema_version":1,"send_reasoning":false,"full_url":false},"logical_model":"claude-sonnet-5","model_harness":"claude-code"},
+      "expected": {"ok":true,"value":{"schema_version":1,"harness_id":"claude-code","endpoint_url":"https://relay.example/root/responses/responses","protocol":"responses","auth_type":"bearer","send_reasoning":false,"model_id":"relay-model","profile_id":"a94dd0e9cb31953ca8ba616389b8b04dc03d2a0d6692dc8588f07d5838c6703c"}}
+    },
+    {
+      "name": "foundation-repeated-3-save",
+      "input": {"op":"endpoint_plan","codec":"foundation","raw":"https://relay.example/root/responses/responses/responses","protocol":"responses","full_url":false,"parts":{"scheme":"https","host":"relay.example","port":null,"has_user":false,"has_password":false,"has_query":false,"has_fragment":false,"path":"/root/responses/responses/responses"}},
+      "expected": {"ok":true,"value":{"scheme":"https","host":"relay.example","path":"/root/responses/responses"}}
+    },
+    {
+      "name": "foundation-repeated-3-read",
+      "input": {"op":"endpoint_plan","codec":"foundation","raw":"https://relay.example/root/responses/responses","protocol":"responses","full_url":false,"parts":{"scheme":"https","host":"relay.example","port":null,"has_user":false,"has_password":false,"has_query":false,"has_fragment":false,"path":"/root/responses/responses"}},
+      "expected": {"ok":true,"value":{"scheme":"https","host":"relay.example","path":"/root/responses"}}
+    },
+    {
+      "name": "foundation-repeated-3-account",
+      "input": {"op":"credential_account","slot":"ANTHROPIC_API_KEY","configuration":{"auth_type":"bearer","endpoint_url":"https://relay.example/root/responses","full_url":false,"harness_id":"claude-code","model_mappings":{"claude-sonnet-5":"relay-model"},"name":"Repeat relay","protocol":"responses","schema_version":1,"send_reasoning":false}},
+      "expected": {"ok":true,"value":"CUSTOM_PROVIDER_claude-code_c910ab882f940ecc7f40532749978ba8f26c1c26b697bcb470b6c72d49e9f19a"}
+    },
+    {
+      "name": "foundation-repeated-3-binding",
+      "input": {"op":"binding","configuration":{"auth_type":"bearer","endpoint_url":"https://relay.example/root/responses","full_url":false,"harness_id":"claude-code","model_mappings":{"claude-sonnet-5":"relay-model"},"name":"Repeat relay","protocol":"responses","schema_version":1,"send_reasoning":false},"logical_model":"claude-sonnet-5","model_harness":"claude-code"},
+      "expected": {"ok":true,"value":{"auth_type":"bearer","endpoint_url":"https://relay.example/root/responses","harness_id":"claude-code","model_id":"relay-model","profile_id":"4e4203f305aedd92756c70dfaf50ce0b1686584f1f6c4bb50e4eb6cfd8dda24b","protocol":"responses","schema_version":1,"send_reasoning":false}}
+    },
+    {
+      "name": "okhttp-repeated-3-save",
+      "input": {"op":"endpoint_plan","codec":"okhttp","raw":"https://relay.example/root/responses/responses/responses","protocol":"responses","full_url":false,"parts":{"scheme":"https","host":"relay.example","port":null,"has_user":false,"has_password":false,"has_query":false,"has_fragment":false,"path":"/root/responses/responses/responses"}},
+      "expected": {"ok":true,"value":{"scheme":"https","host":"relay.example","path":"/root/responses/responses/responses"}}
+    },
+    {
+      "name": "okhttp-repeated-3-read",
+      "input": {"op":"endpoint_plan","codec":"okhttp","raw":"https://relay.example/root/responses/responses/responses","protocol":"responses","full_url":false,"parts":{"scheme":"https","host":"relay.example","port":null,"has_user":false,"has_password":false,"has_query":false,"has_fragment":false,"path":"/root/responses/responses/responses"}},
+      "expected": {"ok":true,"value":{"scheme":"https","host":"relay.example","path":"/root/responses/responses/responses"}}
+    },
+    {
+      "name": "okhttp-repeated-3-account",
+      "input": {"op":"credential_account","slot":"ANTHROPIC_API_KEY","configuration":{"auth_type":"bearer","endpoint_url":"https://relay.example/root/responses/responses/responses","harness_id":"claude-code","model_mappings":{"claude-sonnet-5":"relay-model"},"name":"Repeat relay","protocol":"responses","schema_version":1,"send_reasoning":false,"full_url":false}},
+      "expected": {"ok":true,"value":"CUSTOM_PROVIDER_claude-code_49921ad10ed3d390e2e1887a46fa596a9fcfdde10c6f463528fda84a51f24dd5"}
+    },
+    {
+      "name": "okhttp-repeated-3-binding",
+      "input": {"op":"binding","configuration":{"auth_type":"bearer","endpoint_url":"https://relay.example/root/responses/responses/responses","harness_id":"claude-code","model_mappings":{"claude-sonnet-5":"relay-model"},"name":"Repeat relay","protocol":"responses","schema_version":1,"send_reasoning":false,"full_url":false},"logical_model":"claude-sonnet-5","model_harness":"claude-code"},
+      "expected": {"ok":true,"value":{"schema_version":1,"harness_id":"claude-code","endpoint_url":"https://relay.example/root/responses/responses/responses","protocol":"responses","auth_type":"bearer","send_reasoning":false,"model_id":"relay-model","profile_id":"0133c691d03c08c82c34980a4abde1d73826526cd30ab438a9a6f8dab89d2ea8"}}
+    },
+    {
+      "name": "foundation-repeated-4-save",
+      "input": {"op":"endpoint_plan","codec":"foundation","raw":"https://relay.example/root/chat/completions/chat/completions","protocol":"chat-completions","full_url":false,"parts":{"scheme":"https","host":"relay.example","port":null,"has_user":false,"has_password":false,"has_query":false,"has_fragment":false,"path":"/root/chat/completions/chat/completions"}},
+      "expected": {"ok":true,"value":{"scheme":"https","host":"relay.example","path":"/root/chat/completions"}}
+    },
+    {
+      "name": "foundation-repeated-4-read",
+      "input": {"op":"endpoint_plan","codec":"foundation","raw":"https://relay.example/root/chat/completions","protocol":"chat-completions","full_url":false,"parts":{"scheme":"https","host":"relay.example","port":null,"has_user":false,"has_password":false,"has_query":false,"has_fragment":false,"path":"/root/chat/completions"}},
+      "expected": {"ok":true,"value":{"scheme":"https","host":"relay.example","path":"/root/chat/completions"}}
+    },
+    {
+      "name": "foundation-repeated-4-account",
+      "input": {"op":"credential_account","slot":"ANTHROPIC_API_KEY","configuration":{"auth_type":"bearer","endpoint_url":"https://relay.example/root/chat/completions","full_url":false,"harness_id":"claude-code","model_mappings":{"claude-sonnet-5":"relay-model"},"name":"Repeat relay","protocol":"chat-completions","schema_version":1,"send_reasoning":false}},
+      "expected": {"ok":true,"value":"CUSTOM_PROVIDER_claude-code_8a1e2683a8f123ff2db197e1e301f6335ace0fad26a5e56fdaaff46538c671a2"}
+    },
+    {
+      "name": "foundation-repeated-4-binding",
+      "input": {"op":"binding","configuration":{"auth_type":"bearer","endpoint_url":"https://relay.example/root/chat/completions","full_url":false,"harness_id":"claude-code","model_mappings":{"claude-sonnet-5":"relay-model"},"name":"Repeat relay","protocol":"chat-completions","schema_version":1,"send_reasoning":false},"logical_model":"claude-sonnet-5","model_harness":"claude-code"},
+      "expected": {"ok":true,"value":{"auth_type":"bearer","endpoint_url":"https://relay.example/root/chat/completions","harness_id":"claude-code","model_id":"relay-model","profile_id":"6d201f89f178f6c9b2fa3e84588f75243f058284ead5f4dc6aa6d41498f5e7b3","protocol":"chat-completions","schema_version":1,"send_reasoning":false}}
+    },
+    {
+      "name": "okhttp-repeated-4-save",
+      "input": {"op":"endpoint_plan","codec":"okhttp","raw":"https://relay.example/root/chat/completions/chat/completions","protocol":"chat-completions","full_url":false,"parts":{"scheme":"https","host":"relay.example","port":null,"has_user":false,"has_password":false,"has_query":false,"has_fragment":false,"path":"/root/chat/completions/chat/completions"}},
+      "expected": {"ok":true,"value":{"scheme":"https","host":"relay.example","path":"/root/chat/completions/chat/completions"}}
+    },
+    {
+      "name": "okhttp-repeated-4-read",
+      "input": {"op":"endpoint_plan","codec":"okhttp","raw":"https://relay.example/root/chat/completions/chat/completions","protocol":"chat-completions","full_url":false,"parts":{"scheme":"https","host":"relay.example","port":null,"has_user":false,"has_password":false,"has_query":false,"has_fragment":false,"path":"/root/chat/completions/chat/completions"}},
+      "expected": {"ok":true,"value":{"scheme":"https","host":"relay.example","path":"/root/chat/completions/chat/completions"}}
+    },
+    {
+      "name": "okhttp-repeated-4-account",
+      "input": {"op":"credential_account","slot":"ANTHROPIC_API_KEY","configuration":{"auth_type":"bearer","endpoint_url":"https://relay.example/root/chat/completions/chat/completions","harness_id":"claude-code","model_mappings":{"claude-sonnet-5":"relay-model"},"name":"Repeat relay","protocol":"chat-completions","schema_version":1,"send_reasoning":false,"full_url":false}},
+      "expected": {"ok":true,"value":"CUSTOM_PROVIDER_claude-code_408eef999073085c0e293ecc3bf60f40de6a01000d148710db46048457b3bfff"}
+    },
+    {
+      "name": "okhttp-repeated-4-binding",
+      "input": {"op":"binding","configuration":{"auth_type":"bearer","endpoint_url":"https://relay.example/root/chat/completions/chat/completions","harness_id":"claude-code","model_mappings":{"claude-sonnet-5":"relay-model"},"name":"Repeat relay","protocol":"chat-completions","schema_version":1,"send_reasoning":false,"full_url":false},"logical_model":"claude-sonnet-5","model_harness":"claude-code"},
+      "expected": {"ok":true,"value":{"schema_version":1,"harness_id":"claude-code","endpoint_url":"https://relay.example/root/chat/completions/chat/completions","protocol":"chat-completions","auth_type":"bearer","send_reasoning":false,"model_id":"relay-model","profile_id":"7a545eaba14b7f1b98165e539439398ff697e9e18416c8e71dda8f550d7d7f75"}}
+    },
+    {
+      "name": "foundation-repeated-5-save",
+      "input": {"op":"endpoint_plan","codec":"foundation","raw":"https://relay.example/root/chat/completions/chat/completions/chat/completions","protocol":"chat-completions","full_url":false,"parts":{"scheme":"https","host":"relay.example","port":null,"has_user":false,"has_password":false,"has_query":false,"has_fragment":false,"path":"/root/chat/completions/chat/completions/chat/completions"}},
+      "expected": {"ok":true,"value":{"scheme":"https","host":"relay.example","path":"/root/chat/completions/chat/completions"}}
+    },
+    {
+      "name": "foundation-repeated-5-read",
+      "input": {"op":"endpoint_plan","codec":"foundation","raw":"https://relay.example/root/chat/completions/chat/completions","protocol":"chat-completions","full_url":false,"parts":{"scheme":"https","host":"relay.example","port":null,"has_user":false,"has_password":false,"has_query":false,"has_fragment":false,"path":"/root/chat/completions/chat/completions"}},
+      "expected": {"ok":true,"value":{"scheme":"https","host":"relay.example","path":"/root/chat/completions"}}
+    },
+    {
+      "name": "foundation-repeated-5-account",
+      "input": {"op":"credential_account","slot":"ANTHROPIC_API_KEY","configuration":{"auth_type":"bearer","endpoint_url":"https://relay.example/root/chat/completions","full_url":false,"harness_id":"claude-code","model_mappings":{"claude-sonnet-5":"relay-model"},"name":"Repeat relay","protocol":"chat-completions","schema_version":1,"send_reasoning":false}},
+      "expected": {"ok":true,"value":"CUSTOM_PROVIDER_claude-code_8a1e2683a8f123ff2db197e1e301f6335ace0fad26a5e56fdaaff46538c671a2"}
+    },
+    {
+      "name": "foundation-repeated-5-binding",
+      "input": {"op":"binding","configuration":{"auth_type":"bearer","endpoint_url":"https://relay.example/root/chat/completions","full_url":false,"harness_id":"claude-code","model_mappings":{"claude-sonnet-5":"relay-model"},"name":"Repeat relay","protocol":"chat-completions","schema_version":1,"send_reasoning":false},"logical_model":"claude-sonnet-5","model_harness":"claude-code"},
+      "expected": {"ok":true,"value":{"auth_type":"bearer","endpoint_url":"https://relay.example/root/chat/completions","harness_id":"claude-code","model_id":"relay-model","profile_id":"6d201f89f178f6c9b2fa3e84588f75243f058284ead5f4dc6aa6d41498f5e7b3","protocol":"chat-completions","schema_version":1,"send_reasoning":false}}
+    },
+    {
+      "name": "okhttp-repeated-5-save",
+      "input": {"op":"endpoint_plan","codec":"okhttp","raw":"https://relay.example/root/chat/completions/chat/completions/chat/completions","protocol":"chat-completions","full_url":false,"parts":{"scheme":"https","host":"relay.example","port":null,"has_user":false,"has_password":false,"has_query":false,"has_fragment":false,"path":"/root/chat/completions/chat/completions/chat/completions"}},
+      "expected": {"ok":true,"value":{"scheme":"https","host":"relay.example","path":"/root/chat/completions/chat/completions/chat/completions"}}
+    },
+    {
+      "name": "okhttp-repeated-5-read",
+      "input": {"op":"endpoint_plan","codec":"okhttp","raw":"https://relay.example/root/chat/completions/chat/completions/chat/completions","protocol":"chat-completions","full_url":false,"parts":{"scheme":"https","host":"relay.example","port":null,"has_user":false,"has_password":false,"has_query":false,"has_fragment":false,"path":"/root/chat/completions/chat/completions/chat/completions"}},
+      "expected": {"ok":true,"value":{"scheme":"https","host":"relay.example","path":"/root/chat/completions/chat/completions/chat/completions"}}
+    },
+    {
+      "name": "okhttp-repeated-5-account",
+      "input": {"op":"credential_account","slot":"ANTHROPIC_API_KEY","configuration":{"auth_type":"bearer","endpoint_url":"https://relay.example/root/chat/completions/chat/completions/chat/completions","harness_id":"claude-code","model_mappings":{"claude-sonnet-5":"relay-model"},"name":"Repeat relay","protocol":"chat-completions","schema_version":1,"send_reasoning":false,"full_url":false}},
+      "expected": {"ok":true,"value":"CUSTOM_PROVIDER_claude-code_b16781189f6b81fd3853d8b11591990eb4547ad48e95ce4859f38a18a714934b"}
+    },
+    {
+      "name": "okhttp-repeated-5-binding",
+      "input": {"op":"binding","configuration":{"auth_type":"bearer","endpoint_url":"https://relay.example/root/chat/completions/chat/completions/chat/completions","harness_id":"claude-code","model_mappings":{"claude-sonnet-5":"relay-model"},"name":"Repeat relay","protocol":"chat-completions","schema_version":1,"send_reasoning":false,"full_url":false},"logical_model":"claude-sonnet-5","model_harness":"claude-code"},
+      "expected": {"ok":true,"value":{"schema_version":1,"harness_id":"claude-code","endpoint_url":"https://relay.example/root/chat/completions/chat/completions/chat/completions","protocol":"chat-completions","auth_type":"bearer","send_reasoning":false,"model_id":"relay-model","profile_id":"cd006517c14e9e8605fb8d53eee40d8d007b350c9effb75acf93138a69e7e2ed"}}
+    },
+    {
+      "name": "foundation-repeated-6-save",
+      "input": {"op":"endpoint_plan","codec":"foundation","raw":"https://relay.example/root/messages/responses","protocol":"messages","full_url":false,"parts":{"scheme":"https","host":"relay.example","port":null,"has_user":false,"has_password":false,"has_query":false,"has_fragment":false,"path":"/root/messages/responses"}},
+      "expected": {"ok":true,"value":{"scheme":"https","host":"relay.example","path":"/root/messages"}}
+    },
+    {
+      "name": "foundation-repeated-6-read",
+      "input": {"op":"endpoint_plan","codec":"foundation","raw":"https://relay.example/root/messages","protocol":"messages","full_url":false,"parts":{"scheme":"https","host":"relay.example","port":null,"has_user":false,"has_password":false,"has_query":false,"has_fragment":false,"path":"/root/messages"}},
+      "expected": {"ok":true,"value":{"scheme":"https","host":"relay.example","path":"/root/messages"}}
+    },
+    {
+      "name": "foundation-repeated-6-account",
+      "input": {"op":"credential_account","slot":"ANTHROPIC_API_KEY","configuration":{"auth_type":"bearer","endpoint_url":"https://relay.example/root/messages","full_url":false,"harness_id":"claude-code","model_mappings":{"claude-sonnet-5":"relay-model"},"name":"Mixed relay","protocol":"messages","schema_version":1,"send_reasoning":false}},
+      "expected": {"ok":true,"value":"CUSTOM_PROVIDER_claude-code_59f1bacbc029f66e86509a3e3d853fc9cfdcfcbb984a451c4907095ac4bff6f2"}
+    },
+    {
+      "name": "foundation-repeated-6-binding",
+      "input": {"op":"binding","configuration":{"auth_type":"bearer","endpoint_url":"https://relay.example/root/messages","full_url":false,"harness_id":"claude-code","model_mappings":{"claude-sonnet-5":"relay-model"},"name":"Mixed relay","protocol":"messages","schema_version":1,"send_reasoning":false},"logical_model":"claude-sonnet-5","model_harness":"claude-code"},
+      "expected": {"ok":true,"value":{"auth_type":"bearer","endpoint_url":"https://relay.example/root/messages","harness_id":"claude-code","model_id":"relay-model","profile_id":"47aff69a332dc2b6077ba60d62ede586c7d13907ed178146d890c29ff93bb392","protocol":"messages","schema_version":1,"send_reasoning":false}}
+    },
+    {
+      "name": "okhttp-repeated-6-save",
+      "input": {"op":"endpoint_plan","codec":"okhttp","raw":"https://relay.example/root/messages/responses","protocol":"messages","full_url":false,"parts":{"scheme":"https","host":"relay.example","port":null,"has_user":false,"has_password":false,"has_query":false,"has_fragment":false,"path":"/root/messages/responses"}},
+      "expected": {"ok":true,"value":{"scheme":"https","host":"relay.example","path":"/root/messages/messages"}}
+    },
+    {
+      "name": "okhttp-repeated-6-read",
+      "input": {"op":"endpoint_plan","codec":"okhttp","raw":"https://relay.example/root/messages/messages","protocol":"messages","full_url":false,"parts":{"scheme":"https","host":"relay.example","port":null,"has_user":false,"has_password":false,"has_query":false,"has_fragment":false,"path":"/root/messages/messages"}},
+      "expected": {"ok":true,"value":{"scheme":"https","host":"relay.example","path":"/root/messages/messages"}}
+    },
+    {
+      "name": "okhttp-repeated-6-account",
+      "input": {"op":"credential_account","slot":"ANTHROPIC_API_KEY","configuration":{"auth_type":"bearer","endpoint_url":"https://relay.example/root/messages/messages","harness_id":"claude-code","model_mappings":{"claude-sonnet-5":"relay-model"},"name":"Mixed relay","protocol":"messages","schema_version":1,"send_reasoning":false,"full_url":false}},
+      "expected": {"ok":true,"value":"CUSTOM_PROVIDER_claude-code_3b177dc1ec61a9614d0b717d10dd1edd93786a68926365671839ed2a1c86896b"}
+    },
+    {
+      "name": "okhttp-repeated-6-binding",
+      "input": {"op":"binding","configuration":{"auth_type":"bearer","endpoint_url":"https://relay.example/root/messages/messages","harness_id":"claude-code","model_mappings":{"claude-sonnet-5":"relay-model"},"name":"Mixed relay","protocol":"messages","schema_version":1,"send_reasoning":false,"full_url":false},"logical_model":"claude-sonnet-5","model_harness":"claude-code"},
+      "expected": {"ok":true,"value":{"schema_version":1,"harness_id":"claude-code","endpoint_url":"https://relay.example/root/messages/messages","protocol":"messages","auth_type":"bearer","send_reasoning":false,"model_id":"relay-model","profile_id":"e6ef6227ff3085ecf5e6a65f1335c8dd463c3e3b6e6210fdbc4fa17ada475c36"}}
+    },
+    {
+      "name": "reject-codec-None",
+      "input": {"op":"endpoint_plan","raw":"https://relay.example/responses/responses","protocol":"responses","full_url":false,"parts":{"scheme":"https","host":"relay.example","port":null,"has_user":false,"has_password":false,"has_query":false,"has_fragment":false,"path":"/responses/responses"}},
+      "expected": {"ok":false,"error":"E_PROVIDER_CONFIGURATION"}
+    },
+    {
+      "name": "reject-codec-unknown",
+      "input": {"op":"endpoint_plan","raw":"https://relay.example/responses/responses","protocol":"responses","full_url":false,"parts":{"scheme":"https","host":"relay.example","port":null,"has_user":false,"has_password":false,"has_query":false,"has_fragment":false,"path":"/responses/responses"},"codec":"unknown"},
+      "expected": {"ok":false,"error":"E_PROVIDER_CONFIGURATION"}
+    },
+    {
+      "name": "human-label-zwj-normalize",
+      "input": {"op":"validate_configuration","configuration":{"auth_type":"bearer","endpoint_url":"https://relay.example/v1/messages","full_url":false,"harness_id":"claude-code","model_mappings":{"claude-sonnet-5":"relay-model"},"name":"👩‍💻 Relay","protocol":"messages","schema_version":1,"send_reasoning":false},"harness_by_model":{"claude-sonnet-5":"claude-code"}},
+      "expected": {"ok":true,"value":{"auth_type":"bearer","endpoint_url":"https://relay.example/v1/messages","full_url":false,"harness_id":"claude-code","model_mappings":{"claude-sonnet-5":"relay-model"},"name":"👩‍💻 Relay","protocol":"messages","schema_version":1,"send_reasoning":false}}
+    },
+    {
+      "name": "human-label-zwj-binding",
+      "input": {"op":"binding","configuration":{"auth_type":"bearer","endpoint_url":"https://relay.example/v1/messages","full_url":false,"harness_id":"claude-code","model_mappings":{"claude-sonnet-5":"relay-model"},"name":"👩‍💻 Relay","protocol":"messages","schema_version":1,"send_reasoning":false},"logical_model":"claude-sonnet-5","model_harness":"claude-code"},
+      "expected": {"ok":true,"value":{"auth_type":"bearer","endpoint_url":"https://relay.example/v1/messages","harness_id":"claude-code","model_id":"relay-model","profile_id":"c46b19792871c609d55f72b0de87c6ccc85fa7f21fa0dacd57ce8a3ea9a12db7","protocol":"messages","schema_version":1,"send_reasoning":false}}
+    },
+    {
+      "name": "human-label-zwj-account",
+      "input": {"op":"credential_account","slot":"ANTHROPIC_API_KEY","configuration":{"auth_type":"bearer","endpoint_url":"https://relay.example/v1/messages","full_url":false,"harness_id":"claude-code","model_mappings":{"claude-sonnet-5":"relay-model"},"name":"👩‍💻 Relay","protocol":"messages","schema_version":1,"send_reasoning":false}},
+      "expected": {"ok":true,"value":"CUSTOM_PROVIDER_claude-code_265b8b09dcafae78fa752808e8e4541401a21e17769261782ed791854533a8c1"}
+    },
+    {
+      "name": "format-still-rejected-wire",
+      "input": {"op":"validate_configuration","configuration":{"auth_type":"bearer","endpoint_url":"https://relay.example/v1/messages","full_url":false,"harness_id":"claude-code","model_mappings":{"claude-sonnet-5":"wire‍model"},"name":"👩‍💻 Relay","protocol":"messages","schema_version":1,"send_reasoning":false},"harness_by_model":{"claude-sonnet-5":"claude-code"}},
+      "expected": {"ok":false,"error":"E_PROVIDER_CONFIGURATION"}
+    },
+    {
+      "name": "format-still-rejected-endpoint",
+      "input": {"op":"validate_configuration","configuration":{"auth_type":"bearer","endpoint_url":"https://relay.example/‍messages","full_url":false,"harness_id":"claude-code","model_mappings":{"claude-sonnet-5":"relay-model"},"name":"👩‍💻 Relay","protocol":"messages","schema_version":1,"send_reasoning":false},"harness_by_model":{"claude-sonnet-5":"claude-code"}},
+      "expected": {"ok":false,"error":"E_PROVIDER_CONFIGURATION"}
+    }
+  ]
+}

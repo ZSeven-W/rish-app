@@ -13,7 +13,7 @@ const MAX_EVENTS: usize = 8192;
 const MAX_OUTBOX: usize = 16;
 const MAX_CLEANUP: usize = 64;
 const MAX_MESSAGE_BYTES: usize = 1_000_000;
-const MAX_TITLE_BYTES: usize = 120;
+const MAX_TITLE_BYTES: usize = crate::name_policy::MAX_CONVERSATION_TITLE_BYTES;
 const MAX_TURNS: usize = 100_000;
 const MAX_ATTEMPTS: usize = 100_000;
 const MAX_ATTACHMENTS: usize = 6;
@@ -87,7 +87,7 @@ impl Validator<'_> {
 
     // MARK: preferences / events / attachments / messages
 
-    fn preferences(&self, preferences: Option<&Value>) -> bool {
+    fn preferences(&self, preferences: Option<&Value>, allow_unconfigured: bool) -> bool {
         let Some(preferences) = preferences.filter(|p| p.is_object()) else {
             return false;
         };
@@ -95,7 +95,8 @@ impl Validator<'_> {
         if !exact_schema(field("schema_version"), 1)
             || as_str(field("theme_mode")).is_none()
             || as_str(field("locale")).is_none()
-            || as_str(field("default_model")).is_none()
+            || !(as_str(field("default_model")).is_some()
+                || (allow_unconfigured && field("default_model") == Some(&Value::Null)))
             || as_str(field("thinking_mode")).is_none()
             || as_str(field("tool_permission")).is_none()
             || !is_boolean(field("show_reasoning"))
@@ -106,7 +107,8 @@ impl Validator<'_> {
         }
         if !string_in(field("theme_mode"), &["system", "light", "dark"])
             || !string_in(field("locale"), &["system", "zh-CN", "en-US"])
-            || !self.valid_model(field("default_model"))
+            || !(self.valid_model(field("default_model"))
+                || (allow_unconfigured && field("default_model") == Some(&Value::Null)))
             || !string_in(field("thinking_mode"), &["off", "high", "max"])
             || !string_in(field("tool_permission"), &["read-only", "workspace-write"])
         {
@@ -130,7 +132,9 @@ impl Validator<'_> {
         if !map.keys().all(|key| KNOWN.contains(&key.as_str())) {
             return false;
         }
-        if field("selected_harness_id").is_some() && !valid_harness_id(field("selected_harness_id"))
+        if field("selected_harness_id").is_some()
+            && !valid_harness_id(field("selected_harness_id"))
+            && !(allow_unconfigured && field("selected_harness_id") == Some(&Value::Null))
         {
             return false;
         }
@@ -881,12 +885,19 @@ impl Validator<'_> {
         let access = as_str(f("access")).unwrap_or_default();
         let decision = as_str(f("approval_decision")).unwrap_or_default();
         const AUTO: &[&str] = &[
+            "list_assistant_tasks",
+            "search_assistant_memory",
+            "ask_user",
             "list_dir",
             "read_file",
             "git_status",
             "list_runtime_environments",
         ];
         const CONVERSATION: &[&str] = &[
+            "remember_assistant_memory",
+            "forget_assistant_memory",
+            "create_assistant_task",
+            "update_assistant_task",
             "write_file",
             "git_commit",
             "git_push",
@@ -903,16 +914,30 @@ impl Validator<'_> {
         if !REGISTERED_TOOLS.contains(&name) && access != "durable_deny" {
             return false;
         }
+        if name == "ask_user"
+            && !matches!(
+                (access, as_str(f("safe_summary_key"))),
+                ("auto", Some("agent.ask_user")) | ("durable_deny", Some("agent.unknown"))
+            )
+        {
+            return false;
+        }
         if AUTO.contains(&name)
             && access != "auto"
-            && !(name == "list_runtime_environments" && access == "durable_deny")
+            && !(matches!(
+                name,
+                "ask_user"
+                    | "list_runtime_environments"
+                    | "list_assistant_tasks"
+                    | "search_assistant_memory"
+            ) && access == "durable_deny")
         {
             return false;
         }
         let guest = crate::runtime_tools::is_guest(name);
         if CONVERSATION.contains(&name)
             && access != "conversation_confirm"
-            && !(guest && access == "durable_deny")
+            && !((guest || crate::assistant_tools::is_mutation(name)) && access == "durable_deny")
         {
             return false;
         }
@@ -989,7 +1014,9 @@ impl Validator<'_> {
             || !self.agent_root(f("root").expect("checked"))
             || (!exact_schema(f("tool_registry_version"), 1)
                 && !exact_schema(f("tool_registry_version"), 2)
-                && !exact_schema(f("tool_registry_version"), 3))
+                && !exact_schema(f("tool_registry_version"), 3)
+                && !exact_schema(f("tool_registry_version"), 4)
+                && !exact_schema(f("tool_registry_version"), 5))
             || !canonical_digest(f("toolset_sha256"))
             || !is_dict(f("transcript"))
             || !self.transcript_reference(f("transcript").expect("checked"))
@@ -1012,7 +1039,20 @@ impl Validator<'_> {
         let mut call_ids: BTreeSet<&str> = BTreeSet::new();
         for (index, call) in batch.iter().enumerate() {
             let call_id = as_str(get(call, "call_id")).unwrap_or_default();
+            let name = as_str(get(call, "name")).unwrap_or_default();
+            let question = name == "ask_user";
+            let historical_unknown_deny = as_str(get(call, "access")) == Some("durable_deny")
+                && as_str(get(call, "safe_summary_key")) == Some("agent.unknown");
             if !self.agent_call(call)
+                // Before registry v4, ask_user was an unknown durable denial.
+                // Its persisted summary cannot be upgraded into an executable call.
+                || (question
+                    && !exact_schema(f("tool_registry_version"), 4)
+                    && !exact_schema(f("tool_registry_version"), 5)
+                    && !historical_unknown_deny)
+                || (crate::assistant_tools::is_assistant(name)
+                    && !exact_schema(f("tool_registry_version"), 5)
+                    && !historical_unknown_deny)
                 || uint(get(call, "call_index")) != index as u64
                 || call_ids.contains(call_id)
                 || (super::grant_reuse::call_shape(call)
@@ -1187,15 +1227,26 @@ impl Validator<'_> {
             || !canonical_digest(f("root_fingerprint_sha256"))
             || !string_in(
                 f("tool_family"),
-                &["file_write", "git_commit", "git_push", "guest_service"],
+                &[
+                    "file_write",
+                    "git_commit",
+                    "git_push",
+                    "guest_service",
+                    "assistant_metadata",
+                ],
             )
             || (matches!(family, "git_commit" | "git_push") && is_null(f("project_id")))
             || (!exact_schema(f("registry_version"), 1)
                 && !exact_schema(f("registry_version"), 2)
-                && !exact_schema(f("registry_version"), 3))
+                && !exact_schema(f("registry_version"), 3)
+                && !exact_schema(f("registry_version"), 4)
+                && !exact_schema(f("registry_version"), 5))
+            || (family == "assistant_metadata" && !exact_schema(f("registry_version"), 5))
             || (family == "guest_service"
                 && !exact_schema(f("registry_version"), 2)
-                && !exact_schema(f("registry_version"), 3))
+                && !exact_schema(f("registry_version"), 3)
+                && !exact_schema(f("registry_version"), 4)
+                && !exact_schema(f("registry_version"), 5))
             || bounded_text(f("policy_version"), 256, false).is_none()
             || !is_dict(issued)
             || !exact_keys(
@@ -1637,11 +1688,22 @@ impl Validator<'_> {
             required = base;
         }
         let f = |key: &str| get(conversation, key);
+        // Only an empty schema-9 draft may be saved before model selection.
+        // No execution, model metadata, grants or project authority inherits
+        // this exception; their existing model requirements remain strict.
+        let unconfigured = agent_schema
+            && f("model_id") == Some(&Value::Null)
+            && ["messages", "turns", "attempts", "agent_grants"]
+                .iter()
+                .all(|key| is_array(f(key)) && len(f(key)) == 0)
+            && ["project_id", "runtime_context_id", "project_context"]
+                .iter()
+                .all(|key| f(key) == Some(&Value::Null));
         if !keys(conversation, &required, &optional)
             || !valid_identifier(f("id"), MAX_ID_BYTES)
             || bounded_text(f("title"), MAX_TITLE_BYTES, false).is_none()
             || !string_in(f("title_source"), &["auto", "manual"])
-            || !self.valid_model(f("model_id"))
+            || !(self.valid_model(f("model_id")) || unconfigured)
             || (f("thinking_mode").is_some() && !valid_thinking_mode(f("thinking_mode")))
             || !is_array(f("messages"))
             || !valid_timestamp_pair(f("created_at"), f("updated_at"))
@@ -1835,9 +1897,17 @@ impl Validator<'_> {
                 .get(as_str(get(attempt_turn, "user_message_id")).unwrap_or_default())
                 .copied()
                 .unwrap_or(0);
-            let expected_start = (user_index + 1).saturating_sub(MAX_VISIBLE_MESSAGES);
-            let expected_length = user_index + 1 - expected_start;
             let visible = array(get(attempt, "visible_message_ids"));
+            // The durable Agent transport freezes at most 96 messages. Keep
+            // accepting the older 200-message text window, but both forms
+            // must remain an exact contiguous suffix ending at this user turn.
+            let window = if agent_schema && visible.len() == 96 && user_index + 1 >= 96 {
+                96
+            } else {
+                MAX_VISIBLE_MESSAGES
+            };
+            let expected_start = (user_index + 1).saturating_sub(window);
+            let expected_length = user_index + 1 - expected_start;
             if visible.len() != expected_length {
                 return None;
             }
@@ -2249,12 +2319,7 @@ impl Validator<'_> {
                         return None;
                     }
                     let family = as_str(get(grant, "tool_family")).unwrap_or_default();
-                    let required_capability = match family {
-                        "file_write" => "file_write",
-                        "guest_service" => "guest_service",
-                        "git_commit" => "git_commit",
-                        _ => "git_push",
-                    };
+                    let required_capability = super::grant_reuse::required_capability(family)?;
                     if !array(nested(root, "capabilities"))
                         .iter()
                         .any(|c| as_str(Some(c)) == Some(required_capability))
@@ -2283,7 +2348,10 @@ impl Validator<'_> {
                 return false;
             };
             let journal = present(get(attempt, "agent"));
-            let journal_call = if journal.is_some() && !is_null(e("call_id")) {
+            let journal_call = if journal.is_some()
+                && !is_null(e("call_id"))
+                && equal(nested(journal, "round_index"), e("round_index"))
+            {
                 array(nested(journal, "batch"))
                     .iter()
                     .find(|call| equal(get(call, "call_id"), e("call_id")))
@@ -2294,7 +2362,8 @@ impl Validator<'_> {
                 None
             } else {
                 Some(format!(
-                    "{attempt_id}\0{}",
+                    "{attempt_id}\0{}\0{}",
+                    uint(e("round_index")),
                     as_str(e("call_id")).unwrap_or_default()
                 ))
             };
@@ -2775,7 +2844,7 @@ impl Validator<'_> {
             || !is_array(f("messages"))
             || !is_array(f("session_events"))
             || len(f("session_events")) > MAX_EVENTS
-            || !self.preferences(f("preferences"))
+            || !self.preferences(f("preferences"), true)
         {
             return false;
         }
@@ -2873,7 +2942,9 @@ impl Validator<'_> {
                     let request_id = text_of(get(round, "provider_request_id"));
                     // The response id is the provider's, and relays reuse
                     // one; only the request id, which is ours, is unique.
-                    if lifecycle_ids.contains(&round_id) || provider_request_ids.contains(&request_id) {
+                    if lifecycle_ids.contains(&round_id)
+                        || provider_request_ids.contains(&request_id)
+                    {
                         return false;
                     }
                     lifecycle_ids.insert(round_id);
@@ -3084,7 +3155,7 @@ impl Validator<'_> {
         if version == 8 && !is_array(f("workspace_authority_outbox")) {
             return false;
         }
-        if f("preferences").is_some() && !self.preferences(f("preferences")) {
+        if f("preferences").is_some() && !self.preferences(f("preferences"), false) {
             return false;
         }
         if f("session_events").is_some() && !is_array(f("session_events")) {
@@ -3206,7 +3277,9 @@ impl Validator<'_> {
                     let request_id = text_of(get(round, "provider_request_id"));
                     // The response id is the provider's, and relays reuse
                     // one; only the request id, which is ours, is unique.
-                    if lifecycle_ids.contains(&round_id) || provider_request_ids.contains(&request_id) {
+                    if lifecycle_ids.contains(&round_id)
+                        || provider_request_ids.contains(&request_id)
+                    {
                         return false;
                     }
                     lifecycle_ids.insert(round_id);
@@ -3227,3 +3300,7 @@ impl Validator<'_> {
         true
     }
 }
+
+#[cfg(test)]
+#[path = "question_gate_tests.rs"]
+mod question_gate_tests;

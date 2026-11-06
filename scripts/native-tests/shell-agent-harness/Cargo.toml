@@ -1,0 +1,13 @@
+[package]
+name = "rish-shell-agent-harness"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+[workspace]
+
+[dependencies]
+rish-shell-core = { path = "../../../apps/gpui/crates/rish-shell-core" }
+serde_json = { version = "1", features = ["arbitrary_precision"] }
+uuid = { version = "1", features = ["v4"] }
+chrono = "0.4"

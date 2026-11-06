@@ -1,5 +1,6 @@
 #import "AgentNativeWAL.h"
 #import "AgentRuntimeToolContracts.h"
+#import "AssistantTaskExecutor.h"
 #import "RishHarnessCatalog.h"
 
 #import "DSHWorkspaceCanonical.h"
@@ -796,6 +797,11 @@ BOOL DSHAgentToolArgumentsAccepted(NSString *name,
     return DSHAgentToolArgumentsRefused(failureCode, reason,
         validation[@"failure_code"] ?: @"E_AGENT_BAD_ARGUMENTS",
         validation[@"reason"] ?: @"arguments_do_not_match_tool_schema");
+  }
+  if ([toolName isEqual:@"ask_user"]) {
+    if (DSHAgentRuntimeContractValid(@"question_arguments", arguments)) return YES;
+    return DSHAgentToolArgumentsRefused(failureCode, reason,
+        @"E_AGENT_BAD_ARGUMENTS", @"arguments_do_not_match_tool_schema");
   }
   if ([toolName isEqualToString:@"write_file"] ||
       [toolName isEqualToString:@"read_file"] ||
@@ -2744,6 +2750,13 @@ static void DSHAgentWALRememberVerifiedBytes(NSData *data) {
       NSString *dispatchState = DSHAgentFindDispatchState(dispatchRows,
                                                             @"execution",
                                                             row[@"locator"]);
+      if ([dispatchState isEqual:@"dispatched"] && DSHAgentIsAssistantMutationTool(row[@"name"])) {
+        // Rust commits the assistant mutation and its receipt atomically. A
+        // process death between that commit and WAL settlement must leave the
+        // original CAS/transcript recoverable until the receipt is queried.
+        // The dead owner blocks dispatch; retaining it never grants an effect.
+        continue;
+      }
       BOOL notDispatched = [dispatchState isEqualToString:@"not_dispatched"];
       row[@"state"] = notDispatched ? @"unknown" : @"ambiguous";
       row[@"owner"] = NSNull.null;

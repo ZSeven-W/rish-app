@@ -34,7 +34,7 @@ FOUNDATION_EXPORT void DSHAgentPruneRoundPresentationCache(NSURL *walRoot, NSSet
 
 /// Native-only reconstruction used by the completion bridge. The request is
 /// still bound to the complete attempt/root/reference token; this method must
-/// never be exported as an RN-facing result.
+/// never be exported as a UI-facing result.
 - (nullable NSArray<NSDictionary *> *)nativeMessagesForTranscriptWithRequest:
     (NSDictionary *)request
                                                                           error:(NSError **)error;
@@ -56,7 +56,7 @@ FOUNDATION_EXPORT void DSHAgentPruneRoundPresentationCache(NSURL *walRoot, NSSet
 
 /// Private native helper used by AgentRoundJournal to co-commit provider
 /// transcript append and round completion. It intentionally accepts a block
-/// over the WAL state rather than exposing raw records to JavaScript.
+/// over the WAL state rather than exposing raw records to the UI.
 - (BOOL)performAtomicTransaction:(DSHAgentNativeWALMutation)mutation
                            error:(NSError **)error;
 

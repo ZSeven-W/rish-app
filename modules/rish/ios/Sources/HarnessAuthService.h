@@ -6,7 +6,7 @@ NS_ASSUME_NONNULL_BEGIN
 
 /// Stable native status envelope for official CLI subscription authentication.
 /// The service deliberately owns no API key slots and never returns tokens,
-/// CLI homes, or process output to React Native. Credential persistence, when
+/// CLI homes, or process output to the app UI. Credential persistence, when
 /// reached after official CLI verification, stores bounded auth.json bytes in
 /// a separate per-harness device-only Keychain item; no synthetic marker is
 /// accepted.

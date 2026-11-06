@@ -79,7 +79,7 @@ FOUNDATION_EXPORT const NSUInteger DSHAgentNativeWALMaxDeniedCalls;
                            error:(NSError **)error;
 
 /// Returns a detached immutable snapshot of the complete WAL state. The
-/// result is private native data and must not cross the React bridge.
+/// result is private native data and must not cross the native bridge.
 - (nullable NSDictionary *)snapshotWithError:(NSError **)error;
 
 /// Re-runs owner-loss reconciliation after bootstrap. Existing owners from a
@@ -95,7 +95,7 @@ FOUNDATION_EXPORT const NSUInteger DSHAgentNativeWALMaxDeniedCalls;
                                       error:(NSError **)error;
 
 /// Registers/unregisters an in-process native task. These APIs are only for
-/// native executors and tests; a JavaScript string cannot prove liveness.
+/// native executors and tests; a the UI string cannot prove liveness.
 - (BOOL)registerNativeTaskId:(NSString *)nativeTaskId error:(NSError **)error;
 - (BOOL)unregisterNativeTaskId:(NSString *)nativeTaskId error:(NSError **)error;
 - (BOOL)isNativeTaskAlive:(NSString *)nativeTaskId
@@ -113,7 +113,7 @@ FOUNDATION_EXPORT const NSUInteger DSHAgentNativeWALMaxDeniedCalls;
 @end
 
 /// Native-private schema-v2 operation relation helpers. These functions are
-/// deliberately not React Native exports: `request` and `safeResult` must be
+/// deliberately not app UI exports: `request` and `safeResult` must be
 /// the already validated exact high-level V2 objects owned by the native
 /// coordinator. Results are detached immutable Foundation JSON values.
 ///
@@ -199,7 +199,7 @@ DSHAgentNativeWALCommitOperationInState(
 /// The prepare-attempt composition point: inserts the exact frozen authority
 /// and commits the matching prepare operation/snapshot in one WAL CAS. Exact
 /// replay returns the historical immutable safe result. This has no provider
-/// or tool effect and is not exported through RCT.
+/// or tool effect and is not exported through native registry.
 FOUNDATION_EXPORT NSDictionary * _Nullable
 DSHAgentNativeWALPrepareAuthorityOperation(
     DSHAgentNativeWAL *wal,

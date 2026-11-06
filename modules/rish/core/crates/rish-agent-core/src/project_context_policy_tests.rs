@@ -77,7 +77,7 @@ fn reason(path: &str) -> Option<&'static str> {
 fn ordinary_source_and_prose_are_sent() {
     for path in [
         "src/main.rs",
-        "apps/mobile/App.tsx",
+        "apps/gpui/src/lib.rs",
         "README.md",
         "docs/design.md",
         "LICENSE",

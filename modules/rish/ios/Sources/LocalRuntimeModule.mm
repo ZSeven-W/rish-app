@@ -1,4 +1,4 @@
-#import <React/RCTEventEmitter.h>
+#import <RishNative/RishEventEmitter.h>
 #import "DSHCompletionV2.h"
 #import "DSHCompletionProviderTransport.h"
 #import "DshProviderTransport.h"
@@ -9,6 +9,7 @@
 #import "RishHarnessCatalog.h"
 #import "RishConversationBrowser.h"
 #import "ConfiguredProviderTransport.h"
+#import "CustomProviderModelDiscovery.h"
 #import "ProviderConfiguration.h"
 #import "SessionSnapshotStore.h"
 #import "SessionWorkspaceCoordinator.h"
@@ -23,8 +24,8 @@
 
 #import <Foundation/Foundation.h>
 #import <PDFKit/PDFKit.h>
-#import <React/RCTBridgeModule.h>
-#import <React/RCTUtils.h>
+#import <RishNative/RishNativeModule.h>
+#import <RishNative/RishUIKit.h>
 #import <UIKit/UIKit.h>
 #import <Security/Security.h>
 #import <TargetConditionals.h>
@@ -88,12 +89,7 @@ static NSString *const DSHProjectContextSystemPolicy =
      "for actions.";
 
 static NSString *DSHHarnessIdForCredentialAccount(NSString *account) {
-  for (NSString *harnessId in @[@"dsh", @"claude-code", @"codex", @"glm"]) {
-    if ([DSHCredentialAccountForHarnessId(harnessId) isEqualToString:account]) {
-      return harnessId;
-    }
-  }
-  return @"dsh";
+  return DSHConfigurableHarnessForSlot(account);
 }
 
 static NSString *DSHNow(void) {
@@ -164,7 +160,7 @@ static NSError *DSHLocalRuntimeError(NSInteger code, NSString *message) {
                          userInfo:@{NSLocalizedDescriptionKey: message}];
 }
 
-static void DSHRejectCompletionSchema2(RCTPromiseRejectBlock reject,
+static void DSHRejectCompletionSchema2(RishRejectBlock reject,
                                        NSString *code) {
   reject(code, code, nil);
 }
@@ -797,7 +793,7 @@ static BOOL DSHCanConnectToMacProxy(void) {
 }
 @end
 
-@interface LocalRuntimeModule : RCTEventEmitter <NSURLSessionTaskDelegate, SFSafariViewControllerDelegate>
+@interface LocalRuntimeModule : RishEventEmitter <NSURLSessionTaskDelegate, SFSafariViewControllerDelegate>
 @property(nonatomic, assign) NSUInteger streamObserverCount;
 @property(nonatomic, strong) id<DSHProviderStreamEventParsing> streamParser;
 @property(nonatomic, strong) NSURLSessionDataTask *streamTask;
@@ -825,6 +821,10 @@ static BOOL DSHCanConnectToMacProxy(void) {
 /// DSH and GLM through a relay the person configured.
 @property(nonatomic, strong) DSHCompletionProviderTransport *dshConfiguredTransport;
 @property(nonatomic, strong) DSHCompletionProviderTransport *glmConfiguredTransport;
+@property(nonatomic, strong) NSMutableDictionary<NSString *, DSHConfiguredProviderTransport *> *customProviderTransports;
+@property(nonatomic, strong) DSHCustomProviderModelDiscovery *customProviderDiscovery;
+@property(nonatomic, copy) NSString *customProviderDiscoveryId;
+@property(nonatomic, copy) NSString *customProviderDiscoveryOperationId;
 @property(nonatomic, strong) NSURLSessionDataTask *activeCompletionTask;
 @property(nonatomic, strong) id<DSHCompletionExecution> activeCompletionExecution;
 @property(nonatomic, copy) NSString *activeCompletionRequestId;
@@ -835,8 +835,8 @@ static BOOL DSHCanConnectToMacProxy(void) {
 @property(nonatomic) NSInteger activeCompletionSchemaVersion;
 @property(nonatomic) UIBackgroundTaskIdentifier activeCompletionBackgroundTask;
 @property(nonatomic, copy) NSString *activeCompletionCredentialSlot;
-@property(nonatomic, copy) RCTPromiseRejectBlock activeCompletionRejecter;
-@property(nonatomic, copy) RCTPromiseRejectBlock activeCompletionStreamRejecter;
+@property(nonatomic, copy) RishRejectBlock activeCompletionRejecter;
+@property(nonatomic, copy) RishRejectBlock activeCompletionStreamRejecter;
 @property(nonatomic) BOOL activeCompletionRedirected;
 @property(nonatomic, copy) NSString *completionV2TestCredential;
 @property(nonatomic, copy) NSString *(^completionV2UUIDGenerator)(void);
@@ -868,8 +868,8 @@ static BOOL DSHCanConnectToMacProxy(void) {
 - (void)clearStreamStateForRequestId:(NSString *)requestId
                           generation:(NSUInteger)generation;
 - (void)performBootstrapForHarnessId:(NSString *)harnessId
-                     resolver:(RCTPromiseResolveBlock)resolve
-                      rejecter:(RCTPromiseRejectBlock)reject;
+                     resolver:(RishResolveBlock)resolve
+                      rejecter:(RishRejectBlock)reject;
 @end
 
 // The one projection of a visible history's attachment references into what
@@ -1026,7 +1026,7 @@ DSHAttachmentResolver DSHDefaultAttachmentResolver(void) {
 
 @implementation LocalRuntimeModule
 
-RCT_EXPORT_MODULE(LocalRuntime)
+RISH_NATIVE_MODULE(LocalRuntime)
 
 - (NSArray<NSString *> *)supportedEvents {
   return @[ @"completionStream" ];
@@ -1208,6 +1208,7 @@ RCT_EXPORT_MODULE(LocalRuntime)
     _glmProviderTransport.accountProvider = [RishZCodeAccountAuthService isProvider:selectedGlmSource] ? selectedGlmSource :
       ([selectedGlmSource hasSuffix:@"_trial"] ? selectedGlmSource : nil);
     _glmProviderTransport.trialAllowedModels = [selectedGlmSource hasSuffix:@"_trial"] ? _glmCredentialSelection.allowedModels : nil;
+    _customProviderTransports = [NSMutableDictionary dictionary];
     _slotCredentialGenerations = [NSMutableDictionary dictionary];
     for (NSString *account in DSHHarnessCredentialAccounts()) {
       _slotCredentialGenerations[account] = @0;
@@ -1217,6 +1218,19 @@ RCT_EXPORT_MODULE(LocalRuntime)
 }
 
 - (DSHCompletionProviderTransport *)providerTransportForHarnessId:(NSString *)harnessId {
+  if (DSHIsCustomProviderHarness(harnessId)) {
+    if (![DSHProviderConfigurationStore.sharedStore configurationForHarness:harnessId]) return nil;
+    @synchronized(self) {
+      DSHConfiguredProviderTransport *transport = self.customProviderTransports[harnessId];
+      if (!transport) {
+        transport = [[DSHConfiguredProviderTransport alloc] initWithHarness:harnessId session:self.modelSession
+          uuidGenerator:self.completionV2UUIDGenerator monotonicClock:self.completionV2MonotonicClock
+          store:DSHProviderConfigurationStore.sharedStore];
+        self.customProviderTransports[harnessId] = transport;
+      }
+      return transport;
+    }
+  }
   if ([harnessId isEqualToString:@"claude-code"]) {
     NSString *source = [self.harnessAuthService claudeChatSource];
     if ([source isEqual:@"api_key"]) return self.claudeProviderTransport;
@@ -1233,11 +1247,12 @@ RCT_EXPORT_MODULE(LocalRuntime)
   // A relay configured for GLM replaces its account and its endpoint.
   if ([harnessId isEqualToString:@"glm"])
     return DSHHarnessUsesCustomProvider(@"glm") ? self.glmConfiguredTransport : self.glmProviderTransport;
-  return DSHHarnessUsesCustomProvider(@"dsh") ? self.dshConfiguredTransport : self.completionProviderTransport;
+  if ([harnessId isEqual:@"dsh"]) return DSHHarnessUsesCustomProvider(@"dsh") ? self.dshConfiguredTransport : self.completionProviderTransport;
+  return nil;
 }
 
 - (NSString *)credentialAccountForHarnessId:(NSString *)harnessId {
-  return DSHCredentialAccountForHarnessId(harnessId) ?: DSHCredentialAccount;
+  return DSHCredentialAccountForHarnessId(harnessId);
 }
 
 /// Credential + generation for the harness's Keychain slot. Used by the
@@ -1245,6 +1260,7 @@ RCT_EXPORT_MODULE(LocalRuntime)
 - (NSString *)credentialForHarnessId:(NSString *)harnessId
                           generation:(NSUInteger *)generation {
   NSString *account = [self credentialAccountForHarnessId:harnessId];
+  if (!account) return nil;
   return [self credentialForAccount:account generation:generation];
 }
 
@@ -1344,13 +1360,22 @@ RCT_EXPORT_MODULE(LocalRuntime)
     if (![source isEqual:@"api_key"])
       return [self.glmCredentialSelection credentialWithAccountAuth:self.zcodeAccountAuthService].length > 0 ? errSecSuccess : errSecItemNotFound;
   }
+  if ([self isCredentialFreeCustomSlot:account]) return errSecSuccess;
   NSMutableDictionary *query = [self keychainQueryForAccount:account];
+  if (!query) return errSecItemNotFound;
   query[(__bridge id)kSecMatchLimit] = (__bridge id)kSecMatchLimitOne;
   return SecItemCopyMatching((__bridge CFDictionaryRef)query, nil);
 }
 
 - (OSStatus)credentialLookupStatus {
   return [self credentialLookupStatusForAccount:DSHCredentialAccount];
+}
+
+- (BOOL)isCredentialFreeCustomSlot:(NSString *)slot {
+  NSString *harness = DSHConfigurableHarnessForSlot(slot);
+  if (!DSHIsCustomProviderHarness(harness)) return NO;
+  NSDictionary *profile = [DSHProviderConfigurationStore.sharedStore configurationForHarness:harness];
+  return profile && !DSHProviderRequiresCredential(profile);
 }
 
 - (NSString *)credentialForAccount:(NSString *)account
@@ -1378,7 +1403,11 @@ RCT_EXPORT_MODULE(LocalRuntime)
       self.completionV2TestCredential != nil) {
     return self.completionV2TestCredential;
   }
+  // Fixed identity marker satisfies the existing round credential proof;
+  // the configured transport omits every authentication header for auth:none.
+  if ([self isCredentialFreeCustomSlot:account]) return @"rish-local-no-auth-v1";
   NSMutableDictionary *query = [self keychainQueryForAccount:account];
+  if (!query) return nil;
   query[(__bridge id)kSecReturnData] = @YES;
   query[(__bridge id)kSecMatchLimit] = (__bridge id)kSecMatchLimitOne;
   CFTypeRef result = nil;
@@ -1399,8 +1428,8 @@ RCT_EXPORT_MODULE(LocalRuntime)
 - (void)cancelActiveCompletionForCredentialSlot:(NSString *)account {
   NSURLSessionDataTask *task = nil;
   id<DSHCompletionExecution> execution = nil;
-  RCTPromiseRejectBlock strictRejecter = nil;
-  RCTPromiseRejectBlock streamRejecter = nil;
+  RishRejectBlock strictRejecter = nil;
+  RishRejectBlock streamRejecter = nil;
   NSString *streamRequestId = nil;
   NSUInteger streamGeneration = 0;
   @synchronized (self) {
@@ -1435,6 +1464,7 @@ RCT_EXPORT_MODULE(LocalRuntime)
     [self.codexSubscriptionTransport cancelTask:task];
     [self.dshConfiguredTransport cancelTask:task];
     [self.glmConfiguredTransport cancelTask:task];
+    @synchronized(self) { for (DSHConfiguredProviderTransport *transport in self.customProviderTransports.allValues) [transport cancelTask:task]; }
   }
   if (execution != nil) [execution cancel];
   if (strictRejecter != nil) {
@@ -1454,11 +1484,20 @@ RCT_EXPORT_MODULE(LocalRuntime)
 - (BOOL)storeCredential:(NSString *)credential
               forAccount:(NSString *)account
                    error:(NSError **)error {
+  return [self storeCredential:credential forAccount:account capturedEffectiveAccount:DSHEffectiveCredentialAccount(account) error:error];
+}
+
+- (BOOL)storeCredential:(NSString *)credential forAccount:(NSString *)account
+    capturedEffectiveAccount:(NSString *)effectiveAccount error:(NSError **)error {
+  if (!effectiveAccount || ![DSHEffectiveCredentialAccount(account) isEqual:effectiveAccount]) {
+    if (error) *error = DSHLocalRuntimeError(1004, @"E_PROVIDER_CONFIGURATION_CHANGED");
+    return NO;
+  }
   NSString *trimmed = [credential stringByTrimmingCharactersInSet:
     [NSCharacterSet whitespaceAndNewlineCharacterSet]];
   BOOL containsWhitespace = [trimmed rangeOfCharacterFromSet:
     [NSCharacterSet whitespaceAndNewlineCharacterSet]].location != NSNotFound;
-  BOOL customAccount = ![DSHEffectiveCredentialAccount(account) isEqual:account];
+  BOOL customAccount = ![effectiveAccount isEqual:account];
   if (trimmed.length < (customAccount ? 1 : 16) || trimmed.length > (customAccount ? 4096 : 512) || containsWhitespace) {
     if (error != nil) {
       *error = DSHLocalRuntimeError(1004,
@@ -1468,7 +1507,11 @@ RCT_EXPORT_MODULE(LocalRuntime)
   }
 
   NSData *data = [trimmed dataUsingEncoding:NSUTF8StringEncoding];
-  NSMutableDictionary *query = [self keychainQueryForAccount:account];
+  // Use the captured destination directly; never recompute a mutable account
+  // between the configuration check and the Keychain write.
+  NSMutableDictionary *query = [@{(__bridge id)kSecClass:(__bridge id)kSecClassGenericPassword,
+    (__bridge id)kSecAttrService:DSHCredentialService, (__bridge id)kSecAttrAccount:effectiveAccount,
+    (__bridge id)kSecAttrSynchronizable:@NO} mutableCopy];
   OSStatus status = SecItemUpdate(
     (__bridge CFDictionaryRef)query,
     (__bridge CFDictionaryRef)@{
@@ -1497,7 +1540,9 @@ RCT_EXPORT_MODULE(LocalRuntime)
 }
 
 - (BOOL)deleteCredentialForAccount:(NSString *)account error:(NSError **)error {
-  OSStatus status = SecItemDelete((__bridge CFDictionaryRef)[self keychainQueryForAccount:account]);
+  NSMutableDictionary *query = [self keychainQueryForAccount:account];
+  if (!query) { if (error) *error = DSHLocalRuntimeError(1004, @"E_PROVIDER_CONFIGURATION_CHANGED"); return NO; }
+  OSStatus status = SecItemDelete((__bridge CFDictionaryRef)query);
   if (status == errSecSuccess || status == errSecItemNotFound) {
     [self credentialDidChangeForSlot:account];
     return YES;
@@ -1590,7 +1635,7 @@ RCT_EXPORT_MODULE(LocalRuntime)
       if ([kind isEqualToString:@"image"]) {
         if (!DSHDshModelSupportsImages(model)) {
           if (error != nil) {
-            *error = DSHLocalRuntimeError(1034, @"Image attachments require Flash Exp");
+            *error = DSHLocalRuntimeError(1034, @"This model does not support image attachments");
           }
           return nil;
         }
@@ -1989,6 +2034,7 @@ RCT_EXPORT_MODULE(LocalRuntime)
 - (void)recordCredentialConfigured:(BOOL)configured
                         forAccount:(NSString *)account {
   NSString *harnessId = DSHHarnessIdForCredentialAccount(account);
+  if (!harnessId) return;
   NSMutableDictionary *proof = [self baseProofWithRishReceipt:nil
                                                     credential:configured
                                                       harnessId:harnessId
@@ -2019,7 +2065,7 @@ RCT_EXPORT_MODULE(LocalRuntime)
 /// system does not permit. Idempotent; released in clearActiveCompletionLocked.
 - (void)beginCompletionBackgroundTaskLocked {
   if (self.activeCompletionBackgroundTask != UIBackgroundTaskInvalid) return;
-  UIApplication *application = RCTSharedApplication();
+  UIApplication *application = RishSharedApplication();
   if (application == nil) return;
   __weak LocalRuntimeModule *weakSelf = self;
   self.activeCompletionBackgroundTask = [application
@@ -2035,7 +2081,7 @@ RCT_EXPORT_MODULE(LocalRuntime)
   if (self.activeCompletionBackgroundTask == UIBackgroundTaskInvalid) return;
   UIBackgroundTaskIdentifier task = self.activeCompletionBackgroundTask;
   self.activeCompletionBackgroundTask = UIBackgroundTaskInvalid;
-  [RCTSharedApplication() endBackgroundTask:task];
+  [RishSharedApplication() endBackgroundTask:task];
 }
 
 - (void)clearActiveCompletionLocked {
@@ -2059,7 +2105,7 @@ RCT_EXPORT_MODULE(LocalRuntime)
 /// Clears the installed per-stream state for a cancelled round. Runs on
 /// the state queue so it serializes with the stream reset and every
 /// delegate block; the round-identity check keeps it from ever touching a
-/// successor stream's freshly installed state. Settlement of the JS promise
+/// successor stream's freshly installed state. Settlement of the UI promise
 /// is handled separately and synchronously through the rejecter stored with
 /// the slot (activeCompletionStreamRejecter), so cancellation never depends
 /// on streamCompletion having been installed yet.
@@ -2085,7 +2131,7 @@ RCT_EXPORT_MODULE(LocalRuntime)
                          roundId:(NSString *)roundId
                        harnessId:(NSString *)harnessId
              credentialGeneration:(NSUInteger)credentialGeneration
-                         rejecter:(RCTPromiseRejectBlock)rejecter
+                         rejecter:(RishRejectBlock)rejecter
                 generationOutput:(NSUInteger *)generationOutput
                         errorCode:(NSString **)errorCode {
   @synchronized (self) {
@@ -2233,7 +2279,7 @@ RCT_EXPORT_MODULE(LocalRuntime)
                           roundId:(NSString *)roundId
                        generation:(NSUInteger)generation
              credentialGeneration:(NSUInteger)credentialGeneration
-                          rejecter:(RCTPromiseRejectBlock)rejecter
+                          rejecter:(RishRejectBlock)rejecter
                               code:(NSString *)code {
   if ([self claimStrictRound:schemaVersion
                      roundId:roundId
@@ -2259,6 +2305,12 @@ willPerformHTTPRedirection:(__unused NSHTTPURLResponse *)response
   if (!owningTransport && [self.codexSubscriptionTransport handlesTask:task]) owningTransport = self.codexSubscriptionTransport;
   if (!owningTransport && [self.dshConfiguredTransport handlesTask:task]) owningTransport = self.dshConfiguredTransport;
   if (!owningTransport && [self.glmConfiguredTransport handlesTask:task]) owningTransport = self.glmConfiguredTransport;
+  if (!owningTransport) {
+    @synchronized(self) {
+      for (DSHConfiguredProviderTransport *transport in self.customProviderTransports.allValues)
+        if ([transport handlesTask:task]) { owningTransport = transport; break; }
+    }
+  }
   if (owningTransport != nil) {
     [owningTransport handleHTTPRedirectionForTask:task
         newRequest:request
@@ -2291,7 +2343,7 @@ static NSString *DSHCredentialPromptTitle(NSString *account, BOOL chinese) {
     return chinese ? @"OpenAI API 密钥" : @"OpenAI API key";
   }
   if ([account isEqualToString:@"BIGMODEL_API_KEY"]) {
-    return chinese ? @"智谱 GLM API 密钥" : @"Zhipu GLM API key";
+    return chinese ? @"Z.AI API 密钥" : @"Z.AI API key";
   }
   return chinese ? @"DeepSeek API 密钥" : @"DeepSeek API key";
 }
@@ -2307,10 +2359,13 @@ static NSString *DSHCredentialPromptPlaceholder(NSString *account) {
 // this check atomic with native prepare/checkpoint operations.
 - (BOOL)providerConfigurationCanChange {
   @synchronized(self) {
+    if (self.customProviderDiscovery != nil) return NO;
     if (self.activeCompletionRequestId != nil || [self.claudeProviderTransport hasActiveRequests] || [self.claudeSubscriptionTransport hasActiveRequests] ||
         [self.codexProviderTransport hasActiveRequests] || [self.codexSubscriptionTransport hasActiveRequests] || [self.completionProviderTransport hasActiveRequests] ||
         [self.glmProviderTransport hasActiveRequests] || [self.dshConfiguredTransport hasActiveRequests] ||
         [self.glmConfiguredTransport hasActiveRequests]) return NO;
+    for (DSHConfiguredProviderTransport *transport in self.customProviderTransports.allValues)
+      if ([transport hasActiveRequests]) return NO;
   }
   NSError *error = nil;
   DSHSessionSnapshotStore *store = [[DSHSessionSnapshotStore alloc] initWithError:&error];
@@ -2327,10 +2382,13 @@ static NSString *DSHCredentialPromptPlaceholder(NSString *account) {
   }
   return YES;
 }
+#include "LocalRuntimeCustomProviders.inc"
+#include "LocalRuntimeProviderModels.inc"
+
 // Puts a diagnostic report on the clipboard, for a tester to paste rather
-// than screenshot. The report is assembled in JavaScript from value-free
+// than screenshot. The report is assembled in the UI from value-free
 // facts; this only copies it. Answers NO rather than failing.
-RCT_REMAP_METHOD(copyText, copyText:(NSString *)text resolver:(RCTPromiseResolveBlock)resolve rejecter:(__unused RCTPromiseRejectBlock)reject) {
+RISH_NATIVE_METHOD(copyText, copyText:(NSString *)text resolver:(RishResolveBlock)resolve rejecter:(__unused RishRejectBlock)reject) {
   if (![text isKindOfClass:NSString.class] || text.length > 64 * 1024) { resolve(@NO); return; }
   dispatch_async(dispatch_get_main_queue(), ^{
     UIPasteboard.generalPasteboard.string = text;
@@ -2338,7 +2396,7 @@ RCT_REMAP_METHOD(copyText, copyText:(NSString *)text resolver:(RCTPromiseResolve
   });
 }
 // What build and device a diagnostic report comes from.
-RCT_REMAP_METHOD(buildInfo, buildInfoWithResolver:(RCTPromiseResolveBlock)resolve rejecter:(__unused RCTPromiseRejectBlock)reject) {
+RISH_NATIVE_METHOD(buildInfo, buildInfoWithResolver:(RishResolveBlock)resolve rejecter:(__unused RishRejectBlock)reject) {
   NSDictionary *bundle = NSBundle.mainBundle.infoDictionary;
   NSString *build = [bundle[@"RishBuildCommit"] isKindOfClass:NSString.class] ? bundle[@"RishBuildCommit"]
       : ([bundle[@"CFBundleVersion"] isKindOfClass:NSString.class] ? bundle[@"CFBundleVersion"] : @"unknown");
@@ -2351,25 +2409,25 @@ RCT_REMAP_METHOD(buildInfo, buildInfoWithResolver:(RCTPromiseResolveBlock)resolv
     });
   });
 }
-RCT_REMAP_METHOD(dshModelCatalog, dshModelCatalogWithResolver:(RCTPromiseResolveBlock)resolve rejecter:(RCTPromiseRejectBlock)reject) {
+RISH_NATIVE_METHOD(dshModelCatalog, dshModelCatalogWithResolver:(RishResolveBlock)resolve rejecter:(RishRejectBlock)reject) {
   NSDictionary *value = DSHDshModelCatalog();
   if (value) resolve(value); else reject(@"E_MODEL_CATALOG", @"E_MODEL_CATALOG", nil);
 }
-RCT_REMAP_METHOD(saveDshModelCatalog, saveDshModelCatalog:(NSDictionary *)request resolver:(RCTPromiseResolveBlock)resolve rejecter:(RCTPromiseRejectBlock)reject) {
+RISH_NATIVE_METHOD(saveDshModelCatalog, saveDshModelCatalog:(NSDictionary *)request resolver:(RishResolveBlock)resolve rejecter:(RishRejectBlock)reject) {
   [DSHSessionWorkspaceCoordinator.sharedCoordinator performAsync:^{
     if (![self providerConfigurationCanChange]) { reject(@"E_COMPLETION_BUSY", @"E_COMPLETION_BUSY", nil); return; }
     NSDictionary *value = DSHSaveDshModelCatalog(request);
     if (value) resolve(value); else reject(@"E_MODEL_CATALOG", @"E_MODEL_CATALOG", nil);
   }];
 }
-RCT_REMAP_METHOD(providerConfiguration, providerConfigurationForHarness:(NSString *)harness
-                 resolver:(RCTPromiseResolveBlock)resolve rejecter:(RCTPromiseRejectBlock)reject) {
+RISH_NATIVE_METHOD(providerConfiguration, providerConfigurationForHarness:(NSString *)harness
+                 resolver:(RishResolveBlock)resolve rejecter:(RishRejectBlock)reject) {
   NSDictionary *configuration = [DSHProviderConfigurationStore.sharedStore configurationForHarness:harness];
   if (configuration == nil) reject(@"E_PROVIDER_CONFIGURATION", @"E_PROVIDER_CONFIGURATION", nil);
   else resolve(configuration);
 }
-RCT_REMAP_METHOD(saveProviderConfiguration, saveProviderConfiguration:(NSDictionary *)configuration
-                 resolver:(RCTPromiseResolveBlock)resolve rejecter:(RCTPromiseRejectBlock)reject) {
+RISH_NATIVE_METHOD(saveProviderConfiguration, saveProviderConfiguration:(NSDictionary *)configuration
+                 resolver:(RishResolveBlock)resolve rejecter:(RishRejectBlock)reject) {
   NSDictionary *safe = DSHNormalizeProviderConfiguration(configuration);
   if (safe == nil) { reject(@"E_PROVIDER_CONFIGURATION", @"E_PROVIDER_CONFIGURATION", nil); return; }
   [DSHSessionWorkspaceCoordinator.sharedCoordinator performAsync:^{
@@ -2390,8 +2448,8 @@ RCT_REMAP_METHOD(saveProviderConfiguration, saveProviderConfiguration:(NSDiction
     }
   }];
 }
-RCT_REMAP_METHOD(resetProviderConfiguration, resetProviderConfigurationForHarness:(NSString *)harness
-                 resolver:(RCTPromiseResolveBlock)resolve rejecter:(RCTPromiseRejectBlock)reject) {
+RISH_NATIVE_METHOD(resetProviderConfiguration, resetProviderConfigurationForHarness:(NSString *)harness
+                 resolver:(RishResolveBlock)resolve rejecter:(RishRejectBlock)reject) {
   if (![@[@"claude-code", @"codex", @"dsh", @"glm"] containsObject:harness]) { reject(@"E_PROVIDER_CONFIGURATION", @"E_PROVIDER_CONFIGURATION", nil); return; }
   [DSHSessionWorkspaceCoordinator.sharedCoordinator performAsync:^{
     if (![self providerConfigurationCanChange]) { reject(@"E_COMPLETION_BUSY", @"E_COMPLETION_BUSY", nil); return; }
@@ -2426,13 +2484,13 @@ static BOOL DSHIsHarnessAuthProvider(id value) {
                        forAccount:@"BIGMODEL_API_KEY"];
 }
 
-RCT_REMAP_METHOD(glmCredentialSource, glmCredentialSourceWithResolver:(RCTPromiseResolveBlock)resolve
-                 rejecter:(RCTPromiseRejectBlock)reject) {
+RISH_NATIVE_METHOD(glmCredentialSource, glmCredentialSourceWithResolver:(RishResolveBlock)resolve
+                 rejecter:(RishRejectBlock)reject) {
   dispatch_async(self.stateQueue, ^{ resolve([self glmCredentialSourceStatus]); });
 }
 
-RCT_REMAP_METHOD(selectGlmCredentialSource, selectGlmCredentialSource:(NSString *)source
-                 resolver:(RCTPromiseResolveBlock)resolve rejecter:(RCTPromiseRejectBlock)reject) {
+RISH_NATIVE_METHOD(selectGlmCredentialSource, selectGlmCredentialSource:(NSString *)source
+                 resolver:(RishResolveBlock)resolve rejecter:(RishRejectBlock)reject) {
   if (![@[@"api_key", @"bigmodel", @"zai", @"bigmodel_trial", @"zai_trial"] containsObject:source]) {
     reject(@"E_ZCODE_PLAN_PROVIDER", @"E_ZCODE_PLAN_PROVIDER", nil); return;
   }
@@ -2480,10 +2538,10 @@ RCT_REMAP_METHOD(selectGlmCredentialSource, selectGlmCredentialSource:(NSString 
   }];
 }
 
-RCT_REMAP_METHOD(zcodeAccountStatus,
+RISH_NATIVE_METHOD(zcodeAccountStatus,
                  zcodeAccountStatusForProvider:(NSString *)provider
-                 resolver:(RCTPromiseResolveBlock)resolve
-                 rejecter:(RCTPromiseRejectBlock)reject) {
+                 resolver:(RishResolveBlock)resolve
+                 rejecter:(RishRejectBlock)reject) {
   if (![RishZCodeAccountAuthService isProvider:provider]) { reject(@"E_ZCODE_AUTH_PROVIDER", @"E_ZCODE_AUTH_PROVIDER", nil); return; }
   dispatch_async(self.stateQueue, ^{
     NSDictionary *status = [self.zcodeAccountAuthService statusForProvider:provider];
@@ -2500,9 +2558,9 @@ RCT_REMAP_METHOD(zcodeAccountStatus,
   });
 }
 
-RCT_REMAP_METHOD(openZcodeAccountAuthorization,
+RISH_NATIVE_METHOD(openZcodeAccountAuthorization,
                  openZcodeAccountAuthorizationForProvider:(NSString *)provider
-                 resolver:(RCTPromiseResolveBlock)resolve rejecter:(RCTPromiseRejectBlock)reject) {
+                 resolver:(RishResolveBlock)resolve rejecter:(RishRejectBlock)reject) {
   if (![RishZCodeAccountAuthService isProvider:provider]) { reject(@"E_ZCODE_AUTH_PROVIDER", @"E_ZCODE_AUTH_PROVIDER", nil); return; }
   dispatch_async(self.stateQueue, ^{
     NSDictionary *status = [self.zcodeAccountAuthService statusForProvider:provider];
@@ -2511,7 +2569,7 @@ RCT_REMAP_METHOD(openZcodeAccountAuthorization,
       reject(@"E_ZCODE_AUTH_EXPIRED", @"E_ZCODE_AUTH_EXPIRED", nil); return;
     }
     dispatch_async(dispatch_get_main_queue(), ^{
-      UIViewController *presenter = RCTPresentedViewController();
+      UIViewController *presenter = RishPresentedViewController();
       if (!presenter || [presenter isKindOfClass:SFSafariViewController.class]) {
         reject(@"E_ZCODE_AUTH_BROWSER", @"E_ZCODE_AUTH_BROWSER", nil); return;
       }
@@ -2536,24 +2594,24 @@ RCT_REMAP_METHOD(openZcodeAccountAuthorization,
     self.zcodeAuthorizationProvider = nil;
   }
 }
-RCT_REMAP_METHOD(startZcodeAccountLogin,
+RISH_NATIVE_METHOD(startZcodeAccountLogin,
                  startZcodeAccountLoginForProvider:(NSString *)provider
-                 resolver:(RCTPromiseResolveBlock)resolve
-                 rejecter:(RCTPromiseRejectBlock)reject) {
+                 resolver:(RishResolveBlock)resolve
+                 rejecter:(RishRejectBlock)reject) {
   if (![RishZCodeAccountAuthService isProvider:provider]) { reject(@"E_ZCODE_AUTH_PROVIDER", @"E_ZCODE_AUTH_PROVIDER", nil); return; }
   [self.zcodeAccountAuthService startForProvider:provider completion:resolve];
 }
-RCT_REMAP_METHOD(cancelZcodeAccountLogin,
+RISH_NATIVE_METHOD(cancelZcodeAccountLogin,
                  cancelZcodeAccountLoginForProvider:(NSString *)provider
-                 resolver:(RCTPromiseResolveBlock)resolve
-                 rejecter:(RCTPromiseRejectBlock)reject) {
+                 resolver:(RishResolveBlock)resolve
+                 rejecter:(RishRejectBlock)reject) {
   if (![RishZCodeAccountAuthService isProvider:provider]) { reject(@"E_ZCODE_AUTH_PROVIDER", @"E_ZCODE_AUTH_PROVIDER", nil); return; }
   [self.zcodeAccountAuthService cancelForProvider:provider completion:resolve];
 }
-RCT_REMAP_METHOD(logoutZcodeAccount,
+RISH_NATIVE_METHOD(logoutZcodeAccount,
                  logoutZcodeAccountForProvider:(NSString *)provider
-                 resolver:(RCTPromiseResolveBlock)resolve
-                 rejecter:(RCTPromiseRejectBlock)reject) {
+                 resolver:(RishResolveBlock)resolve
+                 rejecter:(RishRejectBlock)reject) {
   if (![RishZCodeAccountAuthService isProvider:provider]) { reject(@"E_ZCODE_AUTH_PROVIDER", @"E_ZCODE_AUTH_PROVIDER", nil); return; }
   [self.zcodeAccountAuthService logoutForProvider:provider completion:^(NSDictionary *status) {
     [DSHSessionWorkspaceCoordinator.sharedCoordinator performAsync:^{
@@ -2568,10 +2626,10 @@ RCT_REMAP_METHOD(logoutZcodeAccount,
   }];
 }
 
-RCT_REMAP_METHOD(harnessAuthStatus,
+RISH_NATIVE_METHOD(harnessAuthStatus,
                  harnessAuthStatusForHarness:(NSString *)harness
-                 resolver:(RCTPromiseResolveBlock)resolve
-                 rejecter:(RCTPromiseRejectBlock)reject) {
+                 resolver:(RishResolveBlock)resolve
+                 rejecter:(RishRejectBlock)reject) {
   if (!DSHIsHarnessAuthProvider(harness)) {
     reject(@"E_HARNESS_AUTH_INVALID_HARNESS", @"Unknown official CLI harness", nil);
     return;
@@ -2619,11 +2677,11 @@ RCT_REMAP_METHOD(harnessAuthStatus,
            @"error_code":errorCode ?: (id)NSNull.null};
 }
 
-RCT_REMAP_METHOD(codexChatSource, codexChatSourceWithResolver:(RCTPromiseResolveBlock)resolve rejecter:(RCTPromiseRejectBlock)reject) {
+RISH_NATIVE_METHOD(codexChatSource, codexChatSourceWithResolver:(RishResolveBlock)resolve rejecter:(RishRejectBlock)reject) {
   dispatch_async(self.stateQueue, ^{ resolve([self codexChatSourceStatus]); });
 }
 
-RCT_REMAP_METHOD(claudeChatSource, claudeChatSourceWithResolver:(RCTPromiseResolveBlock)resolve rejecter:(RCTPromiseRejectBlock)reject) {
+RISH_NATIVE_METHOD(claudeChatSource, claudeChatSourceWithResolver:(RishResolveBlock)resolve rejecter:(RishRejectBlock)reject) {
   if (![[self.harnessAuthService claudeChatSource] isEqual:@"subscription"]) {
     resolve([self claudeChatSourceStatusFromHarnessStatus:@{}]); return;
   }
@@ -2633,7 +2691,7 @@ RCT_REMAP_METHOD(claudeChatSource, claudeChatSourceWithResolver:(RCTPromiseResol
   }];
 }
 
-RCT_REMAP_METHOD(selectClaudeChatSource, selectClaudeChatSource:(NSString *)source resolver:(RCTPromiseResolveBlock)resolve rejecter:(RCTPromiseRejectBlock)reject) {
+RISH_NATIVE_METHOD(selectClaudeChatSource, selectClaudeChatSource:(NSString *)source resolver:(RishResolveBlock)resolve rejecter:(RishRejectBlock)reject) {
   if (![source isEqualToString:@"subscription"] && ![source isEqualToString:@"api_key"]) {
     reject(@"E_CLAUDE_CHAT_SOURCE", @"Invalid Claude chat source", nil);
     return;
@@ -2655,7 +2713,7 @@ RCT_REMAP_METHOD(selectClaudeChatSource, selectClaudeChatSource:(NSString *)sour
   }];
 }
 
-RCT_REMAP_METHOD(codexAvailableModels, codexAvailableModelsWithResolver:(RCTPromiseResolveBlock)resolve rejecter:(RCTPromiseRejectBlock)reject) {
+RISH_NATIVE_METHOD(codexAvailableModels, codexAvailableModelsWithResolver:(RishResolveBlock)resolve rejecter:(RishRejectBlock)reject) {
   if (![[self.harnessAuthService codexChatSource] isEqual:@"subscription"]) { resolve(@[]); return; }
   [self.codexSubscriptionTransport fetchAvailableModels:^(NSArray<NSDictionary *> *models, NSString *errorCode) {
     if (errorCode) { reject(errorCode, @"Unable to load subscription models", nil); return; }
@@ -2671,7 +2729,7 @@ RCT_REMAP_METHOD(codexAvailableModels, codexAvailableModelsWithResolver:(RCTProm
   }];
 }
 
-RCT_REMAP_METHOD(selectCodexChatSource, selectCodexChatSource:(NSString *)source resolver:(RCTPromiseResolveBlock)resolve rejecter:(RCTPromiseRejectBlock)reject) {
+RISH_NATIVE_METHOD(selectCodexChatSource, selectCodexChatSource:(NSString *)source resolver:(RishResolveBlock)resolve rejecter:(RishRejectBlock)reject) {
   [DSHSessionWorkspaceCoordinator.sharedCoordinator performAsync:^{
     if (![self providerConfigurationCanChange]) { reject(@"E_COMPLETION_BUSY", @"A request is still active", nil); return; }
     NSError *error = nil;
@@ -2682,9 +2740,9 @@ RCT_REMAP_METHOD(selectCodexChatSource, selectCodexChatSource:(NSString *)source
   }];
 }
 
-RCT_REMAP_METHOD(openConversationURL,
+RISH_NATIVE_METHOD(openConversationURL,
                  openConversationURL:(NSDictionary *)request
-                 resolver:(RCTPromiseResolveBlock)resolve rejecter:(RCTPromiseRejectBlock)reject) {
+                 resolver:(RishResolveBlock)resolve rejecter:(RishRejectBlock)reject) {
   dispatch_async(dispatch_get_main_queue(), ^{
     if (self.conversationBrowser == nil) self.conversationBrowser = [RishConversationBrowser new];
     [self.conversationBrowser openRequest:request completion:^(NSString *errorCode) {
@@ -2694,9 +2752,9 @@ RCT_REMAP_METHOD(openConversationURL,
   });
 }
 
-RCT_REMAP_METHOD(openHarnessAuthorization,
+RISH_NATIVE_METHOD(openHarnessAuthorization,
                  openHarnessAuthorizationForHarness:(NSString *)harness session:(NSString *)session
-                 resolver:(RCTPromiseResolveBlock)resolve rejecter:(RCTPromiseRejectBlock)reject) {
+                 resolver:(RishResolveBlock)resolve rejecter:(RishRejectBlock)reject) {
   if ([harness isEqual:@"claude-code"]) {
     dispatch_async(self.stateQueue, ^{
       NSDictionary *status = [self.harnessAuthService statusForHarnessId:harness];
@@ -2707,7 +2765,7 @@ RCT_REMAP_METHOD(openHarnessAuthorization,
         reject(@"E_HARNESS_AUTH_SESSION_NOT_FOUND", @"Authorization session is no longer active", nil); return;
       }
       dispatch_async(dispatch_get_main_queue(), ^{
-        UIViewController *presenter = RCTPresentedViewController();
+        UIViewController *presenter = RishPresentedViewController();
         if (!presenter || [presenter isKindOfClass:SFSafariViewController.class]) {
           reject(@"E_HARNESS_AUTH_BROWSER", @"Cannot present authorization browser", nil); return;
         }
@@ -2734,7 +2792,7 @@ RCT_REMAP_METHOD(openHarnessAuthorization,
     NSString *pasteCode = [DSHHarnessAuthService pasteableDeviceCode:code];
     if (!pasteCode) { reject(@"E_HARNESS_AUTH_CODE_INVALID", @"Invalid device code format", nil); return; }
     dispatch_async(dispatch_get_main_queue(), ^{
-      UIViewController *presenter = RCTPresentedViewController();
+      UIViewController *presenter = RishPresentedViewController();
       if (!presenter || [presenter isKindOfClass:SFSafariViewController.class]) {
         reject(@"E_HARNESS_AUTH_BROWSER", @"Cannot present authorization browser", nil); return;
       }
@@ -2761,10 +2819,10 @@ RCT_REMAP_METHOD(openHarnessAuthorization,
   });
 }
 
-RCT_REMAP_METHOD(startHarnessLogin,
+RISH_NATIVE_METHOD(startHarnessLogin,
                  startHarnessLoginForHarness:(NSString *)harness
-                 resolver:(RCTPromiseResolveBlock)resolve
-                 rejecter:(RCTPromiseRejectBlock)reject) {
+                 resolver:(RishResolveBlock)resolve
+                 rejecter:(RishRejectBlock)reject) {
   if (!DSHIsHarnessAuthProvider(harness)) {
     reject(@"E_HARNESS_AUTH_INVALID_HARNESS", @"Unknown official CLI harness", nil);
     return;
@@ -2772,10 +2830,10 @@ RCT_REMAP_METHOD(startHarnessLogin,
   [self.harnessAuthService startLoginForHarnessId:harness completion:resolve];
 }
 
-RCT_REMAP_METHOD(installHarnessCli,
+RISH_NATIVE_METHOD(installHarnessCli,
                  installHarnessCliForHarness:(NSString *)harness
-                 resolver:(RCTPromiseResolveBlock)resolve
-                 rejecter:(RCTPromiseRejectBlock)reject) {
+                 resolver:(RishResolveBlock)resolve
+                 rejecter:(RishRejectBlock)reject) {
   if (!DSHIsHarnessAuthProvider(harness)) {
     reject(@"E_HARNESS_AUTH_INVALID_HARNESS", @"Unknown official CLI harness", nil);
     return;
@@ -2784,11 +2842,11 @@ RCT_REMAP_METHOD(installHarnessCli,
   resolve([self.harnessAuthService statusForHarnessId:harness]);
 }
 
-RCT_REMAP_METHOD(cancelHarnessLogin,
+RISH_NATIVE_METHOD(cancelHarnessLogin,
                  cancelHarnessLoginForHarness:(NSString *)harness
                  sessionId:(NSString *)sessionId
-                 resolver:(RCTPromiseResolveBlock)resolve
-                 rejecter:(RCTPromiseRejectBlock)reject) {
+                 resolver:(RishResolveBlock)resolve
+                 rejecter:(RishRejectBlock)reject) {
   if (!DSHIsHarnessAuthProvider(harness)) {
     reject(@"E_HARNESS_AUTH_INVALID_HARNESS", @"Unknown official CLI harness", nil);
     return;
@@ -2798,10 +2856,10 @@ RCT_REMAP_METHOD(cancelHarnessLogin,
                                          completion:resolve];
 }
 
-RCT_REMAP_METHOD(logoutHarness,
+RISH_NATIVE_METHOD(logoutHarness,
                  logoutHarnessForHarness:(NSString *)harness
-                 resolver:(RCTPromiseResolveBlock)resolve
-                 rejecter:(RCTPromiseRejectBlock)reject) {
+                 resolver:(RishResolveBlock)resolve
+                 rejecter:(RishRejectBlock)reject) {
   if (!DSHIsHarnessAuthProvider(harness)) {
     reject(@"E_HARNESS_AUTH_INVALID_HARNESS", @"Unknown official CLI harness", nil);
     return;
@@ -2809,12 +2867,12 @@ RCT_REMAP_METHOD(logoutHarness,
   [self.harnessAuthService logoutForHarnessId:harness completion:resolve];
 }
 
-RCT_REMAP_METHOD(presentHarnessLoginCode,
+RISH_NATIVE_METHOD(presentHarnessLoginCode,
                  presentHarnessLoginCodeForHarness:(NSString *)harness
                  sessionId:(NSString *)sessionId
                  locale:(id)localeValue
-                 resolver:(RCTPromiseResolveBlock)resolve
-                 rejecter:(RCTPromiseRejectBlock)reject) {
+                 resolver:(RishResolveBlock)resolve
+                 rejecter:(RishRejectBlock)reject) {
   if (!DSHIsHarnessAuthProvider(harness)) {
     reject(@"E_HARNESS_AUTH_INVALID_HARNESS", @"Unknown official CLI harness", nil);
     return;
@@ -2829,7 +2887,7 @@ RCT_REMAP_METHOD(presentHarnessLoginCode,
     }
     dispatch_async(dispatch_get_main_queue(), ^{
       BOOL chinese = [locale hasPrefix:@"zh"];
-      UIViewController *presenter = RCTPresentedViewController();
+      UIViewController *presenter = RishPresentedViewController();
       if (presenter == nil || [presenter isKindOfClass:UIAlertController.class]) {
         reject(@"E_HARNESS_AUTH_PRESENTATION", @"Cannot open code input", nil); return;
       }
@@ -2860,16 +2918,16 @@ RCT_REMAP_METHOD(presentHarnessLoginCode,
                                              completion:resolve];
 }
 
-RCT_REMAP_METHOD(credentialStatus,
-                 credentialStatusWithResolver:(RCTPromiseResolveBlock)resolve
-                 rejecter:(RCTPromiseRejectBlock)reject) {
+RISH_NATIVE_METHOD(credentialStatus,
+                 credentialStatusWithResolver:(RishResolveBlock)resolve
+                 rejecter:(RishRejectBlock)reject) {
   [self credentialStatusForSlot:DSHCredentialAccount resolver:resolve rejecter:reject];
 }
 
-RCT_REMAP_METHOD(credentialStatusForSlot,
+RISH_NATIVE_METHOD(credentialStatusForSlot,
                  credentialStatusForSlot:(NSString *)slot
-                 resolver:(RCTPromiseResolveBlock)resolve
-                 rejecter:(RCTPromiseRejectBlock)reject) {
+                 resolver:(RishResolveBlock)resolve
+                 rejecter:(RishRejectBlock)reject) {
   dispatch_async(self.stateQueue, ^{
     if (!DSHHarnessIsCredentialAccount(slot)) {
       reject(@"credential", @"Unknown credential slot", nil);
@@ -2895,19 +2953,19 @@ RCT_REMAP_METHOD(credentialStatusForSlot,
   });
 }
 
-RCT_REMAP_METHOD(presentCredentialPrompt,
+RISH_NATIVE_METHOD(presentCredentialPrompt,
                  presentCredentialPromptForLocale:(id)localeValue
-                 resolver:(RCTPromiseResolveBlock)resolve
-                 rejecter:(RCTPromiseRejectBlock)reject) {
+                 resolver:(RishResolveBlock)resolve
+                 rejecter:(RishRejectBlock)reject) {
   [self presentCredentialPromptForSlot:DSHCredentialAccount locale:localeValue
        resolver:resolve rejecter:reject];
 }
 
-RCT_REMAP_METHOD(presentCredentialPromptForSlot,
+RISH_NATIVE_METHOD(presentCredentialPromptForSlot,
                  presentCredentialPromptForSlot:(NSString *)slot
                  locale:(id)localeValue
-                 resolver:(RCTPromiseResolveBlock)resolve
-                 rejecter:(RCTPromiseRejectBlock)reject) {
+                 resolver:(RishResolveBlock)resolve
+                 rejecter:(RishRejectBlock)reject) {
   if (!DSHHarnessIsCredentialAccount(slot)) {
     reject(@"credential", @"Unknown credential slot", nil);
     return;
@@ -2915,23 +2973,28 @@ RCT_REMAP_METHOD(presentCredentialPromptForSlot,
   // The app passes its resolved locale. Any absent, malformed, or unsupported
   // value falls back to English instead of consulting mutable device state.
   BOOL usesChinese = DSHCredentialPromptUsesChinese(localeValue);
-  NSString *boundAccount = DSHEffectiveCredentialAccount(slot);
+  __block NSString *boundAccount = nil;
+  NSString *boundHarness = DSHConfigurableHarnessForSlot(slot);
+  __block NSDictionary *boundConfiguration = nil;
+  [DSHSessionWorkspaceCoordinator.sharedCoordinator performSync:^{
+    boundAccount = DSHEffectiveCredentialAccount(slot);
+    boundConfiguration = [DSHProviderConfigurationStore.sharedStore configurationForHarness:boundHarness];
+  }];
+  if (boundAccount == nil) { reject(@"E_PROVIDER_CONFIGURATION_CHANGED", @"E_PROVIDER_CONFIGURATION_CHANGED", nil); return; }
   NSString *title = DSHCredentialPromptTitle(slot, usesChinese);
   if (boundAccount != nil && ![boundAccount isEqual:slot]) {
-    NSString *harness = DSHConfigurableHarnessForSlot(slot);
-    NSDictionary *configuration = [DSHProviderConfigurationStore.sharedStore configurationForHarness:harness];
-    title = [NSString stringWithFormat:@"%@ · %@", configuration[@"name"],
-             [NSURL URLWithString:configuration[@"endpoint_url"]].host];
+    title = [NSString stringWithFormat:@"%@ · %@", boundConfiguration[@"name"],
+             boundConfiguration[@"endpoint_url"]];
   }
   NSString *message = usesChinese
-    ? @"仅保存在此设备的钥匙串中。Rish 不会将密钥发送到 JavaScript。"
-    : @"Saved only in this device's Keychain. Rish never sends the key to JavaScript.";
+    ? @"仅保存在此设备的钥匙串中。Rish 不会将密钥返回到应用界面。"
+    : @"Saved only in this device's Keychain. Rish never returns the key to the app interface.";
   NSString *cancelTitle = usesChinese ? @"取消" : @"Cancel";
   NSString *saveTitle = usesChinese ? @"安全保存" : @"Save securely";
   NSString *placeholder = boundAccount != nil && ![boundAccount isEqual:slot]
       ? @"API Key" : DSHCredentialPromptPlaceholder(slot);
   dispatch_async(dispatch_get_main_queue(), ^{
-    UIViewController *presenter = RCTPresentedViewController();
+    UIViewController *presenter = RishPresentedViewController();
     if (presenter == nil || [presenter isKindOfClass:UIAlertController.class]) {
       reject(@"presentation", @"Credential prompt cannot be presented right now", nil);
       return;
@@ -2963,13 +3026,16 @@ RCT_REMAP_METHOD(presentCredentialPromptForSlot,
       UITextField *field = weakAlert.textFields.firstObject;
       NSString *value = field.text ?: @"";
       field.text = @"";
-      dispatch_async(self.stateQueue, ^{
-        if (boundAccount == nil || ![DSHEffectiveCredentialAccount(slot) isEqual:boundAccount]) {
+      [DSHSessionWorkspaceCoordinator.sharedCoordinator performAsync:^{
+        if (![self providerConfigurationCanChange]) { reject(@"E_COMPLETION_BUSY", @"E_COMPLETION_BUSY", nil); return; }
+        NSDictionary *currentConfiguration = [DSHProviderConfigurationStore.sharedStore configurationForHarness:boundHarness];
+        if (boundAccount == nil || ![DSHEffectiveCredentialAccount(slot) isEqual:boundAccount] ||
+            !(boundConfiguration == nil ? currentConfiguration == nil : [boundConfiguration isEqual:currentConfiguration])) {
           reject(@"E_PROVIDER_CONFIGURATION_CHANGED", @"E_PROVIDER_CONFIGURATION_CHANGED", nil);
           return;
         }
         NSError *error = nil;
-        if (![self storeCredential:value forAccount:slot error:&error]) {
+        if (![self storeCredential:value forAccount:slot capturedEffectiveAccount:boundAccount error:&error]) {
           reject(@"credential", error.localizedDescription ?: @"Unable to save credential", error);
           return;
         }
@@ -2982,7 +3048,7 @@ RCT_REMAP_METHOD(presentCredentialPromptForSlot,
         }
         [self recordCredentialConfigured:YES forAccount:slot];
         resolve(@{@"status": @"configured"});
-      });
+      }];
     }];
     [alert addAction:cancel];
     [alert addAction:save];
@@ -2990,21 +3056,22 @@ RCT_REMAP_METHOD(presentCredentialPromptForSlot,
   });
 }
 
-RCT_REMAP_METHOD(clearCredential,
-                 clearCredentialWithResolver:(RCTPromiseResolveBlock)resolve
-                 rejecter:(RCTPromiseRejectBlock)reject) {
+RISH_NATIVE_METHOD(clearCredential,
+                 clearCredentialWithResolver:(RishResolveBlock)resolve
+                 rejecter:(RishRejectBlock)reject) {
   [self clearCredentialForSlot:DSHCredentialAccount resolver:resolve rejecter:reject];
 }
 
-RCT_REMAP_METHOD(clearCredentialForSlot,
+RISH_NATIVE_METHOD(clearCredentialForSlot,
                  clearCredentialForSlot:(NSString *)slot
-                 resolver:(RCTPromiseResolveBlock)resolve
-                 rejecter:(RCTPromiseRejectBlock)reject) {
-  dispatch_async(self.stateQueue, ^{
+                 resolver:(RishResolveBlock)resolve
+                 rejecter:(RishRejectBlock)reject) {
+  [DSHSessionWorkspaceCoordinator.sharedCoordinator performAsync:^{
     if (!DSHHarnessIsCredentialAccount(slot)) {
       reject(@"credential", @"Unknown credential slot", nil);
       return;
     }
+    if (![self providerConfigurationCanChange]) { reject(@"E_COMPLETION_BUSY", @"E_COMPLETION_BUSY", nil); return; }
     NSError *error = nil;
     if (![self deleteCredentialForAccount:slot error:&error]) {
       reject(@"keychain", @"Unable to clear credential", error);
@@ -3012,21 +3079,21 @@ RCT_REMAP_METHOD(clearCredentialForSlot,
     }
     [self recordCredentialConfigured:NO forAccount:slot];
     resolve(@{@"status": @"cleared"});
-  });
+  }];
 }
 
-RCT_REMAP_METHOD(cancelCompletion,
+RISH_NATIVE_METHOD(cancelCompletion,
                  cancelCompletionRequestId:(NSString *)requestId
-                 resolver:(RCTPromiseResolveBlock)resolve
-                 rejecter:(__unused RCTPromiseRejectBlock)reject) {
+                 resolver:(RishResolveBlock)resolve
+                 rejecter:(__unused RishRejectBlock)reject) {
   if (!DSHIsValidRequestId(requestId)) {
     resolve(@{@"status": @"stale"});
     return;
   }
   NSURLSessionDataTask *task = nil;
   id<DSHCompletionExecution> execution = nil;
-  RCTPromiseRejectBlock strictRejecter = nil;
-  RCTPromiseRejectBlock streamRejecter = nil;
+  RishRejectBlock strictRejecter = nil;
+  RishRejectBlock streamRejecter = nil;
   NSString *streamRequestId = nil;
   NSUInteger streamGeneration = 0;
   NSString *status = @"idle";
@@ -3073,8 +3140,8 @@ RCT_REMAP_METHOD(cancelCompletion,
 }
 
 - (void)performBootstrapForHarnessId:(NSString *)harnessId
-                     resolver:(RCTPromiseResolveBlock)resolve
-                      rejecter:(RCTPromiseRejectBlock)reject {
+                     resolver:(RishResolveBlock)resolve
+                      rejecter:(RishRejectBlock)reject {
   if (![harnessId isKindOfClass:NSString.class] ||
       !DSHHarnessIsSupportedHarnessId(harnessId)) {
     reject(@"harness", @"Unsupported harness", nil);
@@ -3115,27 +3182,27 @@ RCT_REMAP_METHOD(cancelCompletion,
   });
 }
 
-RCT_REMAP_METHOD(bootstrap,
-                 bootstrapWithResolver:(RCTPromiseResolveBlock)resolve
-                 rejecter:(RCTPromiseRejectBlock)reject) {
+RISH_NATIVE_METHOD(bootstrap,
+                 bootstrapWithResolver:(RishResolveBlock)resolve
+                 rejecter:(RishRejectBlock)reject) {
   [self performBootstrapForHarnessId:@"dsh" resolver:resolve rejecter:reject];
 }
 
-RCT_REMAP_METHOD(bootstrapForHarness,
+RISH_NATIVE_METHOD(bootstrapForHarness,
                  bootstrapForHarnessId:(NSString *)harnessId
-                 resolver:(RCTPromiseResolveBlock)resolve
-                 rejecter:(RCTPromiseRejectBlock)reject) {
+                 resolver:(RishResolveBlock)resolve
+                 rejecter:(RishRejectBlock)reject) {
   [self performBootstrapForHarnessId:harnessId resolver:resolve rejecter:reject];
 }
 
-RCT_REMAP_METHOD(complete,
+RISH_NATIVE_METHOD(complete,
                  completeModel:(NSString *)requestedModel
                  history:(NSArray *)history
                  requestId:(NSString *)requestId
                  thinkingMode:(NSString *)thinkingMode
-                 resolver:(RCTPromiseResolveBlock)resolve
-                 rejecter:(RCTPromiseRejectBlock)reject) {
-  if (!DSHIsSupportedModel(requestedModel)) {
+                 resolver:(RishResolveBlock)resolve
+                 rejecter:(RishRejectBlock)reject) {
+  if (!DSHIsSupportedModel(requestedModel) || !DSHHarnessModelIsExecutable(requestedModel)) {
     reject(@"model", @"Unsupported DeepSeek model", nil);
     return;
   }
@@ -3388,8 +3455,8 @@ RCT_REMAP_METHOD(complete,
 }
 
 - (void)completeSchema2Envelope:(NSDictionary *)rawEnvelope
-                       resolver:(RCTPromiseResolveBlock)resolve
-                       rejecter:(RCTPromiseRejectBlock)reject {
+                       resolver:(RishResolveBlock)resolve
+                       rejecter:(RishRejectBlock)reject {
   NSError *validationError = nil;
   NSDictionary *envelope = DSHCompletionEnvelopeSchema2FromDictionary(
       rawEnvelope, &validationError);
@@ -3406,7 +3473,7 @@ RCT_REMAP_METHOD(complete,
   DSHCompletionProviderTransport *transport =
       [self providerTransportForHarnessId:harnessId];
   if (![self isSupportedHarnessId:harnessId] || transport == nil ||
-      ![transport providerSupportsModel:requestedModel]) {
+      !DSHHarnessModelIsExecutable(requestedModel) || ![transport providerSupportsModel:requestedModel]) {
     DSHRejectCompletionSchema2(reject, @"E_COMPLETION_MODEL");
     return;
   }
@@ -3532,8 +3599,8 @@ RCT_REMAP_METHOD(complete,
 }
 
 - (void)completeSchema3Envelope:(NSDictionary *)rawEnvelope
-                       resolver:(RCTPromiseResolveBlock)resolve
-                       rejecter:(RCTPromiseRejectBlock)reject {
+                       resolver:(RishResolveBlock)resolve
+                       rejecter:(RishRejectBlock)reject {
   NSError *validationError = nil;
   NSDictionary *envelope = DSHCompletionEnvelopeSchema3FromDictionary(
       rawEnvelope, &validationError);
@@ -3550,7 +3617,7 @@ RCT_REMAP_METHOD(complete,
   DSHCompletionProviderTransport *transport =
       [self providerTransportForHarnessId:harnessId];
   if (![self isSupportedHarnessId:harnessId] || transport == nil ||
-      ![transport providerSupportsModel:requestedModel]) {
+      !DSHHarnessModelIsExecutable(requestedModel) || ![transport providerSupportsModel:requestedModel]) {
     DSHRejectCompletionSchema2(reject, @"E_COMPLETION_MODEL");
     return;
   }
@@ -3775,10 +3842,10 @@ RCT_REMAP_METHOD(complete,
   });
 }
 
-RCT_REMAP_METHOD(completeV2Stream,
+RISH_NATIVE_METHOD(completeV2Stream,
                  completeV2StreamEnvelopeJSON:(NSString *)envelopeJSON
-                 resolver:(RCTPromiseResolveBlock)resolve
-                 rejecter:(RCTPromiseRejectBlock)reject) {
+                 resolver:(RishResolveBlock)resolve
+                 rejecter:(RishRejectBlock)reject) {
   // Streaming variant: same envelope contract as completeV2, but the
   // transport requests SSE and emits "completionStream" events
   // {request_id, delta:{content|reasoning|finish_reason}} while running.
@@ -3826,7 +3893,7 @@ RCT_REMAP_METHOD(completeV2Stream,
       [self providerTransportForHarnessId:harnessId];
   NSArray *history = DSHArray(envelope[@"history"]);
   if (![self isSupportedHarnessId:harnessId] || transport == nil ||
-      ![transport providerSupportsModel:requestedModel] ||
+      !DSHHarnessModelIsExecutable(requestedModel) || ![transport providerSupportsModel:requestedModel] ||
       !DSHIsValidRequestId(requestId) ||
       !DSHIsThinkingMode(thinkingMode)) {
     reject(@"validation", @"Streaming envelope fields are invalid", nil);
@@ -3916,7 +3983,7 @@ RCT_REMAP_METHOD(completeV2Stream,
     self.activeCompletionSchemaVersion = 2;
     self.activeCompletionRejecter = nil;
     // The round's reject block travels with the slot so the cancel and
-    // credential-rotation paths can settle the JS promise synchronously,
+    // credential-rotation paths can settle the UI promise synchronously,
     // even while the stream state below is still being installed.
     self.activeCompletionStreamRejecter = reject;
     self.activeCompletionRedirected = NO;
@@ -3931,7 +3998,7 @@ RCT_REMAP_METHOD(completeV2Stream,
   dispatch_async(self.stateQueue, ^{
     // The round may have been cancelled between the synchronous slot
     // reservation above and this install: in that case the cancel path has
-    // already rejected the JS promise (through the rejecter stored with
+    // already rejected the UI promise (through the rejecter stored with
     // the slot) and cleared the slot, so install nothing and touch no
     // stream state. Without this guard a cancelled round would resurrect
     // its stream state after the cancel and keep running.
@@ -4037,6 +4104,10 @@ RCT_REMAP_METHOD(completeV2Stream,
       self.dshConfiguredTransport ?: (id)NSNull.null,
       self.glmConfiguredTransport ?: (id)NSNull.null ]) {
     if ((id)transport != NSNull.null && [transport handlesTask:task]) return transport;
+  }
+  @synchronized(self) {
+    for (DSHConfiguredProviderTransport *transport in self.customProviderTransports.allValues)
+      if ([transport handlesTask:task]) return transport;
   }
   return nil;
 }
@@ -4171,10 +4242,10 @@ didCompleteWithError:(NSError *)error {
   });
 }
 
-RCT_REMAP_METHOD(completeV2,
+RISH_NATIVE_METHOD(completeV2,
                  completeV2EnvelopeJSON:(NSString *)envelopeJSON
-                 resolver:(RCTPromiseResolveBlock)resolve
-                 rejecter:(RCTPromiseRejectBlock)reject) {
+                 resolver:(RishResolveBlock)resolve
+                 rejecter:(RishRejectBlock)reject) {
   if (![envelopeJSON isKindOfClass:NSString.class]) {
     DSHRejectCompletionSchema2(reject, @"E_COMPLETION_SCHEMA");
     return;
@@ -4219,7 +4290,7 @@ RCT_REMAP_METHOD(completeV2,
   NSString *requestId = DSHString(envelope[@"request_id"]);
   NSString *thinkingMode = DSHString(envelope[@"thinking_mode"]);
   NSArray *history = DSHArray(envelope[@"history"]);
-  if (!DSHIsSupportedModel(requestedModel)) {
+  if (!DSHIsSupportedModel(requestedModel) || !DSHHarnessModelIsExecutable(requestedModel)) {
     reject(@"model", @"Unsupported DeepSeek model", nil);
     return;
   }
@@ -4466,10 +4537,10 @@ RCT_REMAP_METHOD(completeV2,
   [task resume];
 }
 
-RCT_REMAP_METHOD(recordAgentTrace,
+RISH_NATIVE_METHOD(recordAgentTrace,
                  recordAgentTraceEntries:(NSArray *)entries
-                 resolver:(RCTPromiseResolveBlock)resolve
-                 rejecter:(RCTPromiseRejectBlock)reject) {
+                 resolver:(RishResolveBlock)resolve
+                 rejecter:(RishRejectBlock)reject) {
   dispatch_async(self.stateQueue, ^{
     NSError *error = nil;
     NSMutableDictionary *proof = [self baseProofWithRishReceipt:nil
@@ -4511,10 +4582,10 @@ RCT_REMAP_METHOD(recordAgentTrace,
   });
 }
 
-RCT_REMAP_METHOD(recordModelTransition,
+RISH_NATIVE_METHOD(recordModelTransition,
                  recordModelTransitionEntry:(NSDictionary *)entry
-                 resolver:(RCTPromiseResolveBlock)resolve
-                 rejecter:(RCTPromiseRejectBlock)reject) {
+                 resolver:(RishResolveBlock)resolve
+                 rejecter:(RishRejectBlock)reject) {
   dispatch_async(self.stateQueue, ^{
     NSError *error = nil;
     NSString *recordedAt = DSHNow();
@@ -4546,10 +4617,10 @@ RCT_REMAP_METHOD(recordModelTransition,
   });
 }
 
-RCT_REMAP_METHOD(persistSession,
+RISH_NATIVE_METHOD(persistSession,
                  persistSessionJSON:(NSString *)json
-                 resolver:(RCTPromiseResolveBlock)resolve
-                 rejecter:(RCTPromiseRejectBlock)reject) {
+                 resolver:(RishResolveBlock)resolve
+                 rejecter:(RishRejectBlock)reject) {
   dispatch_async(self.stateQueue, ^{
     NSError *error = nil;
     if (![json isKindOfClass:NSString.class]) {
@@ -4656,9 +4727,9 @@ RCT_REMAP_METHOD(persistSession,
   });
 }
 
-RCT_REMAP_METHOD(loadSession,
-                 loadSessionWithResolver:(RCTPromiseResolveBlock)resolve
-                 rejecter:(RCTPromiseRejectBlock)reject) {
+RISH_NATIVE_METHOD(loadSession,
+                 loadSessionWithResolver:(RishResolveBlock)resolve
+                 rejecter:(RishRejectBlock)reject) {
   dispatch_async(self.stateQueue, ^{
     NSError *error = nil;
     NSURL *support = [self applicationSupportURL:&error];

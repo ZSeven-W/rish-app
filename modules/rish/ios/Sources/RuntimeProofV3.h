@@ -79,7 +79,7 @@ DSHRuntimeProofV3ByUpdatingDiagnosticsTimestamp(
 
 /// Raw SHA-256 helper used by producers to digest bytes before entering this
 /// metadata-only contract. Returns nil for nil, mutable/custom/wrong-typed
-/// data, or payloads larger than UINT32_MAX; lengths are never truncated.
+/// data, or payloads larger tha UINT32_MAX; lengths are never truncated.
 NSString * _Nullable DSHRuntimeProofV3SHA256Hex(
     NSData * _Nullable data);
 

@@ -42,7 +42,11 @@ fn feed(pieces: &[&[u8]]) -> (Value, Vec<Value>) {
 
 fn assembled(state: &Value) -> Value {
     let answer = stream_finish(&json!({ "op": "stream_finish", "state": state.clone() }));
-    assert_eq!(answer["ok"], json!(true), "the stream did not assemble: {answer}");
+    assert_eq!(
+        answer["ok"],
+        json!(true),
+        "the stream did not assemble: {answer}"
+    );
     answer["response"].clone()
 }
 
@@ -248,7 +252,9 @@ fn an_unplaceable_tool_call_fragment_ends_the_stream() {
     assert_eq!(refusal(&refused("[7]")), placed);
     assert_eq!(refusal(&refused("{\"index\":0}")), placed);
     // More calls than a reply may ask for.
-    let many: Vec<String> = (0..17).map(|slot| format!("{{\"index\":{slot}}}")).collect();
+    let many: Vec<String> = (0..17)
+        .map(|slot| format!("{{\"index\":{slot}}}"))
+        .collect();
     assert_eq!(refusal(&refused(&format!("[{}]", many.join(",")))), placed);
     // A null list is a provider saying there are none, which is not a fault.
     assert_eq!(refused("null")["ok"], json!(true));
@@ -291,9 +297,8 @@ fn reasoning_is_its_own_channel() {
 #[test]
 fn a_thinking_turn_reports_reasoning_it_never_got() {
     let (state, _) = feed(&[transcript().as_bytes()]);
-    let response = stream_finish(&json!({ "state": state, "thinking_mode": "high" }))
-        ["response"]
-        .clone();
+    let response =
+        stream_finish(&json!({ "state": state, "thinking_mode": "high" }))["response"].clone();
     assert_eq!(message(&response)["reasoning_content"], json!(""));
 }
 
@@ -330,9 +335,8 @@ fn a_host_may_take_the_nulls_instead_of_the_failure() {
         refusal(&stream_finish(&json!({ "state": state.clone() }))),
         ("E_COMPLETION_RESPONSE_JSON", "incomplete"),
     );
-    let response = stream_finish(&json!({ "state": state, "require_identity": false }))
-        ["response"]
-        .clone();
+    let response =
+        stream_finish(&json!({ "state": state, "require_identity": false }))["response"].clone();
     assert_eq!(response["choices"][0]["finish_reason"], Value::Null);
     assert_eq!(response["id"], json!(HOST));
 }
@@ -448,7 +452,10 @@ fn a_data_line_that_is_not_json_fails_the_stream() {
         "state": Value::Null,
         "chunk_base64": encode_base64(b"data: [1,2]\n\n"),
     }));
-    assert_eq!(refusal(&answer), ("E_COMPLETION_RESPONSE_JSON", "not_an_object"));
+    assert_eq!(
+        refusal(&answer),
+        ("E_COMPLETION_RESPONSE_JSON", "not_an_object")
+    );
     // And bytes that are not UTF-8 are never mistaken for a blank line.
     let answer = stream_chunk(&json!({
         "state": Value::Null,
@@ -492,7 +499,10 @@ fn a_line_that_never_ends_is_refused() {
             "chunk_base64": encode_base64(&filler),
         }));
         if answer["ok"] == json!(false) {
-            assert_eq!(refusal(&answer), ("E_COMPLETION_RESPONSE_SIZE", "line_too_long"));
+            assert_eq!(
+                refusal(&answer),
+                ("E_COMPLETION_RESPONSE_SIZE", "line_too_long")
+            );
             return;
         }
         state = answer["state"].clone();
@@ -517,7 +527,10 @@ fn the_carried_state_survives_a_round_trip_through_json() {
 #[test]
 fn a_chunk_without_bytes_is_a_bad_request() {
     let asked = ("E_COMPLETION_RESPONSE_JSON", "bad_request");
-    assert_eq!(refusal(&stream_chunk(&json!({ "op": "stream_chunk" }))), asked);
+    assert_eq!(
+        refusal(&stream_chunk(&json!({ "op": "stream_chunk" }))),
+        asked
+    );
     assert_eq!(
         refusal(&stream_chunk(
             &json!({ "op": "stream_chunk", "chunk_base64": "not base64!" })
@@ -567,7 +580,10 @@ fn an_event_spelled_across_several_data_lines_is_one_event() {
          data: [DONE]\n\n"
     );
     let (state, previews) = feed(&[wire.as_bytes()]);
-    assert_eq!(previews, vec![json!({ "text": "split", "finish_reason": "stop" })]);
+    assert_eq!(
+        previews,
+        vec![json!({ "text": "split", "finish_reason": "stop" })]
+    );
     assert_eq!(message(&assembled(&state))["content"], json!("split"));
 }
 
@@ -655,7 +671,10 @@ fn a_finish_reason_is_previewed_once() {
     assert_eq!(previews[0], json!({ "text": "a", "finish_reason": "stop" }));
     assert_eq!(previews[1], json!({ "text": "b" }));
     // And the reply still ends the way the provider said it did.
-    assert_eq!(assembled(&state)["choices"][0]["finish_reason"], json!("stop"));
+    assert_eq!(
+        assembled(&state)["choices"][0]["finish_reason"],
+        json!("stop")
+    );
 }
 
 /// A delta from a dialect this core does not parse accumulates exactly as a
@@ -720,7 +739,10 @@ fn a_delta_is_refused_on_the_same_terms() {
         "delta": { "type": "delta", "content": "123456789" },
         "maximum_bytes": 8,
     }));
-    assert_eq!(refusal(&over), ("E_COMPLETION_RESPONSE_SIZE", "over_budget"));
+    assert_eq!(
+        refusal(&over),
+        ("E_COMPLETION_RESPONSE_SIZE", "over_budget")
+    );
 }
 
 /// One accumulated stream, three wire shapes, because three providers say a
@@ -796,7 +818,10 @@ fn a_turn_that_never_ended_says_so_in_every_dialect() {
             .clone()
     };
     assert_eq!(loosely("responses")["status"], json!("in_progress"));
-    assert_eq!(loosely("messages")["stop_reason"], json!("stream_incomplete"));
+    assert_eq!(
+        loosely("messages")["stop_reason"],
+        json!("stream_incomplete")
+    );
     assert_eq!(
         loosely("chat-completions")["choices"][0]["finish_reason"],
         Value::Null,
@@ -900,8 +925,10 @@ fn the_responses_wire_reads_a_whole_round() {
     assert_eq!(response["status"], json!("completed"));
     assert_eq!(
         response["output"].as_array().expect("output").last(),
-        Some(&json!({ "type": "function_call", "call_id": "c1", "name": "read_file",
-                      "arguments": "{\"path\":\"a.txt\"}" })),
+        Some(
+            &json!({ "type": "function_call", "call_id": "c1", "name": "read_file",
+                      "arguments": "{\"path\":\"a.txt\"}" })
+        ),
     );
 }
 
@@ -928,15 +955,20 @@ fn the_messages_wire_reads_a_whole_round() {
     assert_eq!(previews[0], json!({ "reasoning": "why" }));
     assert_eq!(previews[1], json!({ "text": "here" }));
     assert_eq!(previews[2]["tool_calls"][0]["name"], json!("read_file"));
-    assert_eq!(previews.last().expect("a last event")["finish_reason"], json!("tool_calls"));
+    assert_eq!(
+        previews.last().expect("a last event")["finish_reason"],
+        json!("tool_calls")
+    );
 
     let response = shaped(&state, "messages");
     assert_eq!(response["id"], json!("msg_1"));
     assert_eq!(response["stop_reason"], json!("tool_use"));
     assert_eq!(
         response["content"].as_array().expect("content").last(),
-        Some(&json!({ "type": "tool_use", "id": "tu_1", "name": "read_file",
-                      "input": { "path": "a.txt" } })),
+        Some(
+            &json!({ "type": "tool_use", "id": "tu_1", "name": "read_file",
+                      "input": { "path": "a.txt" } })
+        ),
     );
 }
 
@@ -956,7 +988,10 @@ fn the_other_wires_refuse_what_they_cannot_read() {
         ("E_COMPLETION_RESPONSE_JSON", "stream_error"),
     );
     assert_eq!(
-        refusal(&sent("messages", "{\"type\":\"error\",\"error\":{\"type\":\"overloaded\"}}")),
+        refusal(&sent(
+            "messages",
+            "{\"type\":\"error\",\"error\":{\"type\":\"overloaded\"}}"
+        )),
         ("E_COMPLETION_RESPONSE_JSON", "stream_error"),
     );
     // A status or stop reason neither knows how to read. Defaulting either
@@ -1052,7 +1087,13 @@ fn every_wire_says_when_it_is_over() {
     };
     assert_eq!(over("chat-completions", "[DONE]"), json!(true));
     assert_eq!(over("messages", "{\"type\":\"message_stop\"}"), json!(true));
-    assert_eq!(over("responses", "{\"type\":\"response.completed\"}"), json!(true));
+    assert_eq!(
+        over("responses", "{\"type\":\"response.completed\"}"),
+        json!(true)
+    );
     // And an event that is not the end does not claim to be one.
-    assert_eq!(over("messages", "{\"type\":\"content_block_stop\",\"index\":0}"), json!(false));
+    assert_eq!(
+        over("messages", "{\"type\":\"content_block_stop\",\"index\":0}"),
+        json!(false)
+    );
 }

@@ -559,3 +559,126 @@ fn installed_conversation_grant_freezes_runtime_calls_without_new_tokens() {
             .is_null());
     }
 }
+
+#[test]
+fn assistant_tasks_require_v5_authority_and_freeze_real_approval_manifests() {
+    use rish_agent_core::{assistant_tools, tool_registry};
+    const CONVERSATION: &str = "55555555-5555-4555-8555-555555555555";
+    for name in assistant_tools::NAMES {
+        let arguments = match *name {
+            "list_assistant_tasks" | "search_assistant_memory" => json!({}),
+            "remember_assistant_memory" => {
+                json!({"title":"Style","content":"Use concise Chinese replies.","kind":"preference"})
+            }
+            "forget_assistant_memory" => json!({"memory_id":TASK}),
+            "create_assistant_task" => {
+                json!({"title":"Daily review","instructions":"Review the requested notes."})
+            }
+            _ => json!({"task_id":TASK,"paused":true}),
+        };
+        let digest =
+            arguments_sha256(Some(&json!(name)), Some(&json!(arguments.to_string()))).unwrap();
+        let mutation = assistant_tools::is_mutation(name);
+        let call = json!({"call_index":0,"call_id":"assistant_call","name":name,"arguments_json":arguments.to_string(),
+            "arguments_sha256":digest,"safe_summary_key":format!("agent.{name}"),"access":if mutation {"conversation_confirm"} else {"auto"},
+            "precondition":{"schema_version":1,"kind":name,"conversation_id":CONVERSATION,"arguments_sha256":digest,"expected_store_revision":0},
+            "reserved_write_bytes":0,"grant_reference":null,"approval_preview":assistant_tools::approval_preview(name,&arguments)});
+        let transcript = transcript_state();
+        let mut request = request(vec![call], &transcript, true);
+        let mut assistant_root = root();
+        assistant_root["capabilities"] = json!(["file_read"]);
+        request["root"] = assistant_root.clone();
+        let mut current = view(&transcript);
+        current.rounds = vec![
+            json!({"locator":{"schema_version":1,"task_id":TASK,"attempt_id":ATTEMPT,"round_id":ROUND,"round_index":0},
+            "state":"completed","row_revision":3,"transcript_after":reference_of(&transcript),"terminal_kind":"tool_batch"}),
+        ];
+        let authority = json!({"task_id":TASK,"attempt_id":ATTEMPT,"conversation_id":CONVERSATION,"root":assistant_root,
+            "registry":tool_registry::registry_for_root_version(&assistant_root,false,5).unwrap(),"state":"prepared",
+            "assistant_context":{"schema_version":1,"conversation_id":CONVERSATION,"profile_revision":0,"name":"Rish","notes":""},
+            "policy":policy(),"reserved_write_bytes":0,"authority_revision":1,"transcript":reference_of(&transcript)});
+        assert_eq!(
+            reduce("prepare_tool_batch", &request, &env(), &current).unwrap_err(),
+            StoreError::Conflict
+        );
+        current.authorities = Some(vec![Slotted {
+            slot: 0,
+            record: authority,
+        }]);
+        current.authorities_present = true;
+        let prepared = reduce("prepare_tool_batch", &request, &env(), &current).unwrap();
+        let public = &prepared.output["calls"][0];
+        assert_eq!(
+            prepared.output["batch_kind"],
+            if mutation {
+                "write_batch"
+            } else {
+                "read_only_batch"
+            }
+        );
+        assert_eq!(prepared.output["reserved_write_bytes"], 0);
+        assert_eq!(
+            prepared.output["effect_gate"],
+            if mutation { "closed" } else { "not_applicable" }
+        );
+        assert_eq!(
+            public["approval_state"],
+            if mutation { "pending" } else { "not_required" }
+        );
+        if mutation {
+            assert_eq!(public["approval_token"]["registry_version"], 5);
+            assert_eq!(
+                public["approval_token"]["allowed_decisions"],
+                json!(["denied", "allow_once", "allow_conversation", "cancelled"])
+            );
+            let batch = changes_of(&prepared, |change| match change {
+                Change::InsertBatch(value) => Some(value),
+                _ => None,
+            })[0];
+            assert!(rish_agent_core::wal_state::batch_shape_v2(batch));
+            assert_eq!(batch["manifest_calls"][0]["mutation_kind"], *name);
+            let row = changes_of(&prepared, |change| match change {
+                Change::InsertLedgerRow(value) => Some(value),
+                _ => None,
+            })[0];
+            let marker = changes_of(&prepared, |change| match change {
+                Change::InsertDispatchMarker(value) => Some(value),
+                _ => None,
+            })[0];
+            let mut gate_view = current.clone();
+            gate_view.batches = vec![Slotted {
+                slot: 0,
+                record: batch.clone(),
+            }];
+            gate_view.ledger_rows = vec![row.clone()];
+            gate_view.dispatch = vec![marker.clone()];
+            let gate = json!({"schema_version":2,"task_id":TASK,"attempt_id":ATTEMPT,"round_id":ROUND,"round_index":0,
+                "expected_batch_revision":batch["batch_revision"],"manifest_sha256":batch["manifest_sha256"],"expected_effect_gate":"closed"});
+            assert_eq!(
+                reduce("open_effect_gate", &gate, &env(), &gate_view).unwrap_err(),
+                StoreError::Conflict
+            );
+        }
+        let mut wrong_version = current.clone();
+        wrong_version.authorities.as_mut().unwrap()[0].record["registry"]["registry_version"] =
+            json!(4);
+        assert_eq!(
+            reduce("prepare_tool_batch", &request, &env(), &wrong_version).unwrap_err(),
+            StoreError::Conflict
+        );
+        let mut wrong_scope = request.clone();
+        wrong_scope["calls"][0]["precondition"]["conversation_id"] = json!(TASK);
+        assert_eq!(
+            reduce("prepare_tool_batch", &wrong_scope, &env(), &current).unwrap_err(),
+            StoreError::Conflict
+        );
+        if mutation {
+            let mut bypass = request.clone();
+            bypass["calls"][0]["access"] = json!("auto");
+            assert_eq!(
+                reduce("prepare_tool_batch", &bypass, &env(), &current).unwrap_err(),
+                StoreError::Conflict
+            );
+        }
+    }
+}

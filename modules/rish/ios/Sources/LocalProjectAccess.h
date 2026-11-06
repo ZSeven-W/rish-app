@@ -75,7 +75,7 @@ typedef NSDictionary *_Nullable (^DSHLocalProjectWorkspaceBindingResolver)(
 
 /// Workspace-scoped V2 identity. These fields are populated only for a lease
 /// derived from a DSHLocalWorkspaceLease and a validated WorkspaceRootRefV1.
-/// They are never projected through a React Native result.
+/// They are never projected through an app UI result.
 @property(nonatomic, copy, readonly, nullable) NSString *workspaceId;
 @property(nonatomic, readonly) NSUInteger workspaceBindingRevision;
 @property(nonatomic, copy, readonly, nullable) NSString *rootFingerprintSHA256;
@@ -173,7 +173,7 @@ typedef NSDictionary *_Nullable (^DSHLocalProjectWorkspaceBindingResolver)(
 /// workspace authority. The project read lock remains held while metadata and
 /// the projects-root/repository/git physical identities are read and rechecked.
 /// The returned exact-shape dictionary contains no path, URL, bookmark, or
-/// descriptor and is not a React Native result.
+/// descriptor and is not an app UI result.
 - (nullable NSDictionary *)legacyWorkspaceBootstrapEvidenceForProjectId:
     (NSString *)projectId error:(NSError **)error;
 

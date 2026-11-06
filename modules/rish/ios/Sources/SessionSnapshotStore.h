@@ -43,7 +43,7 @@ typedef BOOL (^DSHSessionSnapshotStoreFaultHook)(
 
 /// Native schema-9 session snapshot store. The public bridge should expose
 /// only the three versioned request/result dictionaries declared in the
-/// approved session contract; this class intentionally has no React Native
+/// approved session contract; this class intentionally has no app UI
 /// dependency so it can be tested as a protected native primitive.
 @interface DSHSessionSnapshotStore : NSObject
 
@@ -125,13 +125,12 @@ typedef BOOL (^DSHSessionSnapshotStoreFaultHook)(
 - (nullable NSDictionary *)queryWorkspaceClearance:(NSDictionary *)request
                                               error:(NSError **)error;
 
-/// Digest of a schema-9 session candidate under the shared JS/native
+/// Digest of a schema-9 session candidate under the shared shell/native
 /// contract: SHA-256 over "rish.chat-session.v1\0" + canonical JSON, exactly
 /// the value the CAS path mints as `session_sha256`. Pure function of the
 /// candidate bytes: no lock, no disk, no store state. nil when the candidate
-/// is not a valid schema-9 session. Exposed so the bridge can answer the JS
-/// side synchronously instead of JS re-hashing the whole session in the
-/// interpreter on every checkpoint.
+/// is not a valid schema-9 session. The native bridge shares this implementation
+/// with the shell so checkpoints use exactly the same digest contract.
 + (nullable NSString *)candidateDigestForSessionJSON:(NSString *)candidateJSON;
 
 @end

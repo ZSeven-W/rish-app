@@ -611,13 +611,13 @@ static NSDictionary *DSHRuntimeCommitRecoveryResult(
     if (error != nullptr) *error = authorityError;
     return nil;
   }
-  NSDictionary *baseConflict = DSHRuntimeDecide(@{
-    @"op" : @"query_attempt_base_conflict",
-    @"request" : request, @"proof" : proof, @"base" : base,
-  }, error)[@"output"];
-  if ([baseConflict isKindOfClass:NSDictionary.class]) return baseConflict;
   NSDictionary *state = [self.wal snapshotWithError:error];
   if (state == nil) return nil;
+  NSDictionary *baseConflict = DSHRuntimeDecide(@{
+    @"op" : @"query_attempt_base_conflict",
+    @"request" : request, @"proof" : proof, @"base" : base, @"state":state,
+  }, error)[@"output"];
+  if ([baseConflict isKindOfClass:NSDictionary.class]) return baseConflict;
   return DSHRuntimeDecide(@{
     @"op" : @"query_attempt_projection",
     @"request" : request, @"proof" : proof, @"base" : base, @"state" : state,
@@ -721,6 +721,23 @@ static NSDictionary *DSHRuntimeCommitRecoveryResult(
     NSDictionary *result = DSHRuntimeDecide(@{
       @"op" : @"cancel_round_result", @"request" : request,
       @"cancelled" : cancelled, @"proof" : sourceProof,
+    }, error)[@"output"];
+    return result == nil ? nil : settle(result);
+  }
+  if ([kind isEqualToString:@"idle_attempt"]) {
+    // Close every never-dispatched intent through the normal ledger CAS.
+    // Leaving intent rows live would make final discard correctly refuse.
+    NSMutableDictionary *settledPlan = [plan mutableCopy];
+    for (NSDictionary *pending in plan[@"rows"]) {
+      NSDictionary *closed = [self.ledger cancelAgentExecutionWithCAS:DSHRuntimeExecutionCAS(pending)
+          patch:@{ @"state" : @"cancelled" } error:error];
+      if (closed == nil) return nil;
+      if ([closed[@"row"][@"transcript_after"] isKindOfClass:NSDictionary.class]) {
+        settledPlan[@"transcript"] = closed[@"row"][@"transcript_after"];
+      }
+    }
+    NSDictionary *result = DSHRuntimeDecide(@{
+      @"op" : @"cancel_idle_attempt_result", @"request" : request, @"plan" : settledPlan,
     }, error)[@"output"];
     return result == nil ? nil : settle(result);
   }

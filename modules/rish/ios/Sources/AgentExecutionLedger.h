@@ -42,7 +42,7 @@ NS_ASSUME_NONNULL_BEGIN
 
 /// Whole-batch native preparation used by AgentToolBatchService.  `request`
 /// is native-private: raw argument JSON and operation preconditions are loaded
-/// from the protected transcript/executors and never cross React Native.  All
+/// from the protected transcript/executors and never cross app UI.  All
 /// executable intents, write reservation accounting, and the versioned batch
 /// record commit in one WAL transaction; durable-deny projections create no
 /// execution row and no effect gate.

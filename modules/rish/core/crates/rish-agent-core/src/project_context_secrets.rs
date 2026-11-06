@@ -134,7 +134,10 @@ fn starts_with(text: &[u16], at: usize, literal: &str) -> bool {
 }
 
 fn run_length(text: &[u16], at: usize, class: impl Fn(u16) -> bool) -> usize {
-    text[at.min(text.len())..].iter().take_while(|unit| class(**unit)).count()
+    text[at.min(text.len())..]
+        .iter()
+        .take_while(|unit| class(**unit))
+        .count()
 }
 
 // MARK: - the four expressions
@@ -182,16 +185,20 @@ fn has_known_token(text: &[u16]) -> bool {
     (0..text.len()).any(|start| {
         let unit = lower(text[start]);
         let tail = |prefix: &str, minimum: usize, class: fn(u16) -> bool| {
-            starts_with_ci(text, start, prefix) && run_length(text, start + prefix.len(), class) >= minimum
+            starts_with_ci(text, start, prefix)
+                && run_length(text, start + prefix.len(), class) >= minimum
         };
         match unit {
             u if u == b'a' as u16 => {
-                (tail("AKIA", 16, ALNUM) || tail("ASIA", 16, ALNUM)) || tail("AIza", 20, alnum_underscore_dash)
+                (tail("AKIA", 16, ALNUM) || tail("ASIA", 16, ALNUM))
+                    || tail("AIza", 20, alnum_underscore_dash)
             }
             u if u == b'g' as u16 => {
                 (starts_with_ci(text, start, "gh")
                     && start + 3 < text.len()
-                    && "pousr".bytes().any(|c| lower(text[start + 2]) == u16::from(c))
+                    && "pousr"
+                        .bytes()
+                        .any(|c| lower(text[start + 2]) == u16::from(c))
                     && text[start + 3] == b'_' as u16
                     && run_length(text, start + 4, ALNUM) >= 20)
                     || tail("github_pat_", 22, alnum_underscore)
@@ -203,7 +210,9 @@ fn has_known_token(text: &[u16]) -> bool {
             u if u == b'x' as u16 => {
                 starts_with_ci(text, start, "xox")
                     && start + 4 < text.len()
-                    && "baprs".bytes().any(|c| lower(text[start + 3]) == u16::from(c))
+                    && "baprs"
+                        .bytes()
+                        .any(|c| lower(text[start + 3]) == u16::from(c))
                     && text[start + 4] == b'-' as u16
                     && run_length(text, start + 5, alnum_dash) >= 10
             }
@@ -245,9 +254,29 @@ fn has_jwt(text: &[u16]) -> bool {
 /// within `limit` units.
 fn placeholder_match(text: &[u16], at: usize, limit: usize) -> Option<usize> {
     const WORDS: &[&str] = &[
-        "change_me", "changeme", "dummy", "example", "nil", "none", "null", "password", "placeholder",
-        "redacted", "secret", "todo", "token", "test", "undefined", "xxxxx", "<password>", "<secret>",
-        "<token>", "<api-key>", "<api_key>", "<your-password>", "<your_password>",
+        "change_me",
+        "changeme",
+        "dummy",
+        "example",
+        "nil",
+        "none",
+        "null",
+        "password",
+        "placeholder",
+        "redacted",
+        "secret",
+        "todo",
+        "token",
+        "test",
+        "undefined",
+        "xxxxx",
+        "<password>",
+        "<secret>",
+        "<token>",
+        "<api-key>",
+        "<api_key>",
+        "<your-password>",
+        "<your_password>",
     ];
     let end = at.saturating_add(limit).min(text.len());
     let within = |length: usize| at + length <= end;
@@ -263,10 +292,14 @@ fn placeholder_match(text: &[u16], at: usize, limit: usize) -> Option<usize> {
         if !((b'a' as u16..=b'z' as u16).contains(&lowered) || lowered == b'_' as u16) {
             return None;
         }
-        Some(1 + run_length(text, from + 1, |unit| {
-            let l = lower(unit);
-            (b'a' as u16..=b'z' as u16).contains(&l) || (b'0' as u16..=b'9' as u16).contains(&l) || l == b'_' as u16
-        }))
+        Some(
+            1 + run_length(text, from + 1, |unit| {
+                let l = lower(unit);
+                (b'a' as u16..=b'z' as u16).contains(&l)
+                    || (b'0' as u16..=b'9' as u16).contains(&l)
+                    || l == b'_' as u16
+            }),
+        )
     };
     // ${name}
     if starts_with(text, at, "${") {
@@ -379,7 +412,10 @@ fn credential_like(value: &[u16]) -> bool {
         symbol |= !byte.is_ascii_alphanumeric();
         counts[usize::from(byte)] += 1;
     }
-    let categories = usize::from(lower_seen) + usize::from(upper_seen) + usize::from(digit) + usize::from(symbol);
+    let categories = usize::from(lower_seen)
+        + usize::from(upper_seen)
+        + usize::from(digit)
+        + usize::from(symbol);
     if categories < 3 {
         return false;
     }
@@ -579,7 +615,11 @@ fn credential_tail_is_safe(text: &[u16], tail_start: usize, json_shaped: bool) -
     starts_next_json_property(text, index)
 }
 
-fn credential_rhs_is_approved_placeholder(text: &[u16], rhs_start: usize, json_shaped: bool) -> bool {
+fn credential_rhs_is_approved_placeholder(
+    text: &[u16],
+    rhs_start: usize,
+    json_shaped: bool,
+) -> bool {
     if rhs_start >= text.len() {
         return false;
     }
@@ -628,8 +668,20 @@ fn credential_rhs_is_approved_placeholder(text: &[u16], rhs_start: usize, json_s
 /// `DSHCredentialKeyBufferMatches`: the key itself, or a `_`/`.`-scoped suffix.
 fn credential_key_matches(key: &[u8]) -> bool {
     const VALUES: &[&str] = &[
-        "password", "passwd", "pwd", "secret", "token", "api_key", "access_key", "client_secret",
-        "private_key", "credential", "apikey", "accesskey", "clientsecret", "privatekey",
+        "password",
+        "passwd",
+        "pwd",
+        "secret",
+        "token",
+        "api_key",
+        "access_key",
+        "client_secret",
+        "private_key",
+        "credential",
+        "apikey",
+        "accesskey",
+        "clientsecret",
+        "privatekey",
     ];
     VALUES.iter().any(|value| {
         let value = value.as_bytes();
@@ -653,7 +705,9 @@ fn decode_xml_character_reference(text: &[u16], index: &mut usize, end: usize) -
             let value: u32 = if entity.len() >= 2 && entity[0] == b'#' {
                 let mut digit_index = 1;
                 let mut radix = 10u32;
-                if digit_index < entity.len() && (entity[digit_index] == b'x' || entity[digit_index] == b'X') {
+                if digit_index < entity.len()
+                    && (entity[digit_index] == b'x' || entity[digit_index] == b'X')
+                {
                     radix = 16;
                     digit_index += 1;
                 }
@@ -747,12 +801,14 @@ fn canonical_credential_key_matches(
                 if end - index < 2 {
                     return false;
                 }
-                let (Some(high), Some(low)) = (hex_value(text[index]), hex_value(text[index + 1])) else {
+                let (Some(high), Some(low)) = (hex_value(text[index]), hex_value(text[index + 1]))
+                else {
                     return false;
                 };
                 index += 2;
                 character = ((high << 4) | low) as u16;
-            } else if matches!(escaped as u8, b'"' | b'\'' | b'`' | b'\\' | b'/') && escaped < 0x80 {
+            } else if matches!(escaped as u8, b'"' | b'\'' | b'`' | b'\\' | b'/') && escaped < 0x80
+            {
                 character = escaped;
             } else {
                 return false;
@@ -1040,7 +1096,10 @@ fn parse_simple_xml_element(text: &[u16], opening: &XmlTag) -> Option<((usize, u
     {
         return None;
     }
-    Some((trim_xml_whitespace(text, parsed_value.0, parsed_value.1), closing.next_index))
+    Some((
+        trim_xml_whitespace(text, parsed_value.0, parsed_value.1),
+        closing.next_index,
+    ))
 }
 
 #[derive(Clone, Copy)]
@@ -1147,7 +1206,8 @@ fn range_visibly_contains_credential_key(text: &[u16], start: usize, length: usi
             }
             candidate_end -= 1;
         }
-        let (mut candidate_start, mut candidate_length) = (token_start, candidate_end - token_start);
+        let (mut candidate_start, mut candidate_length) =
+            (token_start, candidate_end - token_start);
         if candidate_length > MAX_KEY_UNITS {
             candidate_start = candidate_end - MAX_KEY_UNITS;
             candidate_length = MAX_KEY_UNITS;
@@ -1161,12 +1221,18 @@ fn range_visibly_contains_credential_key(text: &[u16], start: usize, length: usi
 
 fn range_contains_template_interpolation(text: &[u16], start: usize, length: usize) -> bool {
     let end = start + length;
-    (start..end.saturating_sub(1)).any(|index| text[index] == b'$' as u16 && text[index + 1] == b'{' as u16)
+    (start..end.saturating_sub(1))
+        .any(|index| text[index] == b'$' as u16 && text[index + 1] == b'{' as u16)
 }
 
 /// Skips JavaScript comments and whitespace; a line comment or a line break
 /// makes what follows ambiguous, an unclosed block comment makes it invalid.
-fn skip_js_bracket_trivia_forward(text: &[u16], mut index: usize, ambiguous: &mut bool, valid: &mut bool) -> usize {
+fn skip_js_bracket_trivia_forward(
+    text: &[u16],
+    mut index: usize,
+    ambiguous: &mut bool,
+    valid: &mut bool,
+) -> usize {
     while index < text.len() {
         let character = text[index];
         if is_horizontal_whitespace(character) {
@@ -1243,7 +1309,10 @@ fn js_assignment_operator_length(text: &[u16], index: usize) -> usize {
     }
     if index + 1 < text.len()
         && first < 0x80
-        && matches!(first as u8, b'+' | b'-' | b'*' | b'/' | b'%' | b'|' | b'&' | b'^')
+        && matches!(
+            first as u8,
+            b'+' | b'-' | b'*' | b'/' | b'%' | b'|' | b'&' | b'^'
+        )
         && text[index + 1] == b'=' as u16
     {
         return 2;
@@ -1257,7 +1326,12 @@ fn js_assignment_operator_length(text: &[u16], index: usize) -> usize {
 fn bracket_expression_is_unsafe(text: &[u16], opening_bracket: usize) -> (bool, usize) {
     let mut ambiguous = false;
     let mut valid_trivia = true;
-    let mut cursor = skip_js_bracket_trivia_forward(text, opening_bracket + 1, &mut ambiguous, &mut valid_trivia);
+    let mut cursor = skip_js_bracket_trivia_forward(
+        text,
+        opening_bracket + 1,
+        &mut ambiguous,
+        &mut valid_trivia,
+    );
     if !valid_trivia {
         return (false, text.len());
     }
@@ -1282,13 +1356,15 @@ fn bracket_expression_is_unsafe(text: &[u16], opening_bracket: usize) -> (bool, 
                 return (visible_credential, (cursor + 1).max(token.next_index));
             };
             if !token.valid {
-                visible_credential |= range_visibly_contains_credential_key(text, content_start, content_length);
+                visible_credential |=
+                    range_visibly_contains_credential_key(text, content_start, content_length);
                 significant_components += 1;
                 constant_credential = false;
                 cursor = token.next_index;
                 continue;
             }
-            let constant_token = canonical_credential_key_matches(text, content_start, content_length, true, false);
+            let constant_token =
+                canonical_credential_key_matches(text, content_start, content_length, true, false);
             let dynamic_token = character == b'`' as u16
                 && range_contains_template_interpolation(text, content_start, content_length)
                 && range_visibly_contains_credential_key(text, content_start, content_length);
@@ -1305,8 +1381,9 @@ fn bracket_expression_is_unsafe(text: &[u16], opening_bracket: usize) -> (bool, 
                 cursor += 1;
             }
             let length = cursor - token_start;
-            visible_credential |= canonical_credential_key_matches(text, token_start, length, false, false)
-                || range_visibly_contains_credential_key(text, token_start, length);
+            visible_credential |=
+                canonical_credential_key_matches(text, token_start, length, false, false)
+                    || range_visibly_contains_credential_key(text, token_start, length);
             significant_components += 1;
             constant_credential = false;
             continue;
@@ -1319,7 +1396,8 @@ fn bracket_expression_is_unsafe(text: &[u16], opening_bracket: usize) -> (bool, 
         return (visible_credential, (opening_bracket + 1).max(cursor));
     }
     let next_index = cursor + 1;
-    let assignment = skip_js_bracket_trivia_forward(text, cursor + 1, &mut ambiguous, &mut valid_trivia);
+    let assignment =
+        skip_js_bracket_trivia_forward(text, cursor + 1, &mut ambiguous, &mut valid_trivia);
     if !valid_trivia {
         return (false, next_index);
     }
@@ -1331,10 +1409,17 @@ fn bracket_expression_is_unsafe(text: &[u16], opening_bracket: usize) -> (bool, 
         return (true, next_index);
     }
     let rhs_start = skip_assignment_whitespace(text, assignment + operator_length, &mut ambiguous);
-    (ambiguous || !credential_rhs_is_approved_placeholder(text, rhs_start, false), next_index)
+    (
+        ambiguous || !credential_rhs_is_approved_placeholder(text, rhs_start, false),
+        next_index,
+    )
 }
 
-fn quoted_json_credential_key_is_unsafe(text: &[u16], quote_index: usize, token: &QuotedToken) -> bool {
+fn quoted_json_credential_key_is_unsafe(
+    text: &[u16],
+    quote_index: usize,
+    token: &QuotedToken,
+) -> bool {
     let Some((content_start, content_length)) = token.content else {
         return false;
     };
@@ -1423,18 +1508,23 @@ fn has_unsafe_structured_credential(text: &[u16]) -> bool {
                 continue;
             }
             let local = tag.local_name;
-            if !tag.closing && canonical_credential_key_matches(text, local.0, local.1, false, false) {
+            if !tag.closing
+                && canonical_credential_key_matches(text, local.0, local.1, false, false)
+            {
                 match find_xml_attribute(text, &tag, "value") {
                     XmlAttribute::Malformed => return true,
                     XmlAttribute::Found(start, length) => {
-                        let (trimmed_start, trimmed_length) = trim_xml_whitespace(text, start, length);
+                        let (trimmed_start, trimmed_length) =
+                            trim_xml_whitespace(text, start, length);
                         if !value_range_is_approved(text, trimmed_start, trimmed_length) {
                             return true;
                         }
                     }
                     XmlAttribute::NotFound => {}
                 }
-                let Some(((value_start, value_length), next_index)) = parse_simple_xml_element(text, &tag) else {
+                let Some(((value_start, value_length), next_index)) =
+                    parse_simple_xml_element(text, &tag)
+                else {
                     return true;
                 };
                 if !value_range_is_approved(text, value_start, value_length) {
@@ -1447,7 +1537,9 @@ fn has_unsafe_structured_credential(text: &[u16]) -> bool {
                 match find_xml_attribute(text, &tag, "name") {
                     XmlAttribute::Malformed => return true,
                     XmlAttribute::Found(key_start, key_length)
-                        if canonical_credential_key_matches(text, key_start, key_length, false, true) =>
+                        if canonical_credential_key_matches(
+                            text, key_start, key_length, false, true,
+                        ) =>
                     {
                         match find_xml_attribute(text, &tag, "value") {
                             XmlAttribute::Found(value_start, value_length) => {
@@ -1466,7 +1558,9 @@ fn has_unsafe_structured_credential(text: &[u16]) -> bool {
                 }
             }
             if !tag.closing && range_equals_ascii(text, local.0, local.1, "key") {
-                if let Some(((key_start, key_length), after_key)) = parse_simple_xml_element(text, &tag) {
+                if let Some(((key_start, key_length), after_key)) =
+                    parse_simple_xml_element(text, &tag)
+                {
                     let (key_start, key_length) = trim_xml_whitespace(text, key_start, key_length);
                     if canonical_credential_key_matches(text, key_start, key_length, false, true) {
                         let string_start = skip_xml_whitespace(text, after_key);

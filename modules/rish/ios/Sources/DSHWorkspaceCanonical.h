@@ -21,7 +21,7 @@ FOUNDATION_EXPORT NSData * _Nullable DSHWorkspaceCanonicalJSONData(
 FOUNDATION_EXPORT NSString * _Nullable DSHWorkspaceSHA256Hex(NSData *data);
 
 /// Validates the private schema-1 root-fingerprint union. The input is native
-/// only; callers must never serialize it onto the React Native bridge.
+/// only; callers must never serialize it onto the app UI bridge.
 FOUNDATION_EXPORT BOOL DSHWorkspaceValidateRootFingerprintInput(
     NSDictionary *input,
     NSError * _Nullable * _Nullable error);

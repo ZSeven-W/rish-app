@@ -22,7 +22,7 @@ assert not subprocess.check_output(['git', '-C', str(source), 'status', '--porce
 agent = (source / 'target/x86_64-unknown-linux-musl/release/rish-guest-agent').read_bytes()
 assert agent[:6] == b'\x7fELF\x02\x01' and int.from_bytes(agent[18:20], 'little') == 62
 assert b'RISH_GUEST_AGENT_READY' in agent
-assets = root / 'apps/mobile/ios/Rish/GuestAssets'
+assets = root / 'modules/rish/shared/GuestAssets'
 archive = assets / 'rish-container.cpio'
 data = archive.read_bytes()
 old_sha = hashlib.sha256(data).hexdigest()

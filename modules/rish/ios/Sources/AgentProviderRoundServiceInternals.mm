@@ -152,6 +152,12 @@ static NSDictionary *DSHProviderReduce(NSString *op,
   return reply;
 }
 
+NSArray *DSHProviderAssistantContextMessages(NSDictionary *authority, NSError **error) {
+  NSDictionary *reply = DSHProviderReduce(@"assistant_context_messages",
+      @{@"authority":authority}, error);
+  return [reply[@"messages"] isKindOfClass:NSArray.class] ? reply[@"messages"] : nil;
+}
+
 NSString *DSHProviderJSONSHA256(id value, NSError **error) {
   // The provider input digest is NOT this project's canonical JSON: it is
   // NSJSONSerialization with sorted keys, and the request body digest binds

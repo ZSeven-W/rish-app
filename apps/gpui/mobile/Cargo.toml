@@ -1,0 +1,61 @@
+[package]
+name = "rish-gpui-mobile"
+version = "0.1.0"
+edition = "2024"
+license = "MIT"
+publish = false
+
+# The mobile backend and GPUI Fast implement different Platform ABIs. Keep
+# separate lockfiles, while compiling exactly the same UI and controller files.
+[workspace]
+resolver = "2"
+
+[lib]
+name = "rish_gpui"
+path = "../src/lib.rs"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[dependencies]
+gpui = { package = "gpui-pre", version = "=0.3.6", default-features = false }
+# The pinned backend references these two modules from platform_view even
+# with default features disabled. They are linked but the app requests no
+# camera access and does not expose an embedded web view.
+# PR #49 supplies the UIKit display handle required by wgpu 29's Metal surface.
+# Keep its reviewed revision pinned until the upstream fix is released.
+gpui-mobile = { git = "https://github.com/itsbalamurali/gpui-mobile", rev = "5abbefa5f753ee9a1920d6d2eaeede981e79eeff", default-features = false, features = ["camera", "video_player"] }
+rish-shell-core = { path = "../crates/rish-shell-core" }
+rish-pi-runtime = { path = "../crates/rish-pi-runtime" }
+serde_json = { version = "1", features = ["arbitrary_precision"] }
+futures = "0.3"
+uuid = { version = "1", features = ["v4"] }
+chrono = "0.4"
+unicode-segmentation = "1"
+log = "0.4"
+sys-locale = "0.3"
+# backtrace 0.3.76 uses Apple's dyld declarations on iOS. libc 0.2.190
+# restricts those declarations to macOS; keep the last compatible release
+# until the pinned GPUI dependency upgrades its backtrace implementation.
+libc = "=0.2.189"
+
+[target.'cfg(target_os = "android")'.dependencies]
+jni = "0.22"
+android-activity = { version = "0.6", features = ["native-activity"] }
+android_logger = "0.15"
+
+[profile.dev]
+debug = 0
+
+[profile.release]
+lto = "thin"
+codegen-units = 1
+panic = "abort"
+
+
+# Keep the Android Vulkan debug-metadata workaround reproducible in the repo.
+[patch.crates-io]
+gpui-pre-wgpu = { path = "../vendor/gpui-pre-wgpu" }
+
+# NativeActivity may be recreated without killing the process. Keep renderer
+# state on its owning render thread while the local assistant survives it.
+[patch."https://github.com/itsbalamurali/gpui-mobile"]
+gpui-mobile = { path = "../vendor/gpui-mobile" }

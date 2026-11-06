@@ -7,7 +7,7 @@ NS_ASSUME_NONNULL_BEGIN
 
 /// A coordinator-owned reader. Implementations must delegate to the existing
 /// descriptor-relative AgentWorkspaceToolExecutor and return no path outside
-/// the frozen root. Its data is native-private and never crosses RN.
+/// the frozen root. Its data is native-private and never crosses UI.
 typedef void (^DSHAgentGuestCgiReadFile)(NSString *relativePath,
                                          NSDictionary *root,
                                          NSUInteger maximumBytes,

@@ -1,7 +1,7 @@
 //! Versioned shared tool-table identities, including pre-v2 native schemas.
 //! Values were independently reproduced from ff3303e, 8698427, 101f570 and
 //! the pre-merge v3 iOS table; no frozen native oracle file is changed.
-use rish_agent_core::{canonical::hash_json, runtime_tools, tool_registry::*};
+use rish_agent_core::{assistant_tools, canonical::hash_json, runtime_tools, tool_registry::*};
 use serde_json::{json, Value};
 const V1: &str = "89e677a4e537ca45b7f4ac300cb0ba110d9ca9717e872d522e1b0c2036fc00cb";
 const V1_REQUIRED: &str = "6ac56c1bdcf7619b062a4d93eac9886cd68dc352a36cd8573e35ba749edde5b9";
@@ -30,13 +30,23 @@ fn reduce(value: Value) -> Value {
 }
 
 #[test]
-fn exact_v1_v2_and_existing_ios_v3_hashes_are_preserved() {
+fn exact_v1_through_v4_hashes_are_preserved() {
     for (version, guest, digest) in [
         (1, false, V1),
         (2, false, V2),
         (2, true, V2_GUEST),
         (3, false, V3),
         (3, true, V3_GUEST),
+        (
+            4,
+            false,
+            "6ca3dac1e252b649e009723b05141fa0ef6797b08242cf0d80b05070a3387482",
+        ),
+        (
+            4,
+            true,
+            "71c368c136f97df524a9e51dd5768fd3d4d677406377e5168a4d7d6786f2c0b1",
+        ),
     ] {
         assert_eq!(
             toolset_sha256_for_version(version, guest).as_deref(),
@@ -53,7 +63,7 @@ fn exact_v1_v2_and_existing_ios_v3_hashes_are_preserved() {
         );
         let registry = registry_for_root_version(&all_root(), guest, version).unwrap();
         assert!(registry_shape(&registry, &all_root(), guest));
-        assert!(toolset_digest_valid(&json!(digest), 3, true) || version == 3 && !guest);
+        assert!(toolset_digest_valid(&json!(digest), version.max(3), guest));
     }
 }
 
@@ -205,10 +215,146 @@ fn v3_capability_filter_and_closed_projection_are_exact() {
     }
     for bad in [
         json!({"op":"descriptors","registry_version":true}),
-        json!({"op":"descriptors","registry_version":4}),
+        json!({"op":"descriptors","registry_version":6}),
         json!({"op":"descriptors","guest_cgi":"true"}),
         json!({"op":"descriptors","runtime":true}),
     ] {
         assert_eq!(reduce(bad)["ok"], false);
     }
+}
+
+#[test]
+fn assistant_tools_require_v5_and_separate_metadata_approval() {
+    for guest in [false, true] {
+        for version in 1..=4 {
+            for name in assistant_tools::NAMES {
+                assert_eq!(
+                    descriptor_for_tool_version(name, &all_root(), guest, version).unwrap()
+                        ["access"],
+                    "durable_deny"
+                );
+                assert!(native_descriptor_for_version(name, guest, version).is_err());
+                assert!(!runtime_tools::grant_supports_tool(
+                    Some(&json!(version)),
+                    name
+                ));
+            }
+        }
+        let registry = registry_for_root_version(&all_root(), guest, 5).unwrap();
+        assert!(registry_shape(&registry, &all_root(), guest));
+        assert_eq!(
+            registry["tools"].as_array().unwrap().len(),
+            if guest { 20 } else { 18 }
+        );
+        for name in assistant_tools::NAMES {
+            let descriptor =
+                descriptor_for_frozen_registry(name, &registry, &all_root(), guest).unwrap();
+            let mutation = assistant_tools::is_mutation(name);
+            assert_eq!(
+                descriptor["access"],
+                if mutation {
+                    "conversation_confirm"
+                } else {
+                    "auto"
+                }
+            );
+            assert_eq!(descriptor["safe_summary_key"], format!("agent.{name}"));
+            assert_eq!(descriptor.as_object().unwrap().len(), 4);
+            assert!(runtime_tools::grant_supports_tool(Some(&json!(5)), name));
+            assert_eq!(
+                descriptor_for_tool_version(name, &root(json!(["file_read"])), guest, 5).unwrap()
+                    ["access"],
+                if mutation {
+                    "conversation_confirm"
+                } else {
+                    "auto"
+                }
+            );
+        }
+        let mut forged = registry.clone();
+        forged["registry_version"] = json!(4);
+        assert!(!registry_shape(&forged, &all_root(), guest));
+        let mut bypass = registry.clone();
+        bypass["tools"]
+            .as_array_mut()
+            .unwrap()
+            .iter_mut()
+            .find(|tool| tool["name"] == "create_assistant_task")
+            .unwrap()["access"] = json!("auto");
+        assert!(!registry_shape(&bypass, &all_root(), guest));
+    }
+}
+
+#[test]
+fn v5_runtime_filtered_identity_keeps_assistant_tools_and_questions() {
+    for guest in [false, true] {
+        let response = reduce(json!({"op":"registry","root":all_root(),
+            "guest_cgi":guest,"registry_version":5,"runtime_tools":false}));
+        assert_eq!(response["ok"], true);
+        let registry = &response["registry"];
+        assert_eq!(
+            registry["tools"].as_array().unwrap().len(),
+            if guest { 15 } else { 13 }
+        );
+        assert!(registry_shape(registry, &all_root(), guest));
+        for name in assistant_tools::NAMES.iter().copied().chain(["ask_user"]) {
+            assert_ne!(
+                descriptor_for_frozen_registry(name, registry, &all_root(), guest).unwrap()
+                    ["access"],
+                "durable_deny"
+            );
+            assert_eq!(
+                reduce(json!({"op":"native_descriptor","name":name,
+                "guest_cgi":guest,"registry_version":5,
+                "toolset_sha256":registry["toolset_sha256"]}))["ok"],
+                true
+            );
+        }
+        for name in runtime_tools::NAMES {
+            assert_eq!(
+                descriptor_for_frozen_registry(name, registry, &all_root(), guest).unwrap()
+                    ["access"],
+                "durable_deny"
+            );
+        }
+        let full = registry_for_root_version(&all_root(), guest, 5).unwrap();
+        assert_ne!(full["toolset_sha256"], registry["toolset_sha256"]);
+        assert_eq!(
+            reduce(
+                json!({"op":"native_descriptor","name":"create_assistant_task",
+            "guest_cgi":guest,"registry_version":4,
+            "toolset_sha256":registry["toolset_sha256"]})
+            )["ok"],
+            false
+        );
+    }
+}
+
+#[test]
+fn v5_only_adds_assistant_descriptors_and_safe_summary_names() {
+    for guest in [false, true] {
+        let mut existing = descriptors_for_version(5, guest).unwrap();
+        existing.retain(|tool| !assistant_tools::is_assistant(tool["name"].as_str().unwrap()));
+        assert_eq!(existing, descriptors_for_version(4, guest).unwrap());
+    }
+    for name in assistant_tools::NAMES {
+        let summary = json!(format!("agent.{name}"));
+        assert!(rish_agent_core::session_schema::agent_summary_matches_name(
+            Some(&summary),
+            Some(&json!(name))
+        ));
+        assert!(rish_agent_core::session_schema::agent_summary_matches_name(
+            Some(&json!("agent.unknown")),
+            Some(&json!(name))
+        ));
+        assert!(
+            !rish_agent_core::session_schema::agent_summary_matches_name(
+                Some(&summary),
+                Some(&json!("write_file"))
+            )
+        );
+    }
+    assert!(!rish_agent_core::session_schema::valid_agent_summary_key(
+        Some(&json!("agent.create_assistant_task.secret instructions"))
+    ));
 }

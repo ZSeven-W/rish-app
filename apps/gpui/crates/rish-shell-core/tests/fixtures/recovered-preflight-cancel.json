@@ -1,0 +1,332 @@
+{
+  "session": {
+    "active_conversation_id": "84af3cac-9890-4081-9a18-6dbc327206e7",
+    "agent_transcript_cleanup_outbox": [],
+    "conversations": [
+      {
+        "agent_grants": [],
+        "attempts": [
+          {
+            "active_round": {
+              "round_id": "ee62fd4a-e3d7-4fa9-833b-c0080dd7f041",
+              "round_index": 0
+            },
+            "agent": {
+              "batch": [],
+              "call_index": null,
+              "controller_generation": 3,
+              "frozen_grant_ids": [],
+              "phase": "round_in_flight",
+              "policy": {
+                "max_attempt_write_bytes": 4194304,
+                "max_batch_write_bytes": 524288,
+                "max_single_write_bytes": 32768,
+                "policy_version": "agent-v1",
+                "schema_version": 1
+              },
+              "reserved_write_bytes": 0,
+              "root": {
+                "capabilities": [
+                  "file_read",
+                  "file_write",
+                  "guest_service"
+                ],
+                "kind": "workspace",
+                "project_id": null,
+                "root_fingerprint_sha256": "c2e1add0223c69a1e92cf3e0c9d1095490cb6e10b643821c43474e289d33c1c6",
+                "schema_version": 1,
+                "workspace_binding_revision": 1,
+                "workspace_id": "31f323aa-3434-4908-9a70-2be7c344eacd"
+              },
+              "round_index": 0,
+              "round_lineage": {
+                "launch_attempt": 1,
+                "native_row_revision": null,
+                "round_id": "ee62fd4a-e3d7-4fa9-833b-c0080dd7f041",
+                "round_index": 0,
+                "schema_version": 2,
+                "status": "active"
+              },
+              "schema_version": 3,
+              "tool_registry_version": 4,
+              "toolset_sha256": "71c368c136f97df524a9e51dd5768fd3d4d677406377e5168a4d7d6786f2c0b1",
+              "transcript": {
+                "generation": 0,
+                "schema_version": 1,
+                "transcript_bytes": 250,
+                "transcript_ref": "6e805544-710b-4a0e-9eb4-cd8ed800f324",
+                "transcript_sha256": "e50a228aab6a9d4d8aa7b5635a147cc8edf9803c3f80cd6ca633cc333e95852f"
+              },
+              "updated_at": "2026-10-16T07:44:35.093Z"
+            },
+            "assistant_message_id": null,
+            "attachment_ids": [],
+            "attempt_id": "f8633f9c-1ba1-4fed-b9b9-4e9880b920cc",
+            "context_disposition": "unbound",
+            "context_project_id": null,
+            "created_at": "2026-10-16T07:38:44.176Z",
+            "failure_code": null,
+            "harness_id": "dsh",
+            "journal_revision": 3,
+            "model_id": "deepseek-v4-flash",
+            "project_context": null,
+            "rounds": [],
+            "schema_version": 3,
+            "status": "sending",
+            "thinking_mode": "high",
+            "turn_id": "7f46ebf6-f82a-4e4d-ac8e-aeb76a3a09d8",
+            "updated_at": "2026-10-16T07:44:35.093Z",
+            "visible_history_sha256": "2d2b206828170284f8d9b1769123c0e85f77efa1376a9991eee04bbb5ec4c12f",
+            "visible_message_ids": [
+              "9562c0e0-feaa-499c-bf33-6ef5df6169c8"
+            ],
+            "workspace_binding_revision": 1,
+            "workspace_id": "31f323aa-3434-4908-9a70-2be7c344eacd"
+          }
+        ],
+        "created_at": "2026-10-16T07:38:44.117Z",
+        "id": "84af3cac-9890-4081-9a18-6dbc327206e7",
+        "messages": [
+          {
+            "attachments": [],
+            "created_at": "2026-10-16T07:38:44.176Z",
+            "id": "9562c0e0-feaa-499c-bf33-6ef5df6169c8",
+            "role": "user",
+            "text": "请列出当前工作空间的文件。"
+          }
+        ],
+        "model_id": "deepseek-v4-flash",
+        "project_context": null,
+        "project_id": null,
+        "runtime_context_id": null,
+        "thinking_mode": "high",
+        "title": "请列出当前工作空间的文件。",
+        "title_source": "auto",
+        "turns": [
+          {
+            "attempt_ids": [
+              "f8633f9c-1ba1-4fed-b9b9-4e9880b920cc"
+            ],
+            "created_at": "2026-10-16T07:38:44.176Z",
+            "schema_version": 1,
+            "turn_id": "7f46ebf6-f82a-4e4d-ac8e-aeb76a3a09d8",
+            "user_message_id": "9562c0e0-feaa-499c-bf33-6ef5df6169c8"
+          }
+        ],
+        "updated_at": "2026-10-16T07:44:35.093Z",
+        "workspace_binding": {
+          "binding_revision": 1,
+          "project_id": null,
+          "schema_version": 1,
+          "workspace_id": "31f323aa-3434-4908-9a70-2be7c344eacd"
+        },
+        "workspace_bootstrap_state": "none",
+        "workspace_id": "31f323aa-3434-4908-9a70-2be7c344eacd"
+      }
+    ],
+    "messages": [
+      {
+        "attachments": [],
+        "created_at": "2026-10-16T07:38:44.176Z",
+        "id": "9562c0e0-feaa-499c-bf33-6ef5df6169c8",
+        "role": "user",
+        "text": "请列出当前工作空间的文件。"
+      }
+    ],
+    "preferences": {
+      "auto_expand_tools": false,
+      "confirm_destructive_file_actions": true,
+      "default_model": "deepseek-v4-flash",
+      "git_https_proxy_url": null,
+      "locale": "system",
+      "mirrors": {
+        "alpine": {
+          "base_url": "https://dl-cdn.alpinelinux.org/alpine/",
+          "enabled": false
+        },
+        "npm": {
+          "base_url": "https://registry.npmjs.org/",
+          "enabled": false
+        },
+        "pip": {
+          "base_url": "https://pypi.org/simple/",
+          "enabled": false
+        }
+      },
+      "schema_version": 1,
+      "selected_harness_id": "dsh",
+      "show_reasoning": false,
+      "theme_mode": "system",
+      "thinking_mode": "high",
+      "tool_permission": "read-only"
+    },
+    "project_context_destructive_epoch": 0,
+    "project_context_destructive_transition": null,
+    "schema_version": 9,
+    "session_events": [
+      {
+        "approval_reference": null,
+        "arguments_sha256": null,
+        "attempt_id": "f8633f9c-1ba1-4fed-b9b9-4e9880b920cc",
+        "call_id": null,
+        "created_at": "2026-10-16T07:38:44.245Z",
+        "event_id": "84d39762-3029-4875-961d-ae41c96acc72",
+        "failure_code": null,
+        "kind": "round",
+        "result_sha256": null,
+        "round_index": 0,
+        "safe_summary_key": null,
+        "schema_version": 2,
+        "seq": 0,
+        "status": "running"
+      },
+      {
+        "approval_reference": "b35be82d-1b58-443f-ad45-7a1d0f83fb7e",
+        "arguments_sha256": null,
+        "attempt_id": "f8633f9c-1ba1-4fed-b9b9-4e9880b920cc",
+        "call_id": null,
+        "created_at": "2026-10-16T07:44:35.093Z",
+        "event_id": "b35be82d-1b58-443f-ad45-7a1d0f83fb7e",
+        "failure_code": "E_AGENT_CANCELLED",
+        "kind": "cancel",
+        "result_sha256": null,
+        "round_index": 0,
+        "safe_summary_key": null,
+        "schema_version": 2,
+        "seq": 1,
+        "status": "cancelled"
+      }
+    ],
+    "workspace_authority_outbox": []
+  },
+  "result": {
+    "attempt": {
+      "attempt_id": "f8633f9c-1ba1-4fed-b9b9-4e9880b920cc",
+      "authority_revision": 1,
+      "batch": [],
+      "batch_kind": null,
+      "batch_revision": null,
+      "call_index": null,
+      "cancel_source_event_id": null,
+      "cleanup_id": null,
+      "controller_generation": 3,
+      "conversation_id": "84af3cac-9890-4081-9a18-6dbc327206e7",
+      "frozen_grant_ids": [],
+      "journal_revision": 3,
+      "manifest_sha256": null,
+      "phase": "ready_for_round",
+      "policy": {
+        "max_attempt_write_bytes": 4194304,
+        "max_batch_write_bytes": 524288,
+        "max_single_write_bytes": 32768,
+        "policy_version": "agent-v1",
+        "schema_version": 1
+      },
+      "registry": {
+        "registry_version": 4,
+        "schema_version": 2,
+        "tools": [
+          {
+            "access": "auto",
+            "name": "ask_user",
+            "safe_summary_key": "agent.ask_user",
+            "schema_version": 2
+          },
+          {
+            "access": "conversation_confirm",
+            "name": "install_runtime_environment",
+            "safe_summary_key": "agent.install_runtime_environment",
+            "schema_version": 2
+          },
+          {
+            "access": "auto",
+            "name": "list_dir",
+            "safe_summary_key": "agent.list_dir",
+            "schema_version": 2
+          },
+          {
+            "access": "auto",
+            "name": "list_runtime_environments",
+            "safe_summary_key": "agent.list_runtime_environments",
+            "schema_version": 2
+          },
+          {
+            "access": "auto",
+            "name": "read_file",
+            "safe_summary_key": "agent.read_file",
+            "schema_version": 2
+          },
+          {
+            "access": "conversation_confirm",
+            "name": "run_program",
+            "safe_summary_key": "agent.run_program",
+            "schema_version": 2
+          },
+          {
+            "access": "conversation_confirm",
+            "name": "start_guest_cgi",
+            "safe_summary_key": "agent.start_guest_cgi",
+            "schema_version": 2
+          },
+          {
+            "access": "conversation_confirm",
+            "name": "start_runtime_service",
+            "safe_summary_key": "agent.start_runtime_service",
+            "schema_version": 2
+          },
+          {
+            "access": "conversation_confirm",
+            "name": "stop_guest_cgi",
+            "safe_summary_key": "agent.stop_guest_cgi",
+            "schema_version": 2
+          },
+          {
+            "access": "conversation_confirm",
+            "name": "stop_runtime_service",
+            "safe_summary_key": "agent.stop_runtime_service",
+            "schema_version": 2
+          },
+          {
+            "access": "conversation_confirm",
+            "name": "write_file",
+            "safe_summary_key": "agent.write_file",
+            "schema_version": 2
+          }
+        ],
+        "toolset_sha256": "71c368c136f97df524a9e51dd5768fd3d4d677406377e5168a4d7d6786f2c0b1"
+      },
+      "reserved_write_bytes": 0,
+      "root": {
+        "capabilities": [
+          "file_read",
+          "file_write",
+          "guest_service"
+        ],
+        "kind": "workspace",
+        "project_id": null,
+        "root_fingerprint_sha256": "c2e1add0223c69a1e92cf3e0c9d1095490cb6e10b643821c43474e289d33c1c6",
+        "schema_version": 1,
+        "workspace_binding_revision": 1,
+        "workspace_id": "31f323aa-3434-4908-9a70-2be7c344eacd"
+      },
+      "round_id": "ee62fd4a-e3d7-4fa9-833b-c0080dd7f041",
+      "round_index": 0,
+      "round_revision": 3,
+      "round_status": "failed_retryable",
+      "schema_version": 2,
+      "task_id": "7f46ebf6-f82a-4e4d-ac8e-aeb76a3a09d8",
+      "transcript": {
+        "generation": 0,
+        "schema_version": 1,
+        "transcript_bytes": 250,
+        "transcript_ref": "6e805544-710b-4a0e-9eb4-cd8ed800f324",
+        "transcript_sha256": "e50a228aab6a9d4d8aa7b5635a147cc8edf9803c3f80cd6ca633cc333e95852f"
+      }
+    },
+    "completed_round": null,
+    "next_action": "retry_same_round",
+    "operation_id": "e6d2d548-b5f2-4ab3-85ed-014ae1facce7",
+    "schema_version": 2,
+    "status": "retryable"
+  }
+}

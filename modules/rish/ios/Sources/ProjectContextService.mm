@@ -377,7 +377,7 @@ static BOOL DSHServiceCanonicalDigest(id value) {
 // of an active:<uuid> key. Derive that UUID from the complete V2 authority
 // tuple so two workspaces using the same conversation UUID can never evict or
 // authorize one another's snapshot. The derived UUID is private and never
-// returned to JavaScript.
+// returned to the UI.
 static NSString *DSHServiceV2ReferenceId(NSDictionary *root,
                                          NSString *rootFingerprint,
                                          NSString *conversationId) {

@@ -3,6 +3,7 @@
 #import <CommonCrypto/CommonDigest.h>
 #import <Security/Security.h>
 
+#include "rish_agent_core.h"
 #include <algorithm>
 #include <arpa/inet.h>
 #include <string.h>
@@ -62,6 +63,28 @@ static BOOL DSHSSHHost(NSString *host) {
   return YES;
 }
 
+static NSString *DSHSSHCredentialHostIdentity(id value) {
+  if (![value isKindOfClass:NSString.class] || !DSHSSHHost(value)) return nil;
+  NSString *host = value;
+  if ([host containsString:@"["] || [host containsString:@"]"]) {
+    if (![host hasPrefix:@"["] || ![host hasSuffix:@"]"]) return nil;
+    NSString *plain = DSHSSHStripBrackets(host);
+    struct in6_addr address = {};
+    const char *bytes = plain.UTF8String;
+    // Only the legacy spelling of a valid IPv6 literal is compatible. A
+    // nested pair, bracketed DNS name or malformed literal remains invalid.
+    if (bytes == nullptr || inet_pton(AF_INET6, bytes, &address) != 1) return nil;
+    host = plain;
+  }
+  return host.lowercaseString;
+}
+
+BOOL DSHGitSSHCredentialHostsMatch(id storedHost, id requestedHost) {
+  NSString *stored = DSHSSHCredentialHostIdentity(storedHost);
+  NSString *requested = DSHSSHCredentialHostIdentity(requestedHost);
+  return stored != nil && [stored isEqualToString:requested];
+}
+
 static BOOL DSHSSHUser(NSString *user) {
   if (user.length == 0 || user.length > 255 || DSHSSHControl(user) ||
       [user rangeOfCharacterFromSet:
@@ -70,69 +93,34 @@ static BOOL DSHSSHUser(NSString *user) {
   return YES;
 }
 
-static BOOL DSHSSHPath(NSString *path, BOOL absolute) {
-  if (path.length == 0 || path.length > 2048 || DSHSSHControl(path) ||
-      [path containsString:@"\\"] || (absolute && ![path hasPrefix:@"/"])) return NO;
-  for (NSString *part in [path componentsSeparatedByString:@"/"]) {
-    if ([part isEqualToString:@"."] || [part isEqualToString:@".."] ||
-        [part containsString:@"\0"]) return NO;
-  }
-  return YES;
-}
-
 NSDictionary *DSHGitSSHValidatedRemote(id value, NSError **error) {
-  NSString *input = [value isKindOfClass:NSString.class] ? value : @"";
-  if (input.length == 0 || input.length > 4096 || DSHSSHControl(input) ||
-      ![input isEqualToString:[input stringByTrimmingCharactersInSet:
-          NSCharacterSet.whitespaceAndNewlineCharacterSet]]) {
-    if (error) *error = DSHSSHError(4001, @"SSH remote is invalid");
-    return nil;
-  }
-
-  NSString *user = nil;
-  NSString *host = nil;
-  NSString *path = nil;
-  NSInteger port = 22;
-  BOOL scp = NO;
-  if ([input.lowercaseString hasPrefix:@"ssh://"]) {
-    NSURLComponents *components = [NSURLComponents componentsWithString:input];
-    user = components.user;
-    host = components.host.lowercaseString;
-    path = components.path;
-    port = components.port == nil ? 22 : components.port.integerValue;
-    if (components.password != nil || components.query != nil ||
-        components.fragment != nil || components.port != nil &&
-            (port < 1 || port > 65535) || !DSHSSHPath(path, YES)) {
-      host = nil;
-    }
-  } else {
-    NSRange at = [input rangeOfString:@"@"];
-    NSRange colon = [input rangeOfString:@":" options:0 range:NSMakeRange(
-        at.location == NSNotFound ? 0 : at.location + 1, input.length -
-            (at.location == NSNotFound ? 0 : at.location + 1))];
-    if (at.location != NSNotFound && colon.location != NSNotFound &&
-        [input rangeOfString:@"@" options:0 range:NSMakeRange(at.location + 1,
-            input.length - at.location - 1)].location == NSNotFound) {
-      user = [input substringToIndex:at.location];
-      host = [[input substringWithRange:NSMakeRange(at.location + 1,
-          colon.location - at.location - 1)] lowercaseString];
-      path = [input substringFromIndex:colon.location + 1];
-      scp = YES;
-      if (!DSHSSHPath(path, NO)) host = nil;
+  NSDictionary *remote = nil;
+  if ([value isKindOfClass:NSString.class] &&
+      [value dataUsingEncoding:NSUTF8StringEncoding allowLossyConversion:NO] != nil) {
+    NSData *request = [NSJSONSerialization dataWithJSONObject:@{@"url": value} options:0 error:nil];
+    char *raw = request == nil ? nullptr : rish_agent_git_remote_policy_reduce(
+      static_cast<const char *>(request.bytes), request.length);
+    if (raw != nullptr) {
+      NSData *bytes = [NSData dataWithBytes:raw length:strlen(raw)];
+      rish_agent_string_free(raw);
+      id reply = [NSJSONSerialization JSONObjectWithData:bytes options:0 error:nil];
+      NSDictionary *policy = [reply isKindOfClass:NSDictionary.class] && [reply[@"ok"] isEqual:@YES] &&
+        [reply[@"value"] isKindOfClass:NSDictionary.class] ? reply[@"value"] : nil;
+      if ([policy[@"scheme"] isEqual:@"ssh"]) {
+        // Retain the established seven-field native contract. In particular,
+        // credential matching consumes the canonical identity returned by Rust.
+        NSArray *keys = @[@"url", @"canonical_url", @"host", @"username", @"port", @"path", @"scp"];
+        NSMutableDictionary *adapted = [NSMutableDictionary dictionaryWithCapacity:keys.count];
+        for (NSString *key in keys) {
+          if (policy[key] == nil) break;
+          adapted[key] = policy[key];
+        }
+        if (adapted.count == keys.count) remote = [adapted copy];
+      }
     }
   }
-  if (!DSHSSHUser(user) || !DSHSSHHost(host) || !DSHSSHPath(path, scp ? NO : YES) ||
-      port < 1 || port > 65535) {
-    if (error) *error = DSHSSHError(4001, @"SSH remote is invalid");
-    return nil;
-  }
-  NSString *canonical = [NSString stringWithFormat:@"ssh://%@%@%@%@/%@", user,
-      @"@",
-      [host containsString:@":"] ? [NSString stringWithFormat:@"[%@]", host] : host,
-      port == 22 ? @"" : [NSString stringWithFormat:@":%ld", (long)port],
-      [path hasPrefix:@"/"] ? [path substringFromIndex:1] : path];
-  return @{ @"url": input, @"canonical_url": canonical, @"host": host,
-            @"username": user, @"port": @(port), @"path": path, @"scp": @(scp) };
+  if (remote == nil && error != nil) *error = DSHSSHError(4001, @"SSH remote is invalid");
+  return remote;
 }
 
 static NSMutableDictionary *DSHSSHQuery(NSString *account) {
@@ -209,7 +197,7 @@ NSDictionary *DSHGitSSHCredentialForProfile(NSString *profileId, NSString *host,
       ![storedHostValue isKindOfClass:NSString.class] ||
       ![storedPortValue isKindOfClass:NSNumber.class] ||
       ![storedUserValue isKindOfClass:NSString.class] ||
-      ![((NSString *)storedHostValue).lowercaseString isEqualToString:host.lowercaseString] ||
+      !DSHGitSSHCredentialHostsMatch(storedHostValue, host) ||
       [storedPortValue integerValue] != port ||
       ![storedUserValue isEqualToString:username]) return nil;
   NSString *privateKey = (NSString *)privateValue;

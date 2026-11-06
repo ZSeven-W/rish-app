@@ -120,13 +120,13 @@ fn an_environment_id_is_anchored() {
         assert!(valid_environment_id(Some(&json!(good))), "{good}");
     }
     for bad in [
-        "",           // empty
-        "-python",    // a leading dash is the anchored rule's whole point
-        "-",          //
-        "Python",     // upper case
-        "py_thon",    // underscore
-        "py thon",    // space
-        "py.thon",    // dot
+        "",             // empty
+        "-python",      // a leading dash is the anchored rule's whole point
+        "-",            //
+        "Python",       // upper case
+        "py_thon",      // underscore
+        "py thon",      // space
+        "py.thon",      // dot
         "python\u{e9}", // outside ASCII
     ] {
         assert!(!valid_environment_id(Some(&json!(bad))), "{bad:?}");
@@ -270,7 +270,8 @@ fn the_url_projection_shape_is_exact() {
 
 #[test]
 fn the_envelope_answers_each_operation() {
-    let reply = reduce_json(&json!({"op": "valid_environment_id", "value": "python-3-13"}).to_string());
+    let reply =
+        reduce_json(&json!({"op": "valid_environment_id", "value": "python-3-13"}).to_string());
     assert_eq!(reply, json!({"ok": true, "valid": true}).to_string());
 
     let reply = reduce_json(
@@ -297,6 +298,10 @@ fn an_unusable_envelope_fails_closed() {
         r#"not json"#,
         r#""#,
     ] {
-        assert_eq!(reduce_json(bad), json!({"ok": false}).to_string(), "{bad:?}");
+        assert_eq!(
+            reduce_json(bad),
+            json!({"ok": false}).to_string(),
+            "{bad:?}"
+        );
     }
 }

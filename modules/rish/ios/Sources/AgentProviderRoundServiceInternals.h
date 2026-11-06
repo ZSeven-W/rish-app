@@ -11,7 +11,7 @@ NS_ASSUME_NONNULL_BEGIN
 @end
 
 /// Private native-only state shared by the provider coordinator and its
-/// bounded helper functions.  It is never exposed through RCT.
+/// bounded helper functions.  It is never exposed through native registry.
 @interface DSHAgentProviderRoundContext : NSObject
 @property(nonatomic, strong, nullable) id<DSHCompletionExecution> task;
 @property(nonatomic, copy) NSString *nativeTaskId;
@@ -66,6 +66,8 @@ FOUNDATION_EXPORT NSString *DSHProviderFailureCode(
 FOUNDATION_EXPORT NSDictionary *DSHProviderOperationSafeResult(NSDictionary *result);
 FOUNDATION_EXPORT NSArray * _Nullable DSHProviderToolsForAuthority(
     NSDictionary *authority, DSHAgentToolRegistry *registry, NSError **error);
+FOUNDATION_EXPORT NSArray * _Nullable DSHProviderAssistantContextMessages(
+    NSDictionary *authority, NSError **error);
 FOUNDATION_EXPORT NSArray * _Nullable DSHProviderTranscriptForBody(
     NSArray *nativeMessages, NSUInteger roundIndex, NSString *thinkingMode,
     NSError **error);

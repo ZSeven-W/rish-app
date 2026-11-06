@@ -11,10 +11,7 @@ const FIXTURES: [(&str, &str); 2] = [
 ];
 
 fn fixture(name: &str) -> Value {
-    let path = concat!(
-        env!("CARGO_MANIFEST_DIR"),
-        "/../../../../../apps/mobile/ios/RishTests/Fixtures/"
-    );
+    let path = concat!(env!("CARGO_MANIFEST_DIR"), "/../../../ios/Tests/Fixtures/");
     let text = std::fs::read_to_string(format!("{path}{name}"))
         .unwrap_or_else(|error| panic!("{name}: {error}"));
     serde_json::from_str(&text).expect("the fixture is JSON")
@@ -163,7 +160,10 @@ fn a_finish_reason_that_disagrees_with_the_calls_is_refused() {
     };
     // Asked for a tool without saying so.
     assert_eq!(
-        disagreeing("end_turn", json!([{ "type": "tool_use", "id": "t", "name": "n", "input": {} }])),
+        disagreeing(
+            "end_turn",
+            json!([{ "type": "tool_use", "id": "t", "name": "n", "input": {} }])
+        ),
         json!("E_COMPLETION_FINISH_RELATION"),
     );
     // Said so without asking.
@@ -195,9 +195,18 @@ fn an_unfinished_responses_round_is_refused() {
             "response": response,
         }))
     };
-    assert_eq!(status("in_progress", Value::Null)["failure_code"], json!("E_COMPLETION_FINISH_RELATION"));
-    assert_eq!(status("failed", Value::Null)["failure_code"], json!("E_COMPLETION_FINISH_RELATION"));
-    assert_eq!(status("incomplete", Value::Null)["failure_code"], json!("E_COMPLETION_FINISH_RELATION"));
+    assert_eq!(
+        status("in_progress", Value::Null)["failure_code"],
+        json!("E_COMPLETION_FINISH_RELATION")
+    );
+    assert_eq!(
+        status("failed", Value::Null)["failure_code"],
+        json!("E_COMPLETION_FINISH_RELATION")
+    );
+    assert_eq!(
+        status("incomplete", Value::Null)["failure_code"],
+        json!("E_COMPLETION_FINISH_RELATION")
+    );
     assert_eq!(
         status("incomplete", json!({ "reason": "content_filter" }))["reply"]["finish_reason"],
         json!("content_filter"),
@@ -215,7 +224,16 @@ fn an_empty_reply_is_refused_unless_it_is_a_refusal() {
             "response": { "id": "m", "stop_reason": stop, "content": [] },
         }))
     };
-    assert_eq!(empty("end_turn")["failure_code"], json!("E_COMPLETION_EMPTY_RESPONSE"));
-    assert_eq!(empty("max_tokens")["failure_code"], json!("E_COMPLETION_EMPTY_RESPONSE"));
-    assert_eq!(empty("refusal")["reply"]["finish_reason"], json!("content_filter"));
+    assert_eq!(
+        empty("end_turn")["failure_code"],
+        json!("E_COMPLETION_EMPTY_RESPONSE")
+    );
+    assert_eq!(
+        empty("max_tokens")["failure_code"],
+        json!("E_COMPLETION_EMPTY_RESPONSE")
+    );
+    assert_eq!(
+        empty("refusal")["reply"]["finish_reason"],
+        json!("content_filter")
+    );
 }

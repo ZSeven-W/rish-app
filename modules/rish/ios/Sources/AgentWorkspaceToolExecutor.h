@@ -6,7 +6,7 @@ NS_ASSUME_NONNULL_BEGIN
 
 /// Native-only descriptor-relative file-tool executor.  Raw paths and content
 /// are accepted only from the protected Agent transcript and are never part of
-/// a React Native result.
+/// an app UI result.
 @interface DSHAgentWorkspaceToolExecutor : NSObject
 
 - (instancetype)init NS_UNAVAILABLE;

@@ -1,5 +1,5 @@
 #import "RishConversationBrowser.h"
-#import <React/RCTUtils.h>
+#import <RishNative/RishUIKit.h>
 #import <SafariServices/SafariServices.h>
 #import <UIKit/UIKit.h>
 
@@ -37,7 +37,7 @@
       completion([self.currentURL isEqual:url] ? nil : @"E_BROWSER_BUSY");
       return;
     }
-    UIViewController *presenter = RCTPresentedViewController();
+    UIViewController *presenter = RishPresentedViewController();
     if (presenter == nil || presenter.isBeingDismissed || presenter.isBeingPresented ||
         [presenter isKindOfClass:UIAlertController.class] ||
         [presenter isKindOfClass:SFSafariViewController.class]) {

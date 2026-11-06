@@ -1,8 +1,8 @@
 # GuestAssets provenance manifest for the tracked iOS payload.
 # Columns: kind<TAB>path<TAB>bytes<TAB>sha256<TAB>source/evidence<TAB>license metadata
 # Hashes are of the bytes in the tracked CPIO member or standalone asset.
-asset	apps/mobile/ios/Rish/GuestAssets/vmlinuz-virt-6.18.35	12575744	1e6bf9027720c75c3ed0d79171f21b5791ee40ca9795d07c7c6e04dc5ea2ae90	Alpine v3.24.1 netboot-3.24.1/vmlinuz-virt; runtime guest/x86_64/assets.lock.tsv	Linux GPL-2.0-only WITH Linux-syscall-note
-asset	apps/mobile/ios/Rish/GuestAssets/rish-container.cpio	13921792	17923f268be4e0b6fbfa6d0410094fb9b9d216e69fd4341ffbb839ec592926b0	Derived guest; current agent/init/module evidence is GuestAssets/guest-agent-build.json	mixed payload; see PROVENANCE.md
+asset	modules/rish/shared/GuestAssets/vmlinuz-virt-6.18.35	12575744	1e6bf9027720c75c3ed0d79171f21b5791ee40ca9795d07c7c6e04dc5ea2ae90	Alpine v3.24.1 netboot-3.24.1/vmlinuz-virt; runtime guest/x86_64/assets.lock.tsv	Linux GPL-2.0-only WITH Linux-syscall-note
+asset	modules/rish/shared/GuestAssets/rish-container.cpio	13921792	17923f268be4e0b6fbfa6d0410094fb9b9d216e69fd4341ffbb839ec592926b0	Derived guest; current agent/init/module evidence is GuestAssets/guest-agent-build.json	mixed payload; see PROVENANCE.md
 input	alpine-minirootfs-3.24.1-x86_64.tar.gz	3698422	41f73e3cf5fa919b8aa5ca6b30dc48f0da2720776d7423e2a7748211456fe081	Alpine v3.24.1 x86_64 release	contains the package records listed in minirootfs-packages.tsv
 input	APKINDEX.tar.gz	528320	24281c730dfa9c721f2f21fc30ead29f99f557ff2d6736663617aaa5cd5d2102	https://dl-cdn.alpinelinux.org/alpine/v3.24/main/x86_64/APKINDEX.tar.gz; 83233ea lock	Alpine signed repository index
 input	musl-1.2.6-r2.apk	415475	573712e2f49c15bfc20a2699f204acdfc74c772722b15e7353d768057fae0e71	https://dl-cdn.alpinelinux.org/alpine/v3.24/main/x86_64/musl-1.2.6-r2.apk	MIT

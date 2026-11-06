@@ -13,22 +13,26 @@ output=${RISH_RUNTIME_SERVICES_OUTPUT_DIR:-"$PWD/.build/runtime-service-tests/$(
 if [[ -n ${RISH_RUNTIME_SERVICES_XCTESTRUN:-} ]]; then
   plan=$RISH_RUNTIME_SERVICES_XCTESTRUN
 else
-  plans=("$PWD"/.build/runtime-environments/ui-preview/DerivedData/Build/Products/*.xctestrun)
+  plans=("$PWD"/.build/preview-tests/DerivedData/Build/Products/*.xctestrun)
   [[ ${#plans[@]} == 1 && -f ${plans[0]} ]] || {
     echo 'Set RISH_RUNTIME_SERVICES_XCTESTRUN to the already-built simulator test plan containing AgentRuntimeServiceLiveTests.' >&2; exit 1;
   }
   plan=${plans[0]}
 fi
 mkdir -p "$output"
-python3 - "$plan" "$output/RuntimeServices.xctestrun" "$fixture" "$sources" <<'PY'
-import hashlib, json, pathlib, plistlib, re, stat, sys
-original, target, fixture, sources = map(pathlib.Path, sys.argv[1:])
+python3 - "$plan" "$output/RuntimeServices.xctestrun" "$fixture" "$sources" "$PWD/runtime-environments/catalog.json" "$PWD/scripts/ci/prepare-runtime-fixtures.py" <<'PY'
+import hashlib, importlib.util, json, pathlib, plistlib, re, stat, sys
+original, target, fixture, sources, catalog, verifier = map(pathlib.Path, sys.argv[1:])
 if not original.is_file(): raise SystemExit('The existing xctestrun is missing; build the new test class first.')
 if not fixture.is_absolute() or not sources.is_absolute(): raise SystemExit('Fixture paths must be absolute.')
 if fixture.is_symlink() or not fixture.is_dir(): raise SystemExit('Fixture directory must be a real directory.')
 manifest_path = fixture / 'fixture.json'
 if manifest_path.is_symlink() or manifest_path.stat().st_size > 65536: raise SystemExit('Invalid fixture manifest.')
 manifest = json.loads(manifest_path.read_bytes())
+spec = importlib.util.spec_from_file_location('runtime_fixture_pinning', verifier)
+pinning = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(pinning)
+pinning.validate_fixture_catalog(manifest, json.loads(catalog.read_bytes()))
 if set(manifest) != {'schema_version', 'packages'} or type(manifest['schema_version']) is not int or manifest['schema_version'] != 1:
     raise SystemExit('Unsupported fixture manifest.')
 expected = {'python':'python.py', 'java':'Main.java', 'go':'go.go', 'rust':'rust.rs', 'bun':'bun.js', 'node':'node.js'}
@@ -79,6 +83,7 @@ def visit(value):
                 'RISH_RUNTIME_SERVICES_SOURCE_DIR':str(sources),
             })
             value['EnvironmentVariables'].pop('RISH_RUNTIME_ENVIRONMENTS_LIVE', None)
+            value['EnvironmentVariables'].pop('RISH_RUNTIME_SERVICES_DIAGNOSTIC_FIXTURE', None)
             value['OnlyTestIdentifiers'] = ['AgentRuntimeServiceLiveTests']
             value.pop('SkipTestIdentifiers', None)
             updated += 1

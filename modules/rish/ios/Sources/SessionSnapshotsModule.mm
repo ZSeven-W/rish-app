@@ -1,5 +1,5 @@
 #import <Foundation/Foundation.h>
-#import <React/RCTBridgeModule.h>
+#import <RishNative/RishNativeModule.h>
 #import <os/log.h>
 
 #import "SessionSnapshotStore.h"
@@ -115,7 +115,7 @@ static NSDictionary *DSHSessionBridgeFreshDictionary(
     NSArray<NSString *> *keys,
     NSArray *values);
 
-/// React Native owns the request containers supplied to an exported method and
+/// app UI owns the request containers supplied to an exported method and
 /// may mutate or release them as soon as that method returns. Capture one
 /// bounded, JSON-compatible, deeply immutable value synchronously, before the
 /// request is retained by any queue. The JSON text held in fields such as
@@ -498,7 +498,7 @@ static NSDictionary *DSHSessionBridgeSanitizeResult(
 
   if (operation == DSHSessionBridgeOperationLoad) {
     // Every load result also reports which process launch wrote the stored
-    // envelope and which launch is reading it; JS hydration compares the two
+    // envelope and which launch is reading it; UI hydration compares the two
     // to interrupt attempts left behind by a dead writer.
     if ([status isEqualToString:@"missing"]) {
       NSArray<NSString *> *keys = @[
@@ -666,7 +666,7 @@ static NSDictionary *DSHSessionBridgeSanitizeResult(
 }
 
 static NSString *DSHSessionBridgeCodeForError(NSError *error) {
-  // A nil result with no error stays E_SESSION_PERSISTENCE: the JS recovery
+  // A nil result with no error stays E_SESSION_PERSISTENCE: the UI recovery
   // surface treats it as "storage did not confirm", and the os_log line in
   // performOperation: records the native domain and code for diagnosis.
   if (error == nil) return DSHSessionBridgePersistence;
@@ -706,24 +706,24 @@ static NSString *DSHSessionBridgeCodeForError(NSError *error) {
   return DSHSessionBridgeNative;
 }
 
-static void DSHSessionBridgeReject(RCTPromiseRejectBlock reject,
+static void DSHSessionBridgeReject(RishRejectBlock reject,
                                    NSString *code) {
   if (reject != nil) reject(code, code, nil);
 }
 
-@interface SessionSnapshotsModule : NSObject <RCTBridgeModule>
+@interface SessionSnapshotsModule : NSObject <RishNativeModule>
 @property(nonatomic, strong) DSHSessionSnapshotStore *store;
 @property(nonatomic, strong) DSHSessionWorkspaceCoordinator *coordinator;
 @property(nonatomic, strong) dispatch_queue_t operationQueue;
 
 // Native-only initializer used by focused bridge tests. It is intentionally
-// not an exported React Native method.
+// not an exported app UI method.
 - (instancetype)initWithStore:(DSHSessionSnapshotStore *)store;
 @end
 
 @implementation SessionSnapshotsModule
 
-RCT_EXPORT_MODULE(SessionSnapshots)
+RISH_NATIVE_MODULE(SessionSnapshots)
 
 + (BOOL)requiresMainQueueSetup {
   return NO;
@@ -768,8 +768,8 @@ RCT_EXPORT_MODULE(SessionSnapshots)
 
 - (void)performOperation:(DSHSessionBridgeOperation)operation
                  request:(id)request
-                resolver:(RCTPromiseResolveBlock)resolve
-                rejecter:(RCTPromiseRejectBlock)reject
+                resolver:(RishResolveBlock)resolve
+                rejecter:(RishRejectBlock)reject
                   invoke:(NSDictionary *(^)(DSHSessionSnapshotStore *store,
                                             id request,
                                             NSError **error))invoke {
@@ -813,9 +813,9 @@ RCT_EXPORT_MODULE(SessionSnapshots)
   });
 }
 
-RCT_REMAP_METHOD(loadSessionSnapshot,
-                 loadSessionSnapshotWithResolver:(RCTPromiseResolveBlock)resolve
-                 rejecter:(RCTPromiseRejectBlock)reject) {
+RISH_NATIVE_METHOD(loadSessionSnapshot,
+                 loadSessionSnapshotWithResolver:(RishResolveBlock)resolve
+                 rejecter:(RishRejectBlock)reject) {
   [self performOperation:DSHSessionBridgeOperationLoad
                  request:nil
                 resolver:resolve
@@ -827,10 +827,10 @@ RCT_REMAP_METHOD(loadSessionSnapshot,
   }];
 }
 
-RCT_REMAP_METHOD(casPersistSession,
+RISH_NATIVE_METHOD(casPersistSession,
                  casPersistSessionRequest:(id)request
-                 resolver:(RCTPromiseResolveBlock)resolve
-                 rejecter:(RCTPromiseRejectBlock)reject) {
+                 resolver:(RishResolveBlock)resolve
+                 rejecter:(RishRejectBlock)reject) {
   NSDictionary *capturedRequest = DSHSessionBridgeCaptureRequest(request);
   if (capturedRequest == nil) {
     DSHSessionBridgeReject(reject, DSHSessionBridgeInvalid);
@@ -849,10 +849,10 @@ RCT_REMAP_METHOD(casPersistSession,
   }];
 }
 
-RCT_REMAP_METHOD(querySessionCommit,
+RISH_NATIVE_METHOD(querySessionCommit,
                  querySessionCommitRequest:(id)request
-                 resolver:(RCTPromiseResolveBlock)resolve
-                 rejecter:(RCTPromiseRejectBlock)reject) {
+                 resolver:(RishResolveBlock)resolve
+                 rejecter:(RishRejectBlock)reject) {
   NSDictionary *capturedRequest = DSHSessionBridgeCaptureRequest(request);
   if (capturedRequest == nil) {
     DSHSessionBridgeReject(reject, DSHSessionBridgeInvalid);
@@ -871,10 +871,10 @@ RCT_REMAP_METHOD(querySessionCommit,
   }];
 }
 
-RCT_REMAP_METHOD(persistSessionWithWorkspaceClearance,
+RISH_NATIVE_METHOD(persistSessionWithWorkspaceClearance,
                  persistSessionWithWorkspaceClearanceRequest:(id)request
-                 resolver:(RCTPromiseResolveBlock)resolve
-                 rejecter:(RCTPromiseRejectBlock)reject) {
+                 resolver:(RishResolveBlock)resolve
+                 rejecter:(RishRejectBlock)reject) {
   NSDictionary *capturedRequest = DSHSessionBridgeCaptureRequest(request);
   if (capturedRequest == nil) {
     DSHSessionBridgeReject(reject, DSHSessionBridgeInvalid);
@@ -893,10 +893,10 @@ RCT_REMAP_METHOD(persistSessionWithWorkspaceClearance,
   }];
 }
 
-RCT_REMAP_METHOD(queryWorkspaceClearance,
+RISH_NATIVE_METHOD(queryWorkspaceClearance,
                  queryWorkspaceClearanceRequest:(id)request
-                 resolver:(RCTPromiseResolveBlock)resolve
-                 rejecter:(RCTPromiseRejectBlock)reject) {
+                 resolver:(RishResolveBlock)resolve
+                 rejecter:(RishRejectBlock)reject) {
   NSDictionary *capturedRequest = DSHSessionBridgeCaptureRequest(request);
   if (capturedRequest == nil) {
     DSHSessionBridgeReject(reject, DSHSessionBridgeInvalid);
@@ -914,25 +914,21 @@ RCT_REMAP_METHOD(queryWorkspaceClearance,
   }];
 }
 
-// Synchronous on purpose: a pure digest of the candidate bytes that runs on
-// the calling JS thread. It never touches the shared queue, the CAS lock or
-// the store, so it cannot reorder or block a persist. JS uses it to replace
-// its interpreter-side SHA-256 of the whole session; when the method is
-// missing or answers nil, JS falls back to its own implementation.
-// JS timing marks land in the same unified log as the native operation
-// timings, so one device syslog shows both sides of a checkpoint. Synchronous
-// so ordering is exact; it does nothing but log.
-RCT_EXPORT_BLOCKING_SYNCHRONOUS_METHOD(markTiming:(id)label elapsed:(id)elapsedMs) {
+// Timing marks share the unified log with native operations. This method is
+// synchronous and only logs; it never touches the shared queue, CAS, or store.
+RISH_NATIVE_SYNC(markTiming:(id)label elapsed:(id)elapsedMs) {
   if (![label isKindOfClass:NSString.class] || ![elapsedMs isKindOfClass:NSNumber.class]) {
     return nil;
   }
-  os_log(OS_LOG_DEFAULT, "js_timing label=%{public}@ elapsed_ms=%{public}.1f",
+  os_log(OS_LOG_DEFAULT, "shell_timing label=%{public}@ elapsed_ms=%{public}.1f",
          [(NSString *)label substringToIndex:MIN((NSUInteger)64, [(NSString *)label length])],
          [(NSNumber *)elapsedMs doubleValue]);
   return nil;
 }
 
-RCT_EXPORT_BLOCKING_SYNCHRONOUS_METHOD(sessionCandidateDigest:(id)candidate) {
+// Pure digest of the candidate bytes. The host executes this on the module
+// queue, without touching the CAS lock or store state.
+RISH_NATIVE_SYNC(sessionCandidateDigest:(id)candidate) {
   if (![candidate isKindOfClass:NSString.class]) return nil;
   CFAbsoluteTime began = CFAbsoluteTimeGetCurrent();
   NSString *digest = [DSHSessionSnapshotStore candidateDigestForSessionJSON:candidate];

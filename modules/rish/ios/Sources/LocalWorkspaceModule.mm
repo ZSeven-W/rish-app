@@ -1,5 +1,5 @@
 #import <Foundation/Foundation.h>
-#import <React/RCTBridgeModule.h>
+#import <RishNative/RishNativeModule.h>
 #import <CommonCrypto/CommonDigest.h>
 
 #include "rish_agent_core.h"
@@ -516,7 +516,7 @@ static BOOL LWValidTree(int descriptor, NSUInteger depth, NSUInteger *count) {
   return valid;
 }
 
-@interface LocalWorkspaceModule : NSObject <RCTBridgeModule>
+@interface LocalWorkspaceModule : NSObject <RishNativeModule>
 @property(nonatomic, strong) dispatch_queue_t workspaceQueue;
 @property(nonatomic, strong) DSHLocalWorkspaceAccess *access;
 @property(nonatomic, strong) DSHLocalProjectAccess *projectAccess;
@@ -527,7 +527,7 @@ static BOOL LWValidTree(int descriptor, NSUInteger depth, NSUInteger *count) {
 
 @implementation LocalWorkspaceModule
 
-RCT_EXPORT_MODULE(LocalWorkspace)
+RISH_NATIVE_MODULE(LocalWorkspace)
 
 + (BOOL)requiresMainQueueSetup { return NO; }
 
@@ -571,17 +571,17 @@ RCT_EXPORT_MODULE(LocalWorkspace)
   return self;
 }
 
-- (void)reject:(RCTPromiseRejectBlock)reject error:(NSError *)error {
+- (void)reject:(RishRejectBlock)reject error:(NSError *)error {
   if (error == nil) error = LWError(DSHLocalWorkspaceAccessErrorUnavailable);
   NSString *code = LWStableCode(error);
   reject(code, LWMessageForCode(code), nil);
 }
 
-- (void)invalid:(RCTPromiseRejectBlock)reject {
+- (void)invalid:(RishRejectBlock)reject {
   [self reject:reject error:LWError(DSHLocalWorkspaceAccessErrorInvalid)];
 }
 
-- (void)dispatchInvalid:(RCTPromiseRejectBlock)reject {
+- (void)dispatchInvalid:(RishRejectBlock)reject {
   dispatch_async(self.workspaceQueue, ^{ [self invalid:reject]; });
 }
 
@@ -1190,9 +1190,9 @@ RCT_EXPORT_MODULE(LocalWorkspace)
   return receipt;
 }
 
-RCT_REMAP_METHOD(capabilities,
-                 capabilitiesWithResolver:(RCTPromiseResolveBlock)resolve
-                 rejecter:(RCTPromiseRejectBlock)reject) {
+RISH_NATIVE_METHOD(capabilities,
+                 capabilitiesWithResolver:(RishResolveBlock)resolve
+                 rejecter:(RishRejectBlock)reject) {
   (void)reject;
   resolve(@{
     @"schema_version": @1,
@@ -1209,10 +1209,10 @@ RCT_REMAP_METHOD(capabilities,
   });
 }
 
-RCT_REMAP_METHOD(listV2,
+RISH_NATIVE_METHOD(listV2,
                  listV2Request:(id)requestValue
-                 resolver:(RCTPromiseResolveBlock)resolve
-                 rejecter:(RCTPromiseRejectBlock)reject) {
+                 resolver:(RishResolveBlock)resolve
+                 rejecter:(RishRejectBlock)reject) {
   NSDictionary *request = [requestValue isKindOfClass:NSDictionary.class] ? requestValue : nil;
   if (!LWExact(request, @[@"schema_version", @"root", @"path", @"max_entries"]) ||
       !LWSchemaOne(request[@"schema_version"]) || !LWIsSafeInteger(request[@"max_entries"], NO)) {
@@ -1286,10 +1286,10 @@ RCT_REMAP_METHOD(listV2,
   });
 }
 
-RCT_REMAP_METHOD(readV2,
+RISH_NATIVE_METHOD(readV2,
                  readV2Request:(id)requestValue
-                 resolver:(RCTPromiseResolveBlock)resolve
-                 rejecter:(RCTPromiseRejectBlock)reject) {
+                 resolver:(RishResolveBlock)resolve
+                 rejecter:(RishRejectBlock)reject) {
   NSDictionary *request = [requestValue isKindOfClass:NSDictionary.class] ? requestValue : nil;
   if (!LWExact(request, @[@"schema_version", @"root", @"path", @"max_bytes"]) ||
       !LWSchemaOne(request[@"schema_version"]) || !LWIsSafeInteger(request[@"max_bytes"], NO) ||
@@ -1329,10 +1329,10 @@ RCT_REMAP_METHOD(readV2,
   });
 }
 
-RCT_REMAP_METHOD(writeV2,
+RISH_NATIVE_METHOD(writeV2,
                  writeV2Request:(id)requestValue
-                 resolver:(RCTPromiseResolveBlock)resolve
-                 rejecter:(RCTPromiseRejectBlock)reject) {
+                 resolver:(RishResolveBlock)resolve
+                 rejecter:(RishRejectBlock)reject) {
   NSDictionary *request = [requestValue isKindOfClass:NSDictionary.class] ? requestValue : nil;
   if (!LWExact(request, @[@"schema_version", @"root", @"path", @"content", @"expected_revision", @"create_only"]) ||
       !LWSchemaOne(request[@"schema_version"]) || ![request[@"content"] isKindOfClass:NSString.class] ||
@@ -1380,10 +1380,10 @@ RCT_REMAP_METHOD(writeV2,
   });
 }
 
-RCT_REMAP_METHOD(createDirectoryV2,
+RISH_NATIVE_METHOD(createDirectoryV2,
                  createDirectoryV2Request:(id)requestValue
-                 resolver:(RCTPromiseResolveBlock)resolve
-                 rejecter:(RCTPromiseRejectBlock)reject) {
+                 resolver:(RishResolveBlock)resolve
+                 rejecter:(RishRejectBlock)reject) {
   NSDictionary *request = [requestValue isKindOfClass:NSDictionary.class] ? requestValue : nil;
   if (!LWExact(request, @[@"schema_version", @"root", @"path"]) || !LWSchemaOne(request[@"schema_version"]) || ![request[@"path"] isKindOfClass:NSString.class]) { [self dispatchInvalid:reject]; return; }
   NSError *validationError = nil;
@@ -1426,10 +1426,10 @@ RCT_REMAP_METHOD(createDirectoryV2,
   });
 }
 
-RCT_REMAP_METHOD(renameEntryV2,
+RISH_NATIVE_METHOD(renameEntryV2,
                  renameEntryV2Request:(id)requestValue
-                 resolver:(RCTPromiseResolveBlock)resolve
-                 rejecter:(RCTPromiseRejectBlock)reject) {
+                 resolver:(RishResolveBlock)resolve
+                 rejecter:(RishRejectBlock)reject) {
   NSDictionary *request = [requestValue isKindOfClass:NSDictionary.class] ? requestValue : nil;
   if (!LWExact(request, @[@"schema_version", @"root", @"source_path", @"destination_path"]) || !LWSchemaOne(request[@"schema_version"]) || ![request[@"source_path"] isKindOfClass:NSString.class] || ![request[@"destination_path"] isKindOfClass:NSString.class]) { [self dispatchInvalid:reject]; return; }
   NSError *validationError = nil;
@@ -1515,10 +1515,10 @@ RCT_REMAP_METHOD(renameEntryV2,
   });
 }
 
-RCT_REMAP_METHOD(listTrashV2,
+RISH_NATIVE_METHOD(listTrashV2,
                  listTrashV2Request:(id)requestValue
-                 resolver:(RCTPromiseResolveBlock)resolve
-                 rejecter:(RCTPromiseRejectBlock)reject) {
+                 resolver:(RishResolveBlock)resolve
+                 rejecter:(RishRejectBlock)reject) {
   NSDictionary *request = [requestValue isKindOfClass:NSDictionary.class] ? requestValue : nil;
   if (!LWExact(request, @[@"schema_version", @"root", @"max_entries"]) || !LWSchemaOne(request[@"schema_version"]) || !LWIsSafeInteger(request[@"max_entries"], NO)) { [self dispatchInvalid:reject]; return; }
   NSError *validationError = nil;
@@ -1566,10 +1566,10 @@ RCT_REMAP_METHOD(listTrashV2,
   });
 }
 
-RCT_REMAP_METHOD(trashEntryV2,
+RISH_NATIVE_METHOD(trashEntryV2,
                  trashEntryV2Request:(id)requestValue
-                 resolver:(RCTPromiseResolveBlock)resolve
-                 rejecter:(RCTPromiseRejectBlock)reject) {
+                 resolver:(RishResolveBlock)resolve
+                 rejecter:(RishRejectBlock)reject) {
   NSDictionary *request = [requestValue isKindOfClass:NSDictionary.class] ? requestValue : nil;
   if (!LWExact(request, @[@"schema_version", @"root", @"path"]) || !LWSchemaOne(request[@"schema_version"]) || ![request[@"path"] isKindOfClass:NSString.class]) { [self dispatchInvalid:reject]; return; }
   NSError *validationError = nil;
@@ -1677,10 +1677,10 @@ RCT_REMAP_METHOD(trashEntryV2,
   });
 }
 
-RCT_REMAP_METHOD(restoreFromTrashV2,
+RISH_NATIVE_METHOD(restoreFromTrashV2,
                  restoreFromTrashV2Request:(id)requestValue
-                 resolver:(RCTPromiseResolveBlock)resolve
-                 rejecter:(RCTPromiseRejectBlock)reject) {
+                 resolver:(RishResolveBlock)resolve
+                 rejecter:(RishRejectBlock)reject) {
   NSDictionary *request = [requestValue isKindOfClass:NSDictionary.class] ? requestValue : nil;
   if (!LWExact(request, @[@"schema_version", @"root", @"trash_id", @"destination_path"]) || !LWSchemaOne(request[@"schema_version"]) || !LWUUID(request[@"trash_id"]) || !(request[@"destination_path"] == NSNull.null || [request[@"destination_path"] isKindOfClass:NSString.class])) { [self dispatchInvalid:reject]; return; }
   NSError *validationError = nil;
@@ -1836,10 +1836,10 @@ RCT_REMAP_METHOD(restoreFromTrashV2,
   });
 }
 
-RCT_REMAP_METHOD(executePortableToolV2,
+RISH_NATIVE_METHOD(executePortableToolV2,
                  executePortableToolV2Request:(id)requestValue
-                 resolver:(RCTPromiseResolveBlock)resolve
-                 rejecter:(RCTPromiseRejectBlock)reject) {
+                 resolver:(RishResolveBlock)resolve
+                 rejecter:(RishRejectBlock)reject) {
   NSDictionary *request = [requestValue isKindOfClass:NSDictionary.class] ? requestValue : nil;
   if (!LWExact(request, @[@"schema_version", @"root", @"tool", @"path", @"options"]) ||
       !LWSchemaOne(request[@"schema_version"]) || ![request[@"tool"] isKindOfClass:NSString.class] ||

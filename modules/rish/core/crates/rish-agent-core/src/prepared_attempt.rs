@@ -546,7 +546,8 @@ fn authority_matches_request(
     policy: Option<&Value>,
     registry: &Value,
 ) -> bool {
-    if !equal(get(authority, "task_id"), get(request, "task_id"))
+    if !crate::assistant_context::authority_valid(authority)
+        || !equal(get(authority, "task_id"), get(request, "task_id"))
         || !equal(
             get(authority, "conversation_id"),
             get(request, "conversation_id"),
@@ -597,6 +598,8 @@ pub struct Transaction<'a> {
     pub root: Option<&'a Value>,
     pub policy: Option<&'a Value>,
     pub registry: &'a Value,
+    /// Validated native-store profile fact, never part of the UI request.
+    pub assistant_context: Option<&'a Value>,
     /// `registry.toolsetSHA256`, for the not_agent projection.
     pub toolset_sha256: Option<&'a Value>,
     pub operations: &'a [Value],
@@ -694,6 +697,23 @@ fn transcript_row(
 /// The body of `prepareAgentAttemptWithRequest:`'s WAL transaction.
 pub fn transaction(input: &Transaction) -> Result<Outcome, StoreError> {
     let request = input.request;
+    if request.get("assistant_context").is_some() {
+        return Err(StoreError::InvalidArgument);
+    }
+    let v5 = input.registry["registry_version"] == 5 || request["registry_version"] == 5;
+    if v5 {
+        if input.registry["registry_version"] != 5
+            || request["registry_version"] != 5
+            || !input.assistant_context.is_some_and(|context| {
+                crate::assistant_context::valid(context)
+                    && context["conversation_id"] == request["conversation_id"]
+            })
+        {
+            return Err(StoreError::InvalidArgument);
+        }
+    } else if input.assistant_context.is_some() {
+        return Err(StoreError::InvalidArgument);
+    }
     let operation_id = get(request, "operation_id");
     let checkpoint = get(request, "committed_checkpoint");
     let controller_generation =
@@ -701,6 +721,17 @@ pub fn transaction(input: &Transaction) -> Result<Outcome, StoreError> {
     let journal_revision = checkpoint.and_then(|c| get(c, "journal_revision"));
     let mut clock = input.timestamps.iter();
     let mut tick = || clock.next().cloned().unwrap_or(Value::Null);
+
+    let existing_authority = input.authorities.iter().find(|a| {
+        equal(get(a, "task_id"), get(request, "task_id"))
+            && equal(get(a, "attempt_id"), get(request, "attempt_id"))
+    });
+    if existing_authority.is_some_and(|authority| {
+        !crate::assistant_context::authority_valid(authority)
+            || authority["conversation_id"] != request["conversation_id"]
+    }) {
+        return Ok(Outcome::Conflict);
+    }
 
     if let Some(existing) = input
         .operations
@@ -729,10 +760,6 @@ pub fn transaction(input: &Transaction) -> Result<Outcome, StoreError> {
         return Ok(Outcome::Replay { result });
     }
 
-    let existing_authority = input.authorities.iter().find(|a| {
-        equal(get(a, "task_id"), get(request, "task_id"))
-            && equal(get(a, "attempt_id"), get(request, "attempt_id"))
-    });
     let mut new_transcript: Option<Value> = None;
     let mut new_authority: Option<Value> = None;
     let status;
@@ -798,7 +825,7 @@ pub fn transaction(input: &Transaction) -> Result<Outcome, StoreError> {
             };
             let created_at = tick();
             let updated_at = tick();
-            let authority = json!({
+            let mut authority = json!({
                 "schema_version": 2,
                 "task_id": get(request, "task_id"),
                 "conversation_id": get(request, "conversation_id"),
@@ -821,6 +848,12 @@ pub fn transaction(input: &Transaction) -> Result<Outcome, StoreError> {
                 "created_at": created_at,
                 "updated_at": updated_at,
             });
+            if let Some(context) = input.assistant_context {
+                authority["assistant_context"] = context.clone();
+            }
+            if !crate::assistant_context::authority_valid(&authority) {
+                return Err(StoreError::InvalidArgument);
+            }
             status = "prepared";
             attempt_projection =
                 projection_for_authority(&authority, controller_generation, journal_revision);
@@ -962,6 +995,7 @@ fn reduce_json_inner(input: &str, session_json: &[u8]) -> Result<Value, StoreErr
                 root: present("root"),
                 policy: present("policy"),
                 registry: field("registry")?,
+                assistant_context: get(&envelope, "assistant_context"),
                 toolset_sha256: get(&envelope, "toolset_sha256"),
                 operations: array(get(&envelope, "operations")),
                 operation_results: array(get(&envelope, "operation_results")),
@@ -1051,6 +1085,7 @@ mod tests {
             root: Some(&root),
             policy: Some(&policy),
             registry: &registry,
+            assistant_context: None,
             toolset_sha256: registry.get("toolset_sha256"),
             operations: &[],
             operation_results: &[],
@@ -1079,6 +1114,7 @@ mod tests {
             root: Some(&root),
             policy: Some(&policy),
             registry: &registry,
+            assistant_context: None,
             toolset_sha256: registry.get("toolset_sha256"),
             operations: std::slice::from_ref(&operation),
             operation_results: std::slice::from_ref(&operation_result),
@@ -1104,6 +1140,7 @@ mod tests {
             root: None,
             policy: None,
             registry: &registry,
+            assistant_context: None,
             toolset_sha256: registry.get("toolset_sha256"),
             operations: &[],
             operation_results: &[],

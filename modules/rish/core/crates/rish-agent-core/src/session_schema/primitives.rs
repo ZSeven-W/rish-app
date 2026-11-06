@@ -198,6 +198,7 @@ pub fn valid_agent_failure_code(value: Option<&Value>) -> bool {
         "E_AGENT_RETRY_LINEAGE",
         "E_AGENT_PERSISTENCE",
         "E_AGENT_CONFLICT",
+        "E_AGENT_NOT_FOUND",
         "E_AGENT_EVENT_CAPACITY",
         "E_AGENT_ROUND_LIMIT",
         "E_AGENT_CANCELLED",
@@ -496,6 +497,13 @@ pub fn valid_project_context_error_code(value: Option<&Value>) -> bool {
 }
 
 pub const REGISTERED_TOOLS: &[&str] = &[
+    "list_assistant_tasks",
+    "create_assistant_task",
+    "update_assistant_task",
+    "search_assistant_memory",
+    "remember_assistant_memory",
+    "forget_assistant_memory",
+    "ask_user",
     "list_dir",
     "read_file",
     "write_file",
@@ -513,6 +521,13 @@ pub const REGISTERED_TOOLS: &[&str] = &[
 
 pub fn valid_agent_summary_key(value: Option<&Value>) -> bool {
     const KEYS: &[&str] = &[
+        "agent.list_assistant_tasks",
+        "agent.create_assistant_task",
+        "agent.update_assistant_task",
+        "agent.search_assistant_memory",
+        "agent.remember_assistant_memory",
+        "agent.forget_assistant_memory",
+        "agent.ask_user",
         "agent.list_dir",
         "agent.read_file",
         "agent.write_file",
@@ -538,8 +553,9 @@ pub fn agent_summary_matches_name(summary: Option<&Value>, name: Option<&Value>)
     let (Some(summary), Some(name)) = (as_str(summary), as_str(name)) else {
         return false;
     };
-    if (matches!(name, "start_guest_cgi" | "stop_guest_cgi")
-        || crate::runtime_tools::is_runtime(name))
+    if (matches!(name, "ask_user" | "start_guest_cgi" | "stop_guest_cgi")
+        || crate::runtime_tools::is_runtime(name)
+        || crate::assistant_tools::is_assistant(name))
         && summary == "agent.unknown"
     {
         return true;

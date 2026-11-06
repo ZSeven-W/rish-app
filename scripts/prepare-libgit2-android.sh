@@ -1,6 +1,6 @@
 #!/bin/zsh
 # Builds OpenSSL, libssh2 and libgit2 for Android and stages them as
-# apps/mobile/android/rish-libgit2 for the app's JNI shim. The companion of
+# modules/rish/android/rish-libgit2 for the app's JNI shim. The companion of
 # prepare-libgit2-ios.sh: same sources, same pinned commits, same libgit2
 # options -- except the HTTPS backend, because Android has no SecureTransport
 # and OpenSSL is what is already being built here for libssh2.
@@ -11,7 +11,7 @@ set -euo pipefail
 readonly SCRIPT_DIR=${0:A:h}
 readonly APP_ROOT=${SCRIPT_DIR:h}
 readonly DEPS_ROOT=${APP_ROOT}/.build/deps
-readonly OUTPUT_ROOT=${APP_ROOT}/apps/mobile/android/rish-libgit2
+readonly OUTPUT_ROOT=${APP_ROOT}/modules/rish/android/rish-libgit2
 
 # The same pins the iOS vendor build uses. Two hosts building one library from
 # two commits would be a difference nobody would see until a repository read

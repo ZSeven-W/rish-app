@@ -48,12 +48,6 @@ static BOOL Fail(NSError **error, NSString *code) {
   return NO;
 }
 
-// Only a missed supervision deadline is transient. Every other failure states
-// something the caller must act on, and must never be waited out.
-static BOOL Transient(NSError *error) {
-  return [error.userInfo[@"code"] isEqual:@"E_PROGRAM_TIMEOUT"];
-}
-
 static BOOL LooksLikeHTTP(NSData *bytes) {
   if (bytes.length < 12) return NO;
   const char *raw = (const char *)bytes.bytes;
@@ -162,6 +156,10 @@ static BOOL ValidArgs(id value) {
 - (NSData *)forwardRequest:(NSData *)request path:(NSString *)path port:(NSUInteger)port
                     session:(void *)session deadline:(NSTimeInterval)deadline error:(NSError **)error {
   if (![self stageData:request path:path session:session deadline:deadline error:error]) return nil;
+  return [self forwardStagedRequestAtPath:path port:port session:session deadline:deadline error:error];
+}
+- (NSData *)forwardStagedRequestAtPath:(NSString *)path port:(NSUInteger)port
+                    session:(void *)session deadline:(NSTimeInterval)deadline error:(NSError **)error {
   NSData *response = nil;
   // No guest-clock -w or timeout applet: the FFI host monotonic deadline
   // bounds the whole request, including staging and reading until TCP EOF.
@@ -259,33 +257,36 @@ static BOOL ValidArgs(id value) {
           executionTimeoutMillisecondsForFamily:lease.manifest[@"family"] entryPath:entryPath] / 1000.0;
       NSData *probe = [[NSString stringWithFormat:@"GET / HTTP/1.1\r\nHost: 127.0.0.1:%lu\r\nConnection: close\r\n\r\n",
           (unsigned long)port] dataUsingEncoding:NSUTF8StringEncoding];
+      // The readiness request is immutable. Rewriting it on every refused
+      // connection spawns extra shells/base64 decoders alongside compilation.
+      // nc and supervision still run the guest; no host-side sleep stalls it.
+      if (![self stageData:probe path:requestPath session:session deadline:deadline error:inner]) return nil;
       NSMutableDictionary *offsets = [NSMutableDictionary dictionary];
       BOOL listening = NO;
       NSData *probeResponse = nil;
       while (!self.cancelled && Now() < deadline) {
         NSError *failure = nil;
-        NSData *response = [self forwardRequest:probe path:requestPath port:port session:session deadline:deadline error:&failure];
+        NSData *response = [self forwardStagedRequestAtPath:requestPath port:port session:session deadline:deadline error:&failure];
         if (response) { listening = YES; probeResponse = response; break; }
         if (![failure.userInfo[@"code"] isEqual:@"E_PROGRAM_EXEC"]) {
-          [self readLogs:root session:session offsets:offsets output:output error:nil];
+          // Host deadline/output-limit failures can poison the FFI session;
+          // do not try more guest commands and obscure the original cause.
           *inner = failure; return nil;
         }
         NSError *supervision = nil;
         NSNumber *status = [self exitStatus:root session:session error:&supervision];
         if (supervision) {
-          // The program compiling ahead of its first listen is the normal case
-          // here, and it is exactly when supervision misses its deadline. One
-          // missed probe says nothing; the overall deadline still ends the wait.
-          if (!Transient(supervision)) { *inner = supervision; return nil; }
-          continue;
+          // A host-side FFI timeout permanently cancels this VM session.
+          // Reusing it cannot recover the background process or its logs.
+          *inner = supervision; return nil;
         }
         if (status) { [self readLogs:root session:session offsets:offsets output:output error:nil];
           *inner = DSHRuntimeProgramError(@"E_PROGRAM_EXEC"); return nil; }
       }
       if (!listening) {
         if (self.cancelled) return nil;
-        // A start that never listened is otherwise reported with no evidence.
-        [self readLogs:root session:session offsets:offsets output:output error:nil];
+        // The shared startup budget is exhausted. A log RPC would exceed that
+        // budget and may reuse a session already cancelled by the FFI.
         Fail(inner, @"E_PROGRAM_TIMEOUT"); return nil;
       }
       [self.condition lock]; self.serving = !self.cancelled; [self.condition unlock];
@@ -311,9 +312,7 @@ static BOOL ValidArgs(id value) {
           NSError *supervision = nil;
           NSNumber *status = [self exitStatus:root session:session error:&supervision];
           if (!supervision) [self readLogs:root session:session offsets:offsets output:output error:&supervision];
-          // A service under load misses these deadlines too. Ending a run the
-          // caller is still using would turn host slowness into program failure.
-          if (supervision && !Transient(supervision)) { *inner = supervision; return nil; }
+          if (supervision) { *inner = supervision; return nil; }
           if (!supervision && status) return status;
           nextStatus = Now() + 0.5;
         }

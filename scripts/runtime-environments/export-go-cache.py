@@ -22,7 +22,7 @@ sync
 entries['init']=(stat.S_IFREG|0o755,(original+script).encode());base=work/'export-base.cpio';warmer.pack_newc(entries,base)
 output=work/'cache-export.tar.disk'
 with output.open('wb') as f:f.truncate(1024**3)
-command=['qemu-system-x86_64','-accel','tcg,thread=single','-machine','microvm,auto-kernel-cmdline=on','-cpu','qemu64','-m','1024','-smp','1','-kernel',str(ROOT/'apps/mobile/ios/Rish/GuestAssets/vmlinuz-virt-6.18.35'),'-initrd',str(base),'-append','console=ttyS0,115200n8 rdinit=/init panic=-1 oops=panic nokaslr','-drive','file='+result['warmed_disk_path']+',format=raw,if=none,id=runtime,readonly=on','-device','virtio-blk-device,drive=runtime','-drive','file='+str(output)+',format=raw,if=none,id=export','-device','virtio-blk-device,drive=export','-nographic','-no-reboot','-nic','none']
+command=['qemu-system-x86_64','-accel','tcg,thread=single','-machine','microvm,auto-kernel-cmdline=on','-cpu','qemu64','-m','1024','-smp','1','-kernel',str(ROOT/'modules/rish/shared/GuestAssets/vmlinuz-virt-6.18.35'),'-initrd',str(base),'-append','console=ttyS0,115200n8 rdinit=/init panic=-1 oops=panic nokaslr','-drive','file='+result['warmed_disk_path']+',format=raw,if=none,id=runtime,readonly=on','-device','virtio-blk-device,drive=runtime','-drive','file='+str(output)+',format=raw,if=none,id=export','-device','virtio-blk-device,drive=export','-nographic','-no-reboot','-nic','none']
 started=time.monotonic()
 with (work/'export-console.log').open('wb') as log:
  p=subprocess.Popen(command,stdout=log,stderr=log,start_new_session=True)

@@ -2,53 +2,79 @@
 
 #include "rish_agent_core.h"
 
-#import <TargetConditionals.h>
-#import "DSHWorkspaceCanonical.h"
 #include <fcntl.h>
 #include <unistd.h>
 
-#include <math.h>
+#include <errno.h>
+#include <string.h>
 #include <sys/stat.h>
 
 static NSUInteger const DSHPresentationMaxFile = 2 * 1024 * 1024;
 static NSUInteger const DSHPresentationMaxTotal = 64 * 1024 * 1024;
-static NSString *DSHPresentationDigest(NSString *text) {
-  return DSHWorkspaceSHA256Hex([text dataUsingEncoding:NSUTF8StringEncoding]);
+// Rust owns archive schema, record hashing, replacement and WAL projection.
+// This facade retains only the cache's filesystem and byte-budget policy.
+static id DSHPresentationReduce(NSDictionary *envelope, NSError **error) {
+  NSData *bytes = DSHAgentCanonicalJSON(envelope, nil);
+  if (!bytes) {
+    DSHSetAgentNativeStoreError(error, DSHAgentNativeStoreErrorInvalidArgument);
+    return nil;
+  }
+  char *raw = rish_agent_round_presentation_reduce((const char *)bytes.bytes, bytes.length);
+  if (!raw) {
+    DSHSetAgentNativeStoreError(error, DSHAgentNativeStoreErrorCorrupt);
+    return nil;
+  }
+  NSData *reply = [NSData dataWithBytes:raw length:strlen(raw)];
+  rish_agent_string_free(raw);
+  id parsed = [NSJSONSerialization JSONObjectWithData:reply options:0 error:nil];
+  if (![parsed isKindOfClass:NSDictionary.class]) {
+    DSHSetAgentNativeStoreError(error, DSHAgentNativeStoreErrorCorrupt);
+    return nil;
+  }
+  if (![parsed[@"ok"] isEqual:@YES]) {
+    NSInteger code = [parsed[@"error"] isKindOfClass:NSNumber.class]
+        ? [parsed[@"error"] integerValue] : 0;
+    if (code < DSHAgentNativeStoreErrorInvalidArgument || code > DSHAgentNativeStoreErrorPersistence) {
+      code = DSHAgentNativeStoreErrorCorrupt;
+    }
+    DSHSetAgentNativeStoreError(error, (DSHAgentNativeStoreErrorCode)code);
+    return nil;
+  }
+  return parsed[@"value"];
 }
-static BOOL DSHPresentationRoundValid(NSDictionary *value) {
-  return DSHAgentExactDictionaryKeys(value, @[@"round_id", @"round_index", @"kind", @"text", @"reasoning", @"assistant_text_sha256", @"reasoning_text_sha256"]) &&
-      DSHAgentCanonicalUUID(value[@"round_id"]) && DSHAgentSafeInteger(value[@"round_index"], 7, YES) &&
-      [@[@"tool_batch", @"final", @"blocked"] containsObject:value[@"kind"]] &&
-      DSHAgentBoundedUTF8String(value[@"text"], DSHPresentationMaxFile, YES, nullptr) &&
-      DSHAgentBoundedUTF8String(value[@"reasoning"], DSHPresentationMaxFile, YES, nullptr) &&
-      [DSHPresentationDigest(value[@"text"]) isEqual:value[@"assistant_text_sha256"]] &&
-      [DSHPresentationDigest(value[@"reasoning"]) isEqual:value[@"reasoning_text_sha256"]];
+static NSMutableDictionary *DSHPresentationEnvelope(NSString *op, id conversationId, id attemptId) {
+  return [@{ @"schema_version": @1, @"op": op,
+    @"conversation_id": conversationId ?: NSNull.null,
+    @"attempt_id": attemptId ?: NSNull.null } mutableCopy];
 }
-static NSDictionary *DSHPresentationRound(NSString *roundId, NSNumber *index, NSString *kind, NSDictionary *message) {
-  NSString *text = message[@"content"], *reasoning = message[@"reasoning_content"];
-  if (![text isKindOfClass:NSString.class] || ![reasoning isKindOfClass:NSString.class]) return nil;
-  NSDictionary *value = @{ @"round_id": roundId, @"round_index": index, @"kind": kind, @"text": text, @"reasoning": reasoning, @"assistant_text_sha256": DSHPresentationDigest(text), @"reasoning_text_sha256": DSHPresentationDigest(reasoning) };
-  return DSHPresentationRoundValid(value) ? value : nil;
+static BOOL DSHPresentationIdentity(id conversationId, id attemptId, NSError **error) {
+  return [DSHPresentationReduce(DSHPresentationEnvelope(@"identity", conversationId, attemptId), error) isEqual:@YES];
 }
 static NSURL *DSHPresentationDirectory(NSURL *walRoot) {
   return [walRoot URLByAppendingPathComponent:@"round-presentations-v1" isDirectory:YES];
 }
-static NSDictionary *DSHPresentationRead(NSURL *url) {
-  int fd = open(url.fileSystemRepresentation, O_RDONLY | O_NOFOLLOW | O_CLOEXEC);
+static NSDictionary *DSHPresentationRead(NSURL *url, NSString *conversationId, NSString *attemptId) {
+  int fd = open(url.fileSystemRepresentation, O_RDONLY | O_NOFOLLOW | O_CLOEXEC | O_NONBLOCK);
   if (fd < 0) return nil;
   struct stat metadata = {};
   if (fstat(fd, &metadata) != 0 || !S_ISREG(metadata.st_mode) || metadata.st_size < 0 || metadata.st_size > DSHPresentationMaxFile) { close(fd); return nil; }
-  NSFileHandle *handle = [[NSFileHandle alloc] initWithFileDescriptor:fd closeOnDealloc:YES];
-  NSData *bytes = [handle readDataToEndOfFile];
-  [handle closeFile];
-  id value = bytes ? [NSJSONSerialization JSONObjectWithData:bytes options:0 error:nil] : nil;
-  if (!DSHAgentExactDictionaryKeys(value, @[@"schema_version", @"conversation_id", @"attempt_id", @"rounds"]) || ![value[@"schema_version"] isEqual:@1] || !DSHAgentCanonicalUUID(value[@"conversation_id"]) || !DSHAgentCanonicalUUID(value[@"attempt_id"]) || ![value[@"rounds"] isKindOfClass:NSArray.class] || [value[@"rounds"] count] > 8) return nil;
-  NSMutableSet *ids = [NSMutableSet set], *indices = [NSMutableSet set];
-  for (NSDictionary *round in value[@"rounds"]) {
-    if (!DSHPresentationRoundValid(round) || [ids containsObject:round[@"round_id"]] || [indices containsObject:round[@"round_index"]]) return nil;
-    [ids addObject:round[@"round_id"]]; [indices addObject:round[@"round_index"]];
+  NSMutableData *bytes = [NSMutableData data];
+  char buffer[8192];
+  while (bytes.length <= DSHPresentationMaxFile) {
+    ssize_t count = read(fd, buffer, MIN(sizeof(buffer), DSHPresentationMaxFile + 1 - bytes.length));
+    if (count < 0 && errno == EINTR) continue;
+    if (count < 0) { close(fd); return nil; }
+    if (count == 0) break;
+    [bytes appendBytes:buffer length:(NSUInteger)count];
   }
-  return value;
+  close(fd);
+  if (bytes.length > DSHPresentationMaxFile) return nil;
+  NSString *json = [[NSString alloc] initWithData:bytes encoding:NSUTF8StringEncoding];
+  if (!json) return nil;
+  NSMutableDictionary *request = DSHPresentationEnvelope(@"decode", conversationId, attemptId);
+  request[@"archive_json"] = json;
+  // Preserve original JSON so the shared strict decoder can see duplicate keys.
+  return DSHPresentationReduce(request, nil);
 }
 // Invoked after a committed session deletion as well as display reads. It
 // never changes session/WAL authority. Capacity eviction affects display only.
@@ -84,9 +110,13 @@ void DSHAgentPruneRoundPresentationCache(NSURL *walRoot, NSSet<NSString *> *conv
 @implementation DSHAgentTranscriptStore
 
 - (void)cacheRoundPresentationForRequest:(NSDictionary *)request message:(NSDictionary *)message kind:(NSString *)kind {
-  if (!DSHAgentCanonicalUUID(request[@"conversation_id"]) || !DSHAgentCanonicalUUID(request[@"attempt_id"])) return;
-  NSDictionary *round = DSHPresentationRound(request[@"round_id"], request[@"round_index"], kind, message);
-  if (!round) return;
+  if (!DSHPresentationIdentity(request[@"conversation_id"], request[@"attempt_id"], nil)) return;
+  if (!DSHAgentBoundedUTF8String(message[@"content"], DSHPresentationMaxFile, YES, nullptr) ||
+      !DSHAgentBoundedUTF8String(message[@"reasoning_content"], DSHPresentationMaxFile, YES, nullptr)) return;
+  id index = request[@"round_index"];
+  // Canonical JSON renders integral floating NSNumbers as integer tokens. Keep
+  // that transport coercion from hiding their original type from the reducer.
+  if ([index isKindOfClass:NSNumber.class] && strchr("fdD", [index objCType][0])) return;
   @synchronized(DSHAgentTranscriptStore.class) {
     NSURL *directory = DSHPresentationDirectory(self.wal.rootURL);
     struct stat metadata = {};
@@ -95,17 +125,15 @@ void DSHAgentPruneRoundPresentationCache(NSURL *walRoot, NSSet<NSString *> *conv
     [directory setResourceValue:@YES forKey:NSURLIsExcludedFromBackupKey error:nil];
     NSString *name = [NSString stringWithFormat:@"%@_%@.json", request[@"conversation_id"], request[@"attempt_id"]];
     NSURL *file = [directory URLByAppendingPathComponent:name];
-    NSDictionary *prior = DSHPresentationRead(file);
-    NSMutableDictionary *byIndex = [NSMutableDictionary dictionary];
-    if ([prior[@"conversation_id"] isEqual:request[@"conversation_id"]] && [prior[@"attempt_id"] isEqual:request[@"attempt_id"]]) {
-      for (NSDictionary *old in prior[@"rounds"]) byIndex[old[@"round_index"]] = old;
-    }
-    byIndex[round[@"round_index"]] = round;
-    NSArray *keys = [byIndex.allKeys sortedArrayUsingSelector:@selector(compare:)];
-    NSMutableArray *rounds = [NSMutableArray array];
-    for (NSNumber *key in keys) [rounds addObject:byIndex[key]];
-    NSDictionary *projection = @{ @"schema_version": @1, @"conversation_id": request[@"conversation_id"], @"attempt_id": request[@"attempt_id"], @"rounds": rounds };
-    NSData *data = DSHAgentCanonicalJSON(projection, nil);
+    NSMutableDictionary *operation = DSHPresentationEnvelope(@"upsert", request[@"conversation_id"], request[@"attempt_id"]);
+    operation[@"prior"] = DSHPresentationRead(file, request[@"conversation_id"], request[@"attempt_id"]) ?: NSNull.null;
+    operation[@"round_id"] = request[@"round_id"] ?: NSNull.null;
+    operation[@"round_index"] = index ?: NSNull.null;
+    operation[@"kind"] = kind ?: NSNull.null;
+    operation[@"text"] = message[@"content"];
+    operation[@"reasoning"] = message[@"reasoning_content"];
+    NSDictionary *projection = DSHPresentationReduce(operation, nil);
+    NSData *data = projection ? DSHAgentCanonicalJSON(projection, nil) : nil;
     if (!data || data.length > DSHPresentationMaxFile) return;
     if (![data writeToURL:file options:NSDataWritingAtomic | NSDataWritingFileProtectionCompleteUntilFirstUserAuthentication error:nil]) return;
     [NSFileManager.defaultManager setAttributes:@{ NSFilePosixPermissions: @0600 } ofItemAtPath:file.path error:nil];
@@ -114,44 +142,29 @@ void DSHAgentPruneRoundPresentationCache(NSURL *walRoot, NSSet<NSString *> *conv
 }
 
 - (NSDictionary *)roundPresentationsForConversation:(NSString *)conversationId attempt:(NSString *)attemptId error:(NSError **)error {
-  if (!DSHAgentCanonicalUUID(conversationId) || !DSHAgentCanonicalUUID(attemptId)) {
-    DSHSetAgentNativeStoreError(error, DSHAgentNativeStoreErrorInvalidArgument); return nil;
-  }
-  // snapshotWithError verifies the immutable WAL and transcript hashes. This
-  // query never reconciles/replays/advances an authority or provider round.
+  if (!DSHPresentationIdentity(conversationId, attemptId, error)) return nil;
+  // Snapshot verification remains native authority. Display never reconciles,
+  // replays, advances or writes the WAL, transcript or provider round.
   NSDictionary *state = [self.wal snapshotWithError:error];
   if (!state) return nil;
-  NSMutableDictionary *byIndex = [NSMutableDictionary dictionary];
+  NSMutableDictionary *operation = DSHPresentationEnvelope(@"project", conversationId, attemptId);
   @synchronized(DSHAgentTranscriptStore.class) {
     NSURL *file = [DSHPresentationDirectory(self.wal.rootURL) URLByAppendingPathComponent:[NSString stringWithFormat:@"%@_%@.json", conversationId, attemptId]];
-    NSDictionary *cached = DSHPresentationRead(file);
-    if ([cached[@"conversation_id"] isEqual:conversationId] && [cached[@"attempt_id"] isEqual:attemptId]) {
-      for (NSDictionary *round in cached[@"rounds"]) byIndex[round[@"round_index"]] = round;
-    }
+    operation[@"cached"] = DSHPresentationRead(file, conversationId, attemptId) ?: NSNull.null;
   }
+  // Collect only this attempt's verified rows. Rust owns all round/ref/message
+  // selection and merge rules; the cache's encoded file cap is not a view cap.
+  NSMutableArray *rounds = [NSMutableArray array], *transcripts = [NSMutableArray array];
   for (NSDictionary *row in state[@"rounds"]) {
-    NSDictionary *locator = row[@"locator"];
-    if (![locator[@"attempt_id"] isEqual:attemptId] || ![row[@"state"] isEqual:@"completed"]) continue;
-    NSString *kind = row[@"terminal_kind"];
-    if (![@[@"tool_batch", @"final", @"blocked"] containsObject:kind]) continue;
-    NSDictionary *reference = row[@"transcript_after"];
-    for (NSDictionary *transcript in state[@"transcripts"]) {
-      if (![transcript[@"attempt_id"] isEqual:attemptId] || ![transcript[@"transcript_ref"] isEqual:reference[@"transcript_ref"]] || [transcript[@"generation"] unsignedLongLongValue] < [reference[@"generation"] unsignedLongLongValue]) continue;
-      for (NSDictionary *message in [transcript[@"messages"] reverseObjectEnumerator]) {
-        if (![message[@"role"] isEqual:@"assistant"] || ![message[@"round_index"] isEqual:locator[@"round_index"]]) continue;
-        NSDictionary *round = DSHPresentationRound(locator[@"round_id"], locator[@"round_index"], kind, message);
-        if (round) byIndex[round[@"round_index"]] = round;
-        break;
-      }
-    }
+    if ([row[@"locator"][@"attempt_id"] isEqual:attemptId]) [rounds addObject:row];
   }
-  if (byIndex.count > 8) { DSHSetAgentNativeStoreError(error, DSHAgentNativeStoreErrorCorrupt); return nil; }
-  NSMutableArray *rounds = [NSMutableArray array];
-  for (NSNumber *index in [byIndex.allKeys sortedArrayUsingSelector:@selector(compare:)]) [rounds addObject:byIndex[index]];
-  return @{ @"schema_version": @1, @"conversation_id": conversationId, @"attempt_id": attemptId, @"rounds": rounds };
+  for (NSDictionary *row in state[@"transcripts"]) {
+    if ([row[@"attempt_id"] isEqual:attemptId]) [transcripts addObject:row];
+  }
+  operation[@"rounds"] = rounds;
+  operation[@"transcripts"] = transcripts;
+  return DSHPresentationReduce(operation, error);
 }
-
-
 
 - (instancetype)initWithWAL:(DSHAgentNativeWAL *)wal {
   self = [super init];
@@ -167,8 +180,8 @@ void DSHAgentPruneRoundPresentationCache(NSURL *walRoot, NSSet<NSString *> *conv
 // retention timestamp, collects the view (the request's transcript row, the
 // attempt's transcript rows, the matching cleanup entries and the round /
 // ledger references discard must respect), and applies the returned changes
-// verbatim. The round presentation cache above stays native: it is a file
-// cache, not authority.
+// verbatim. The display cache above uses its own shared reducer while this
+// facade retains native file I/O; the cache is not authority.
 
 typedef NS_ENUM(NSInteger, DSHAgentTranscriptRunMode) {
   DSHAgentTranscriptRunModeTransaction,

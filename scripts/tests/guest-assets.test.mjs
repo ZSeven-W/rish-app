@@ -5,14 +5,14 @@ import test from 'node:test';
 
 const root = new URL('../../', import.meta.url);
 const read = path => fs.readFileSync(new URL(path, root));
-const assets = 'apps/mobile/ios/Rish/GuestAssets/';
+const assets = 'modules/rish/shared/GuestAssets/';
 const sha = bytes => createHash('sha256').update(bytes).digest('hex');
 
 test('bundled guest assets match the manifest and native integrity checks', () => {
   const manifest = read(`${assets}SHA256SUMS`).toString();
   const module = read('modules/rish/ios/Sources/LocalGuestModule.mm').toString();
   // Android packages the same two files and pins the same digests in Kotlin.
-  const android = read('apps/mobile/android/app/src/main/java/tech/zseven/rish/guest/GuestAssets.kt').toString();
+  const android = read('modules/rish/android/src/main/java/tech/zseven/rish/guest/GuestAssets.kt').toString();
   for (const line of manifest.split('\n').filter(line => line && !line.startsWith('#'))) {
     const [digest, file] = line.split('  ');
     assert.equal(sha(read(`${assets}${file}`)), digest);

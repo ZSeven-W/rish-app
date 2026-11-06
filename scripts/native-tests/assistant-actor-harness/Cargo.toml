@@ -1,0 +1,19 @@
+[package]
+name = "rish-assistant-actor-harness"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+[workspace]
+
+[dependencies]
+rish-shell-core = { path = "../../../apps/gpui/crates/rish-shell-core" }
+rish-pi-runtime = { path = "../../../apps/gpui/crates/rish-pi-runtime" }
+serde_json = { version = "1", features = ["arbitrary_precision"] }
+uuid = { version = "1", features = ["v4"] }
+chrono = "0.4"
+futures = "0.3"
+
+[dev-dependencies]
+rish-shell-core = { path = "../../../apps/gpui/crates/rish-shell-core", features = ["test-support"] }
+rish-agent-core = { path = "../../../modules/rish/core/crates/rish-agent-core" }

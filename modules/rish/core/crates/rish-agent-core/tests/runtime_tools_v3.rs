@@ -87,7 +87,7 @@ fn registry_is_additive_bounded_and_versioned() {
         .unwrap()
         .push(current["tools"][0].clone());
     assert!(!registry_shape(Some(&duplicate)));
-    for version in [1, 2, 4] {
+    for version in [1, 2, 6] {
         let mut wrong = current.clone();
         wrong["registry_version"] = json!(version);
         assert!(!registry_shape(Some(&wrong)));

@@ -476,3 +476,128 @@ fn lost_prepare_reply_recovers_only_from_committed_wal_and_current_live_grant() 
         );
     }
 }
+
+fn assistant_metadata_reused(name: &str) -> (Value, Env) {
+    let (session, env) = reused(name);
+    let encoded = session
+        .to_string()
+        .replace("install_runtime_environment", "create_assistant_task")
+        .replace("install-call", "assistant-create-call");
+    let mut session: Value = serde_json::from_str(&encoded).unwrap();
+    let conversation = &mut session["conversations"][0];
+    for attempt in conversation["attempts"].as_array_mut().unwrap() {
+        attempt["agent"]["tool_registry_version"] = json!(5);
+        attempt["agent"]["root"]["capabilities"] = json!(["file_read"]);
+    }
+    conversation["agent_grants"][0]["tool_family"] = json!("assistant_metadata");
+    conversation["agent_grants"][0]["registry_version"] = json!(5);
+    (session, env)
+}
+
+#[test]
+fn assistant_metadata_conversation_grant_survives_persisted_session_with_read_only_root() {
+    for name in [
+        "create_assistant_task",
+        "update_assistant_task",
+        "remember_assistant_memory",
+        "forget_assistant_memory",
+    ] {
+        let (session, env) = assistant_metadata_reused(name);
+        assert!(
+            round_trip(&session, &env),
+            "{name} must survive persisted tokenless approval"
+        );
+        let conversation = &session["conversations"][0];
+        let grant = &conversation["agent_grants"][0];
+        let next = &conversation["attempts"][1];
+        assert_eq!(grant["tool_family"], "assistant_metadata");
+        assert_ne!(grant["issued_for"]["attempt_id"], next["attempt_id"]);
+        assert_eq!(next["agent"]["root"]["capabilities"], json!(["file_read"]));
+        assert_eq!(
+            next["agent"]["batch"][0]["approval_decision"],
+            "allow_conversation"
+        );
+        assert!(next["agent"]["batch"][0]["approval_token"].is_null());
+    }
+}
+
+#[test]
+fn assistant_metadata_grant_cannot_cross_families_versions_or_conversations() {
+    let (session, env) = assistant_metadata_reused("remember_assistant_memory");
+    assert!(round_trip(&session, &env));
+    for (field, value) in [
+        ("tool_family", json!("file_write")),
+        ("tool_family", json!("guest_service")),
+        ("tool_family", json!("git_commit")),
+        ("conversation_id", json!(DIFFERENT)),
+        ("workspace_id", json!(DIFFERENT)),
+        ("binding_revision", json!(2)),
+        ("registry_version", json!(4)),
+    ] {
+        let mut changed = session.clone();
+        changed["conversations"][0]["agent_grants"][0][field] = value;
+        if field == "tool_family" {
+            // Give the forged family its own root capability too: rejection
+            // must come from family isolation, not a missing workspace grant.
+            for attempt in changed["conversations"][0]["attempts"]
+                .as_array_mut()
+                .unwrap()
+            {
+                attempt["agent"]["root"]["capabilities"] = json!([
+                    "file_read",
+                    "file_write",
+                    "git_commit",
+                    "git_push",
+                    "guest_service"
+                ]);
+            }
+        }
+        assert!(
+            !round_trip(&changed, &env),
+            "metadata grant mismatch: {field}"
+        );
+    }
+    let mut v4 = session.clone();
+    v4["conversations"][0]["agent_grants"][0]["registry_version"] = json!(4);
+    for attempt in v4["conversations"][0]["attempts"].as_array_mut().unwrap() {
+        attempt["agent"]["tool_registry_version"] = json!(4);
+    }
+    assert!(
+        !round_trip(&v4, &env),
+        "metadata family itself requires registry v5"
+    );
+
+    for (name, capability) in [
+        ("write_file", "file_write"),
+        ("git_commit", "git_commit"),
+        ("git_push", "git_push"),
+        ("run_program", "guest_service"),
+    ] {
+        let mut changed = session.clone();
+        let next = &mut changed["conversations"][0]["attempts"][1];
+        next["agent"]["root"]["capabilities"] = json!(["file_read", capability]);
+        next["agent"]["batch"][0]["name"] = json!(name);
+        next["agent"]["batch"][0]["safe_summary_key"] = json!(format!("agent.{name}"));
+        assert!(
+            !round_trip(&changed, &env),
+            "metadata grant must not authorize {name}"
+        );
+    }
+    for name in ["list_assistant_tasks", "search_assistant_memory"] {
+        let mut changed = session.clone();
+        let call = &mut changed["conversations"][0]["attempts"][1]["agent"]["batch"][0];
+        call["name"] = json!(name);
+        call["safe_summary_key"] = json!(format!("agent.{name}"));
+        assert!(
+            !round_trip(&changed, &env),
+            "read tools cannot use metadata mutation approval"
+        );
+    }
+    let mut no_read = session.clone();
+    no_read["conversations"][0]["attempts"][1]["agent"]["root"]["capabilities"] =
+        json!(["file_write"]);
+    assert!(
+        !round_trip(&no_read, &env),
+        "metadata grant requires the assistant readable root binding"
+    );
+}

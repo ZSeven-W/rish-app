@@ -1,0 +1,132 @@
+[package]
+name = "gpui-mobile"
+version = "0.1.0"
+edition = "2021"
+authors = ["Balamurali Pandranki <balamurali@live.com>"]
+license = "GPL-3.0-or-later OR AGPL-3.0-or-later OR Apache-2.0"
+description = "Mobile platform support for GPUI — iOS (wgpu/Metal) and Android (wgpu/Vulkan)"
+repository = "https://github.com/itsbalamurali/gpui-mobile"
+homepage = "https://github.com/itsbalamurali/gpui-mobile"
+keywords = ["gui", "mobile", "ios", "android", "gpui"]
+categories = ["gui", "os"]
+readme = "README.md"
+
+[features]
+default = ["url_launcher", "shared_preferences", "path_provider",
+           "package_info", "device_info", "connectivity", "network_info", "vibration",
+           "battery", "share", "sensors", "webview", "file_selector", "image_picker", "camera",
+           "permission_handler", "notifications", "location", "audio", "video_player",
+           "clipboard", "local_auth", "in_app_review", "contacts", "maps_launcher",
+           "calendar", "deeplink", "microphone", "maps", "media_session"]
+url_launcher = []
+shared_preferences = []
+path_provider = []
+package_info = []
+device_info = []
+connectivity = []
+network_info = []
+vibration = []
+battery = []
+share = []
+sensors = []
+webview = []
+file_selector = []
+image_picker = []
+camera = []
+permission_handler = []
+notifications = []
+location = []
+audio = []
+video_player = []
+clipboard = []
+local_auth = []
+in_app_review = []
+contacts = []
+maps_launcher = []
+maps = []
+calendar = []
+deeplink = []
+microphone = []
+media_session = []
+
+[lib]
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+# ── shared deps (all platforms) ──────────────────────────────────────────────
+
+[dependencies]
+anyhow       = "1"
+log          = { version = "0.4", features = ["kv_unstable_serde", "serde"] }
+parking_lot  = "0.12"
+futures      = "0.3"
+raw-window-handle = "0.6"
+
+# ── GPUI core crate (provides Platform trait, event types, geometry, etc.) ───
+gpui = { package = "gpui-pre", version = "=0.3.6", default-features = false }
+
+# ── iOS ──────────────────────────────────────────────────────────────────────
+
+[target.'cfg(target_os = "ios")'.dependencies]
+# Objective-C runtime
+objc2 = "0.6"
+
+# Apple frameworks
+core-foundation     = "0.10"
+core-foundation-sys = "0.8"
+core-graphics       = "0.24"
+core-text           = "=21.0.0"
+uuid                = { version = "1", features = ["v4", "v5"] }
+block2              = "0.6"
+
+# wgpu renderer (Metal backend on iOS/Android)
+gpui_wgpu = { package = "gpui-pre-wgpu", version = "=0.3.6", features = ["font-kit"] }
+wgpu = "29.0.4"
+
+# Text / font stack
+pathfinder_geometry = "0.5"
+smallvec            = { version = "1.6", features = ["union", "const_new"] }
+
+# font-kit (same registry package as gpui-pre-wgpu)
+font-kit = { package = "zed-font-kit", version = "0.14.1-zed" }
+
+# ── Android ──────────────────────────────────────────────────────────────────
+
+[target.'cfg(target_os = "android")'.dependencies]
+# JNI / NDK bindings
+jni         = "0.22"
+libc        = "0.2"
+# Keep `ndk` on the baseline `nativewindow` feature set. Enabling
+# `api-level-31` links API 31 symbols directly, so the shared library
+# fails to `dlopen` on older Android versions before our own code runs.
+ndk         = { version = "0.9", features = ["nativewindow"] }
+ndk-context = "0.1"
+ndk-sys     = "0.6"
+
+# Activity glue layer
+android-activity = { version = "0.6", features = ["native-activity"] }
+
+# Logging to logcat
+android_logger = "0.15"
+
+# wgpu renderer (Vulkan backend on Android)
+gpui_wgpu = { package = "gpui-pre-wgpu", version = "=0.3.6", features = ["font-kit"] }
+
+# rustc-hash is required by the PlatformKeyboardMapper trait signature
+rustc-hash = "2"
+uuid       = { version = "1", features = ["v5"] }
+
+# ── dev ──────────────────────────────────────────────────────────────────────
+
+[dev-dependencies]
+
+# ── profiles ─────────────────────────────────────────────────────────────────
+
+[profile.release]
+opt-level     = 3
+lto           = "thin"
+codegen-units = 1
+strip         = true
+
+[profile.dev]
+opt-level = 0
+debug     = true

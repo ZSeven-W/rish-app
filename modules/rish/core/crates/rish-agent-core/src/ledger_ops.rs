@@ -187,7 +187,11 @@ pub fn write_manifest_call_for_intent(intent: &Value) -> Option<Value> {
         | "install_runtime_environment"
         | "run_program"
         | "start_runtime_service"
-        | "stop_runtime_service" => Some(json!({
+        | "stop_runtime_service"
+        | "create_assistant_task"
+        | "update_assistant_task"
+        | "remember_assistant_memory"
+        | "forget_assistant_memory" => Some(json!({
             "schema_version": 2, "mutation_kind": name,
             "locator": get(intent, "locator"),
             "precondition_sha256": precondition_sha, "content_bytes": 0,
@@ -216,6 +220,10 @@ fn write_batch_effect_gate_open(view: &View, row: &Value) -> bool {
             | "run_program"
             | "start_runtime_service"
             | "stop_runtime_service"
+            | "create_assistant_task"
+            | "update_assistant_task"
+            | "remember_assistant_memory"
+            | "forget_assistant_memory"
     ) {
         return true;
     }
@@ -888,8 +896,9 @@ fn settle(args: &Map<String, Value>, env: &Env, view: &View) -> Result<Effect, S
         || as_str(get(message, "role")) != Some("tool")
         || !receipt_shape(Some(receipt))
         || !(matches!(as_str(get(patch, "state")), Some("settled" | "ambiguous"))
-            || (as_str(get(receipt, "name")).is_some_and(crate::runtime_tools::is_runtime)
-                && as_str(get(patch, "state")) == Some("cancelled")
+            || (as_str(get(receipt, "name")).is_some_and(|name| {
+                crate::runtime_tools::is_runtime(name) || crate::assistant_tools::is_assistant(name)
+            }) && as_str(get(patch, "state")) == Some("cancelled")
                 && as_str(get(receipt, "outcome")) == Some("cancelled")))
         || !operation_ok
     {
@@ -942,18 +951,25 @@ fn settle(args: &Map<String, Value>, env: &Env, view: &View) -> Result<Effect, S
     let locator_of = |row: &Value| get(row, "locator").cloned().unwrap_or(Value::Null);
     let Some(row) = row.filter(|row| {
         let locator = locator_of(row);
+        let question = row["name"] == crate::user_question::NAME && row["state"] == "intent";
         cas_matches_row(row, cas_value)
-            && matches!(
-                as_str(get(row, "state")),
-                Some("running" | "cancel_requested")
-            )
+            && (question
+                || matches!(
+                    as_str(get(row, "state")),
+                    Some("running" | "cancel_requested")
+                ))
             && get(message, "round_index") == get(&locator, "round_index")
             && get(message, "call_id") == get(&locator, "call_id")
             && get(receipt, "call_id") == get(&locator, "call_id")
             && get(receipt, "name") == get(row, "name")
             && get(receipt, "arguments_sha256") == get(row, "arguments_sha256")
             && as_str(get(receipt, "outcome")) == feedback_outcome
-            && dispatch_state(view, Some(&locator)) == Some("dispatched")
+            && dispatch_state(view, Some(&locator))
+                == Some(if question {
+                    "not_dispatched"
+                } else {
+                    "dispatched"
+                })
     }) else {
         return Err(StoreError::Conflict);
     };

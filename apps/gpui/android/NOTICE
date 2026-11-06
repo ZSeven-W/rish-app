@@ -1,0 +1,12 @@
+The NativeActivity hosting approach and GpuiClipboard.java are adapted from
+gpui-mobile by Balamurali Pandranki, revision
+c7cab3a43970bd5f1e05d907695404ed73fcdc95:
+https://github.com/itsbalamurali/gpui-mobile
+
+These files are used under the Apache License, Version 2.0 option offered by
+that repository. The license is reproduced in GPUI-MOBILE-LICENSE.
+
+GpuiActivity.java is reduced to the Rish NativeActivity lifecycle, without
+the example app's media, deep-link, or splash dependencies. The Android
+runtime implementation is compiled directly from modules/rish/android;
+it is not copied or replaced by a second session/credential implementation.

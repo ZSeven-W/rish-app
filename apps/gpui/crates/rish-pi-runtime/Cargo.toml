@@ -1,0 +1,22 @@
+[package]
+name = "rish-pi-runtime"
+version = "0.1.0"
+edition = "2024"
+license = "MIT"
+publish = false
+
+[features]
+default = ["engine"]
+engine = ["dep:rquickjs", "dep:url"]
+
+[dependencies]
+serde = { version = "1", features = ["derive"] }
+serde_json = { version = "1", features = ["arbitrary_precision"] }
+sha2 = "0.10"
+rquickjs = { version = "=0.12.1", optional = true }
+url = { version = "2", optional = true }
+
+# Upstream ships desktop bindings only; mobile targets generate ABI-correct
+# bindings using the same platform SDK that compiles the no-JIT C engine.
+[target.'cfg(any(target_os = "ios", target_os = "android"))'.dependencies]
+rquickjs = { version = "=0.12.1", optional = true, features = ["bindgen"] }

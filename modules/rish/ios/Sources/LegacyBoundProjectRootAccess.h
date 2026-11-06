@@ -53,7 +53,7 @@ typedef BOOL (^DSHLegacyBoundProjectHandleOperation)(
 /// Compatibility adapter for a safe, frozen project root whose workspace
 /// authority still points at an app-owned legacy project. It never accepts a
 /// path, URL, bookmark, descriptor, inode, authority record, or raw workspace
-/// descriptor and is not exposed as a React Native module.
+/// descriptor and is not exposed as an app UI module.
 @interface DSHLegacyBoundProjectRootAccess : NSObject
 
 - (instancetype)init NS_UNAVAILABLE;

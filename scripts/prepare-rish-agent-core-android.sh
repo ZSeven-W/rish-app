@@ -1,6 +1,6 @@
 #!/bin/zsh
 # Builds the shared Rust agent core (modules/rish/core) for Android and stages
-# it as apps/mobile/android/rish-agent-core for the app's JNI shim. Run next to
+# it as modules/rish/android/rish-agent-core for the app's JNI shim. Run next to
 # prepare-rish-android.sh. Requires the workspace toolchain
 # (modules/rish/core/rust-toolchain.toml) with the Android targets installed and
 # the pinned NDK; this script never installs toolchains, targets or an NDK.
@@ -9,7 +9,7 @@ set -euo pipefail
 readonly SCRIPT_DIR=${0:A:h}
 readonly REPO_ROOT=${SCRIPT_DIR:h}
 readonly CORE_ROOT=${REPO_ROOT}/modules/rish/core
-readonly OUTPUT_ROOT=${REPO_ROOT}/apps/mobile/android/rish-agent-core
+readonly OUTPUT_ROOT=${REPO_ROOT}/modules/rish/android/rish-agent-core
 readonly HEADER=${CORE_ROOT}/include/rish_agent_core.h
 readonly LIBRARY_NAME=librish_agent_ffi.so
 readonly EXPECTED_NDK_VERSION="27.1.12297006"
@@ -74,6 +74,7 @@ trap '/bin/rm -rf -- "${staging}"' EXIT
   /usr/bin/grep -q " rish_agent_session_reduce$" ||
   fail "the staged library does not export rish_agent_session_reduce"
 
+/bin/mkdir -p "${OUTPUT_ROOT:h}"
 /bin/rm -rf -- "${OUTPUT_ROOT}"
 /bin/mv "${staging}" "${OUTPUT_ROOT}"
 /bin/chmod -R u+w "${OUTPUT_ROOT}"

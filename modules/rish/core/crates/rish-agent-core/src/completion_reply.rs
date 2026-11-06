@@ -10,7 +10,7 @@
 //! that was asked, because only the host knows a provider's aliases. The
 //! `model` here is the requested one, which is what a receipt records.
 //!
-//! The cases are `apps/mobile/ios/RishTests/Fixtures/*-response-cases.json`
+//! The cases are `modules/rish/ios/Tests/Fixtures/*-response-cases.json`
 //! and the tests read those files rather than a copy.
 
 use serde_json::{json, Map, Value};

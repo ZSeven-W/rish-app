@@ -14,6 +14,8 @@ use crate::schema::{
     MAX_SAFE_INTEGER,
 };
 use crate::store::StoreError;
+#[path = "query_transcript_ancestry.rs"]
+mod query_transcript_ancestry;
 
 fn get<'a>(value: &'a Value, key: &str) -> Option<&'a Value> {
     value.get(key)
@@ -187,6 +189,8 @@ pub fn session_proof(
         "journal_revision": journal,
         "session_generation": generation,
         "session_sha256": digest,
+        // Native session provenance for a stale UI transcript during recovery.
+        "journal_transcript": attempt.and_then(|a| get(a, "agent")).and_then(|j| get(j, "transcript")),
     }))
 }
 
@@ -377,9 +381,30 @@ pub fn query_attempt_session_conflict(request: &Value, proof: &Value) -> Option<
 /// The prepared authority the store handed back has to be the one the request
 /// names, on the root and transcript the request expects.
 pub fn query_attempt_base_conflict(base: &Value, request: &Value, proof: &Value) -> Option<Value> {
+    query_attempt_base_conflict_with_state(base, request, proof, &Value::Null)
+}
+
+pub fn query_attempt_base_conflict_with_state(
+    base: &Value,
+    request: &Value,
+    proof: &Value,
+    state: &Value,
+) -> Option<Value> {
     let root = get(base, "root");
+    let expected = get(request, "expected_transcript");
+    // A tool can settle in the native WAL before its reply reaches the UI.
+    // Accept it only from the committed session's exact handle through the
+    // native WAL append checkpoints and the protected transcript's real prefix.
+    let committed = get(proof, "journal_transcript");
+    let transcript_matches = if committed.is_some() {
+        committed == expected
+            && (get(base, "transcript") == expected
+                || query_transcript_ancestry::proves(state, base, request))
+    } else {
+        get(base, "transcript") == expected
+    };
     if get(base, "conversation_id") == get(request, "conversation_id")
-        && get(base, "transcript") == get(request, "expected_transcript")
+        && transcript_matches
         && at(root, "root_fingerprint_sha256") == get(request, "expected_root_fingerprint_sha256")
         && at(root, "workspace_binding_revision")
             == get(request, "expected_workspace_binding_revision")
@@ -472,7 +497,7 @@ pub fn latest_batch_calls(state: &Value, batch: &Value) -> Value {
             if !string_eq(at(wrapper, "result_kind"), "bind_agent_approval") {
                 continue;
             }
-            let result = at(wrapper, "result").and_then(|result| get(result, "result"));
+            let result = at(wrapper, "result");
             if !matches!(
                 as_str(at(result, "status")),
                 Some("bound" | "already_bound")
@@ -601,7 +626,9 @@ pub fn query_attempt_projection(
             !unresolved && get(batch, "round_index") == at(get(round, "locator"), "round_index")
         }
     };
-    if let Some(batch) = latest_batch(state, task_id, attempt_id).filter(|batch| batch_speaks(batch)) {
+    if let Some(batch) =
+        latest_batch(state, task_id, attempt_id).filter(|batch| batch_speaks(batch))
+    {
         let calls = latest_batch_calls(state, batch);
         if let Some(frozen) = crate::session_schema::frozen_ids_after_lost_prepare(
             state, batch, &calls, proof, request, base,
@@ -1649,6 +1676,39 @@ pub fn cancel_plan(state: &Value, request: &Value) -> Value {
     let kind = as_str(at(target, "kind")).unwrap_or_default();
     let task_id = at(target, "task_id");
     let attempt_id = at(target, "attempt_id");
+    // A paused batch has already consumed the completed provider round's
+    // after-transcript. Cancelling that old round would incorrectly compare
+    // it to the round's before-transcript. Cancel the idle attempt itself,
+    // but never classify an in-flight or ambiguous execution as idle.
+    if kind == "attempt"
+        && matches!(
+            as_str(at(get(request, "cancel_token"), "expected_phase")),
+            Some("ready_for_round" | "batch_frozen" | "approval_pending" | "tool_result_pending")
+        )
+        && latest_round(state, task_id, attempt_id)
+            .is_some_and(|round| string_eq(get(round, "state"), "completed"))
+        && find_authority(state, task_id, attempt_id).is_some_and(|authority| {
+            get(authority, "root") == get(request, "root")
+                && get(authority, "transcript") == get(request, "expected_transcript")
+                && string_eq(get(authority, "state"), "prepared")
+        })
+    {
+        let owned_rows: Vec<&Value> = array(get(state, "ledger"))
+            .iter()
+            .filter(|row| {
+                let locator = get(row, "locator");
+                at(locator, "task_id") == task_id && at(locator, "attempt_id") == attempt_id
+            })
+            .collect();
+        if owned_rows.iter().all(|row| {
+            matches!(
+                as_str(get(row, "state")),
+                Some("intent" | "settled" | "cancelled")
+            )
+        }) {
+            return json!({"plan":"idle_attempt", "rows":owned_rows.iter().filter(|row| string_eq(get(row,"state"),"intent")).cloned().cloned().collect::<Vec<_>>(), "effect_may_have_occurred":owned_rows.iter().any(|row| string_eq(get(row,"state"),"settled"))});
+        }
+    }
     let row = if kind == "tool" {
         array(get(state, "ledger")).iter().find(|candidate| {
             let locator = get(candidate, "locator");
@@ -1772,6 +1832,27 @@ pub fn cancel_round_result(request: &Value, cancelled: &Value, proof: &Value) ->
 /// The answer an attempt that never launched a round reports.
 pub fn cancel_never_started_result(request: &Value) -> Value {
     cancel_result(request, "cancelled", Map::new())
+}
+
+/// A completed provider round is preserved while its idle attempt is stopped.
+/// Previously settled effects remain visible; cancellation never undoes them.
+pub fn cancel_idle_attempt_result(request: &Value, plan: &Value) -> Value {
+    let mut fields = Map::new();
+    if let Some(transcript) = get(plan, "transcript").filter(|t| !t.is_null()) {
+        if !crate::tool_batch::transcript_can_advance(
+            get(request, "expected_transcript"),
+            Some(transcript),
+        ) {
+            fields.insert("failure_code".into(), json!("E_AGENT_TRANSCRIPT"));
+            return cancel_result(request, "unknown", fields);
+        }
+        fields.insert("transcript".into(), transcript.clone());
+    }
+    fields.insert(
+        "effect_may_have_occurred".into(),
+        json!(get(plan, "effect_may_have_occurred") == Some(&json!(true))),
+    );
+    cancel_result(request, "cancelled", fields)
 }
 
 /// The answer a cancellation of a row the WAL does not know reports.
@@ -2290,7 +2371,7 @@ fn reduce_json_inner(input: &str) -> Result<Value, StoreError> {
             let base = get(&envelope, "base").ok_or(StoreError::InvalidArgument)?;
             reply.insert(
                 "output".into(),
-                owned(query_attempt_base_conflict(base, request, proof).as_ref()),
+                owned(query_attempt_base_conflict_with_state(base, request, proof, state).as_ref()),
             );
         }
         "query_attempt_projection" => {
@@ -2378,6 +2459,12 @@ fn reduce_json_inner(input: &str) -> Result<Value, StoreError> {
             reply.insert(
                 "output".into(),
                 cancel_round_result(request, cancelled, proof),
+            );
+        }
+        "cancel_idle_attempt_result" => {
+            reply.insert(
+                "output".into(),
+                cancel_idle_attempt_result(request, get(&envelope, "plan").unwrap_or(&Value::Null)),
             );
         }
         "cancel_never_started_result" => {
@@ -2532,7 +2619,10 @@ mod cancel_plan_tests {
     // where the selector compares it with the row.
     #[test]
     fn a_known_revision_is_kept_as_asked() {
-        assert_eq!(cancel_plan(&state(), &request(2))["expected_round_revision"], json!(2));
+        assert_eq!(
+            cancel_plan(&state(), &request(2))["expected_round_revision"],
+            json!(2)
+        );
     }
 
     // Nothing in the WAL for that round and nothing known: no round plan.

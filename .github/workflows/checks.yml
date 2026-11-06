@@ -1,4 +1,4 @@
-name: Mobile checks
+name: Source and security checks
 
 on:
   pull_request:
@@ -8,20 +8,17 @@ on:
   workflow_dispatch:
 
 concurrency:
-  group: mobile-checks-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  group: source-checks-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: true
 
 permissions:
   contents: read
 
 jobs:
-  mobile:
-    name: Typecheck and Jest
+  source:
+    name: Portable GPUI source and secrets
     runs-on: ubuntu-latest
     timeout-minutes: 20
-    defaults:
-      run:
-        working-directory: apps/mobile
     steps:
       - name: Check out source
         uses: actions/checkout@v4
@@ -29,31 +26,19 @@ jobs:
           fetch-depth: 0
           persist-credentials: false
       - name: Verify secret scanner self-test
-        working-directory: .
         run: ruby scripts/tests/verify-no-bundled-secret_selftest.rb
       - name: Scan tracked files for bundled secrets
-        working-directory: .
         run: ruby scripts/verify-no-bundled-secret.rb --tracked
       - name: Scan repository history for bundled secrets
-        working-directory: .
         run: ruby scripts/verify-no-bundled-secret.rb --history HEAD
       - name: Set up Node.js
         uses: actions/setup-node@v4
         with:
           node-version: 22.11.0
-          cache: npm
-          cache-dependency-path: apps/mobile/package-lock.json
-      - name: Verify portable source checkout
-        working-directory: .
+      - name: Install shell used by native preparation preflight
+        run: sudo apt-get update && sudo apt-get install --yes zsh
+      - name: Verify portable GPUI source checkout
         run: |
           node --test scripts/tests/source-preflight.test.mjs scripts/tests/ios-preparation.test.mjs scripts/tests/release-identifiers.test.mjs scripts/tests/guest-assets.test.mjs
           node scripts/verify-source-checkout.mjs
-          ruby apps/mobile/scripts/check-pbxproj-ids.rb
-      - name: Install dependencies
-        run: npm ci
-      - name: Typecheck
-        run: npm run typecheck
-      - name: ESLint
-        run: npm run lint
-      - name: Jest
-        run: npm test -- --runInBand --ci
+          ruby scripts/tests/ios-plist_test.rb

@@ -1,4 +1,5 @@
 #import "HarnessAuthService.h"
+#import "RishRuntimeEngineDownloads.h"
 #import "ClaudeOfficialSession.h"
 #import "DSHGuestRuntimeState.h"
 #import "LocalGuestModule.h"
@@ -12,23 +13,7 @@
 NSString *const DSHHarnessAuthHarnessCodex = @"codex";
 NSString *const DSHHarnessAuthHarnessClaudeCode = @"claude-code";
 
-// Both subscriptions run their official CLI in the guest -- Claude's token is
-// rejected everywhere but the CLI, and Codex is routed the same way for one
-// architecture. The CLIs are native musl binaries downloaded on the host, once,
-// to Application Support; the guest installs them from there and reuses them.
-static NSString *const DSHCodexCliVersion = @"0.153.4";
-static NSString *const DSHCodexCliURL =
-    @"https://github.com/openai/codex/releases/download/rust-v0.153.4/"
-    @"codex-x86_64-unknown-linux-musl.tar.gz";
-static NSString *const DSHCodexCliFile = @"codex-cli.tar.gz";
-static NSString *const DSHClaudeCliVersion = @"2.1.276";
-static NSString *const DSHClaudeCliURL =
-    @"https://downloads.claude.ai/claude-code-releases/2.1.276/linux-x64-musl/claude";
-static NSString *const DSHClaudeCliFile = @"claude-cli.bin";
-// A download that stops short of this is treated as truncated; the exact size
-// is checked after the transfer, not trusted from Content-Length mid-flight.
-static unsigned long long const DSHCliMinimumBytes = 1024 * 1024;
-
+// Versions and verified artifact ownership live in the neutral downloader.
 static NSString *const DSHHarnessAuthManifestName = @"HarnessAuthAssets";
 
 static NSString *const DSHHarnessAuthKeychainService =
@@ -243,12 +228,7 @@ static BOOL DSHAuthValidSessionId(id value) {
 @property(nonatomic, copy) NSString *activePhase;
 @property(nonatomic) BOOL codexRefreshInFlight;
 @property(nonatomic, strong) NSMutableArray *codexRefreshWaiters;
-// CLI install state, keyed by harness id. Each value is a mutable dictionary
-// with phase (idle|downloading|ready|failed), fraction (0..1) and error_code.
-// Read under @synchronized(self); surfaced through statusForHarnessId.
-@property(nonatomic, strong) NSMutableDictionary<NSString *, NSMutableDictionary *> *installState;
-@property(nonatomic, strong) NSMutableDictionary<NSString *, NSURLSessionDownloadTask *> *installTasks;
-@property(nonatomic, strong) NSURLSession *cliDownloadSession;
+
 - (DSHClaudeOfficialSession *)validatedClaudeSession;
 - (void)receiveStreamEvent:(const char *)event length:(size_t)length;
 - (void)runCodexLoginForSession:(NSString *)sessionId generation:(NSUInteger)generation;
@@ -279,11 +259,8 @@ static BOOL DSHAuthValidSessionId(id value) {
                                              DISPATCH_QUEUE_SERIAL,
                                              QOS_CLASS_USER_INITIATED, 0));
     _codexRefreshWaiters = [NSMutableArray array];
-    _installState = [NSMutableDictionary dictionary];
-    _installTasks = [NSMutableDictionary dictionary];
-    // Reconnect the background download session at launch so a transfer that
-    // finished while the app was away is processed, and its result reported.
-    [self cliDownloadSession];
+    // One neutral owner reconnects any existing background CLI transfer.
+    [RishRuntimeEngineDownloads shared];
   }
   return self;
 }
@@ -449,7 +426,7 @@ static BOOL DSHAuthValidSessionId(id value) {
     self.cachedClaudeSession = [[DSHClaudeOfficialSession alloc]
         initWithKernelURL:assets[@"kernel_url"] initrdURL:assets[@"initrd_url"]
         storageDirectory:[support URLByAppendingPathComponent:@"official-claude" isDirectory:YES]
-        version:DSHClaudeCliVersion];
+        version:[RishRuntimeEngineDownloads descriptors][@"claude-code"][@"version"]];
     self.cachedClaudeSession.cliDeliveryURL = cli;
     if (self.cachedClaudeSession.shouldRestoreSavedSession) {
       self.claudeRestorePending = YES;
@@ -498,193 +475,29 @@ static BOOL DSHAuthValidSessionId(id value) {
   [self finishAsync:completion status:[self statusForHarnessId:harnessId]];
 }
 
-#pragma mark CLI install (host-side download)
+#pragma mark CLI install (shared neutral artifact service)
 
-/// The URL, filename and pinned version for a harness's CLI, or nil for an
-/// unknown harness.
-+ (NSDictionary *)cliDescriptorForHarness:(NSString *)harnessId {
-  if ([harnessId isEqualToString:DSHHarnessAuthHarnessCodex]) {
-    return @{ @"url": DSHCodexCliURL, @"file": DSHCodexCliFile, @"version": DSHCodexCliVersion };
-  }
-  if ([harnessId isEqualToString:DSHHarnessAuthHarnessClaudeCode]) {
-    return @{ @"url": DSHClaudeCliURL, @"file": DSHClaudeCliFile, @"version": DSHClaudeCliVersion };
-  }
-  return nil;
-}
-
-/// Application Support/harness-cli, created on demand, excluded from backup.
 + (NSURL *)cliDirectory {
-  NSURL *support = [NSFileManager.defaultManager URLsForDirectory:NSApplicationSupportDirectory
-                                                        inDomains:NSUserDomainMask].firstObject;
-  if (support == nil) return nil;
-  NSURL *directory = [support URLByAppendingPathComponent:@"harness-cli" isDirectory:YES];
-  if (![NSFileManager.defaultManager createDirectoryAtURL:directory
-                              withIntermediateDirectories:YES
-                                               attributes:@{NSFileProtectionKey: NSFileProtectionComplete}
-                                                    error:nil]) {
-    return nil;
-  }
-  [directory setResourceValue:@YES forKey:NSURLIsExcludedFromBackupKey error:nil];
-  return directory;
+  return [[RishRuntimeEngineDownloads shared] ensureDirectory];
 }
 
-/// The on-disk CLI download for a harness, or nil if it is not present at its
-/// full expected size. A short file is a partial transfer and never counted.
 + (NSURL *)installedCliURLForHarness:(NSString *)harnessId {
-  NSDictionary *descriptor = [self cliDescriptorForHarness:harnessId];
-  NSURL *directory = [self cliDirectory];
-  if (descriptor == nil || directory == nil) return nil;
-  NSURL *url = [directory URLByAppendingPathComponent:descriptor[@"file"]];
-  NSDictionary *attributes = [NSFileManager.defaultManager attributesOfItemAtPath:url.path error:nil];
-  if (![attributes[NSFileType] isEqual:NSFileTypeRegular]) return nil;
-  if ([attributes[NSFileSize] unsignedLongLongValue] < DSHCliMinimumBytes) return nil;
-  return url;
+  return [[RishRuntimeEngineDownloads shared] verifiedArtifactForEngine:harnessId];
 }
 
 - (NSDictionary *)installSnapshotForHarness:(NSString *)harnessId {
-  BOOL present = [DSHHarnessAuthService installedCliURLForHarness:harnessId] != nil;
-  @synchronized (self) {
-    NSDictionary *state = self.installState[harnessId];
-    NSString *phase = present ? @"ready"
-        : ([state[@"phase"] isKindOfClass:NSString.class] ? state[@"phase"] : @"idle");
-    NSMutableDictionary *snapshot = [@{ @"phase": phase } mutableCopy];
-    if ([state[@"fraction"] isKindOfClass:NSNumber.class]) snapshot[@"fraction"] = state[@"fraction"];
-    if ([state[@"error_code"] isKindOfClass:NSString.class] && [phase isEqual:@"failed"]) {
-      snapshot[@"error_code"] = state[@"error_code"];
-    }
-    return snapshot;
-  }
-}
-
-- (void)setInstallPhase:(NSString *)phase
-               fraction:(NSNumber *)fraction
-              errorCode:(NSString *)errorCode
-             forHarness:(NSString *)harnessId {
-  @synchronized (self) {
-    NSMutableDictionary *state = self.installState[harnessId] ?: [NSMutableDictionary dictionary];
-    state[@"phase"] = phase;
-    if (fraction != nil) state[@"fraction"] = fraction; else [state removeObjectForKey:@"fraction"];
-    if (errorCode != nil) state[@"error_code"] = errorCode; else [state removeObjectForKey:@"error_code"];
-    self.installState[harnessId] = state;
-  }
-}
-
-/// Begins a host-side download of the harness CLI. Idempotent: an install that
-/// is already present or already running is left alone. Progress and the final
-/// phase are read back through statusForHarnessId.
-/// One background URLSession, shared and reconnected on init. A 226 MB
-/// download has to survive the app being backgrounded or terminated, which an
-/// ephemeral session does not: the system keeps a background transfer running
-/// and hands its result back through the delegate when the app returns.
-- (NSURLSession *)cliDownloadSession {
-  @synchronized (self) {
-    if (_cliDownloadSession != nil) return _cliDownloadSession;
-    NSURLSessionConfiguration *configuration = [NSURLSessionConfiguration
-        backgroundSessionConfigurationWithIdentifier:@"tech.zseven.rish.harness-cli-download"];
-    configuration.sessionSendsLaunchEvents = YES;
-    configuration.timeoutIntervalForResource = 6 * 3600;
-    _cliDownloadSession = [NSURLSession sessionWithConfiguration:configuration
-                                                        delegate:self
-                                                   delegateQueue:nil];
-    return _cliDownloadSession;
-  }
+  NSDictionary *installation = [[RishRuntimeEngineDownloads shared] installationForEngine:harnessId];
+  NSString *state = installation[@"state"];
+  NSString *phase = [installation[@"integrity"] isEqual:@"verified"] ? @"ready" :
+      ([state isEqual:@"installing"] ? @"downloading" : (installation[@"error"] ? @"failed" : @"idle"));
+  NSMutableDictionary *snapshot = [@{@"phase": phase} mutableCopy];
+  if (installation[@"progress"]) snapshot[@"fraction"] = @([installation[@"progress"] doubleValue] / 100.);
+  if (installation[@"error"]) snapshot[@"error_code"] = @"E_HARNESS_CLI_DOWNLOAD_FAILED";
+  return snapshot;
 }
 
 - (void)installCliForHarness:(NSString *)harnessId {
-  NSDictionary *descriptor = [DSHHarnessAuthService cliDescriptorForHarness:harnessId];
-  if (descriptor == nil) return;
-  if ([DSHHarnessAuthService installedCliURLForHarness:harnessId] != nil) {
-    [self setInstallPhase:@"ready" fraction:nil errorCode:nil forHarness:harnessId];
-    return;
-  }
-  @synchronized (self) {
-    if (self.installTasks[harnessId] != nil) return;
-  }
-  if ([DSHHarnessAuthService cliDirectory] == nil) {
-    [self setInstallPhase:@"failed" fraction:nil errorCode:@"E_HARNESS_CLI_STORAGE_UNAVAILABLE"
-               forHarness:harnessId];
-    return;
-  }
-  [self setInstallPhase:@"downloading" fraction:@0 errorCode:nil forHarness:harnessId];
-  NSURLSessionDownloadTask *task = [[self cliDownloadSession]
-      downloadTaskWithURL:[NSURL URLWithString:descriptor[@"url"]]];
-  // The harness rides on the task, not a captured block: after a background
-  // relaunch installTasks is empty but the task's description survives.
-  task.taskDescription = harnessId;
-  @synchronized (self) { self.installTasks[harnessId] = task; }
-  [task resume];
-}
-
-/// The harness a download task carries, from its description; the in-memory map
-/// is only a convenience for the same app run.
-- (NSString *)harnessForTask:(NSURLSessionTask *)task {
-  if ([task.taskDescription isKindOfClass:NSString.class] &&
-      [DSHHarnessAuthService cliDescriptorForHarness:task.taskDescription] != nil) {
-    return task.taskDescription;
-  }
-  return nil;
-}
-
-- (void)URLSession:(NSURLSession *)session
-      downloadTask:(NSURLSessionDownloadTask *)downloadTask
-didFinishDownloadingToURL:(NSURL *)location {
-  NSString *harness = [self harnessForTask:downloadTask];
-  NSDictionary *descriptor = harness == nil ? nil : [DSHHarnessAuthService cliDescriptorForHarness:harness];
-  NSURL *directory = [DSHHarnessAuthService cliDirectory];
-  if (descriptor == nil || directory == nil) return;
-  NSHTTPURLResponse *http = [downloadTask.response isKindOfClass:NSHTTPURLResponse.class]
-      ? (NSHTTPURLResponse *)downloadTask.response : nil;
-  if (http != nil && (http.statusCode < 200 || http.statusCode >= 300)) {
-    [self setInstallPhase:@"failed" fraction:nil errorCode:@"E_HARNESS_CLI_DOWNLOAD_FAILED"
-               forHarness:harness];
-    return;
-  }
-  NSFileManager *files = NSFileManager.defaultManager;
-  // The temp file is deleted when this delegate returns, so move it now.
-  if ([[files attributesOfItemAtPath:location.path error:nil][NSFileSize]
-          unsignedLongLongValue] < DSHCliMinimumBytes) {
-    [self setInstallPhase:@"failed" fraction:nil errorCode:@"E_HARNESS_CLI_DOWNLOAD_TRUNCATED"
-               forHarness:harness];
-    return;
-  }
-  NSURL *target = [directory URLByAppendingPathComponent:descriptor[@"file"]];
-  [files removeItemAtURL:target error:nil];
-  if (![files moveItemAtURL:location toURL:target error:nil]) {
-    [self setInstallPhase:@"failed" fraction:nil errorCode:@"E_HARNESS_CLI_STORE_FAILED"
-               forHarness:harness];
-    return;
-  }
-  [files setAttributes:@{NSFileProtectionKey: NSFileProtectionComplete}
-          ofItemAtPath:target.path error:nil];
-  [self setInstallPhase:@"ready" fraction:@1 errorCode:nil forHarness:harness];
-}
-
-- (void)URLSession:(NSURLSession *)session
-              task:(NSURLSessionTask *)task
-didCompleteWithError:(NSError *)error {
-  NSString *harness = [self harnessForTask:task];
-  if (harness == nil) return;
-  @synchronized (self) { [self.installTasks removeObjectForKey:harness]; }
-  // Success is handled in didFinishDownloadingToURL; only a real error lands a
-  // failure here, and never over a download that already stored the file.
-  if (error != nil && [DSHHarnessAuthService installedCliURLForHarness:harness] == nil) {
-    [self setInstallPhase:@"failed" fraction:nil errorCode:@"E_HARNESS_CLI_DOWNLOAD_FAILED"
-               forHarness:harness];
-  }
-}
-
-- (void)URLSession:(NSURLSession *)session
-              downloadTask:(NSURLSessionDownloadTask *)downloadTask
-              didWriteData:(int64_t)bytesWritten
-         totalBytesWritten:(int64_t)totalBytesWritten
- totalBytesExpectedToWrite:(int64_t)totalBytesExpectedToWrite {
-  if (totalBytesExpectedToWrite <= 0) return;
-  NSString *harness = [self harnessForTask:downloadTask];
-  if (harness != nil) {
-    double fraction = (double)totalBytesWritten / (double)totalBytesExpectedToWrite;
-    [self setInstallPhase:@"downloading" fraction:@(MIN(1.0, MAX(0.0, fraction)))
-                errorCode:nil forHarness:harness];
-  }
+  [[RishRuntimeEngineDownloads shared] installEngine:harnessId];
 }
 
 - (NSDictionary *)statusForHarnessId:(NSString *)harnessId {

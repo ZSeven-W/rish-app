@@ -162,7 +162,7 @@ static BOOL RishGuestCgiCookieMatches(NSString *header,
   return self;
 }
 
-// Private test injection only; callers cannot acquire a lease through RN.
+// Private test injection only; callers cannot acquire a lease through UI.
 - (NSTimeInterval)previewDurationForTesting:(NSTimeInterval)remaining {
   return RishCgiPreviewDuration(remaining, kPreviewTotalLimit - kPreviewCleanupReserve);
 }

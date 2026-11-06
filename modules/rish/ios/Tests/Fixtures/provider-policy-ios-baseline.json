@@ -1,0 +1,467 @@
+{
+  "cases" : [
+    {
+      "binding" : {
+        "auth_type" : "bearer",
+        "endpoint_url" : "https:\/\/relay.example\/v1\/messages",
+        "harness_id" : "claude-code",
+        "model_id" : "relay-model",
+        "profile_id" : "c46b19792871c609d55f72b0de87c6ccc85fa7f21fa0dacd57ce8a3ea9a12db7",
+        "protocol" : "messages",
+        "schema_version" : 1,
+        "send_reasoning" : false
+      },
+      "configuration" : {
+        "auth_type" : "bearer",
+        "endpoint_url" : "https:\/\/Relay.Example\/v1",
+        "full_url" : false,
+        "harness_id" : "claude-code",
+        "model_mappings" : {
+          "claude-sonnet-5" : "relay-model"
+        },
+        "name" : "Relay",
+        "protocol" : "messages",
+        "schema_version" : 1,
+        "send_reasoning" : false
+      },
+      "credential_account" : "CUSTOM_PROVIDER_claude-code_265b8b09dcafae78fa752808e8e4541401a21e17769261782ed791854533a8c1",
+      "normalized" : {
+        "auth_type" : "bearer",
+        "endpoint_url" : "https:\/\/relay.example\/v1\/messages",
+        "full_url" : false,
+        "harness_id" : "claude-code",
+        "model_mappings" : {
+          "claude-sonnet-5" : "relay-model"
+        },
+        "name" : "Relay",
+        "protocol" : "messages",
+        "schema_version" : 1,
+        "send_reasoning" : false
+      }
+    },
+    {
+      "binding" : {
+        "auth_type" : "bearer",
+        "endpoint_url" : "https:\/\/relay.example:443\/root\/chat\/completions",
+        "harness_id" : "claude-code",
+        "model_id" : "relay-model",
+        "profile_id" : "f1ab2487e643f027517d42b8f11c67b1f64ddb6d4b02d6817ee97b99df429413",
+        "protocol" : "chat-completions",
+        "schema_version" : 1,
+        "send_reasoning" : false
+      },
+      "configuration" : {
+        "auth_type" : "bearer",
+        "endpoint_url" : " HTTPS:\/\/Relay.Example:443\/root\/responses\/ ",
+        "full_url" : false,
+        "harness_id" : "claude-code",
+        "model_mappings" : {
+          "claude-sonnet-5" : "relay-model"
+        },
+        "name" : "Relay",
+        "protocol" : "chat-completions",
+        "schema_version" : 1,
+        "send_reasoning" : false
+      },
+      "credential_account" : "CUSTOM_PROVIDER_claude-code_8ebab02a07b58535bfbb9ff6130f954612f244732ac888383f3b3dab24067309",
+      "normalized" : {
+        "auth_type" : "bearer",
+        "endpoint_url" : "https:\/\/relay.example:443\/root\/chat\/completions",
+        "full_url" : false,
+        "harness_id" : "claude-code",
+        "model_mappings" : {
+          "claude-sonnet-5" : "relay-model"
+        },
+        "name" : "Relay",
+        "protocol" : "chat-completions",
+        "schema_version" : 1,
+        "send_reasoning" : false
+      }
+    },
+    {
+      "binding" : {
+        "auth_type" : "bearer",
+        "endpoint_url" : "http:\/\/localhost:8080\/api\/v1\/responses",
+        "harness_id" : "claude-code",
+        "model_id" : "relay-model",
+        "profile_id" : "b95103bf03aca47d2c5b5ef5b14304b500ea8754db1e845aead6d5bba5a6571f",
+        "protocol" : "responses",
+        "schema_version" : 1,
+        "send_reasoning" : false
+      },
+      "configuration" : {
+        "auth_type" : "bearer",
+        "endpoint_url" : "http:\/\/localhost:8080\/api",
+        "full_url" : false,
+        "harness_id" : "claude-code",
+        "model_mappings" : {
+          "claude-sonnet-5" : "relay-model"
+        },
+        "name" : "Relay",
+        "protocol" : "responses",
+        "schema_version" : 1,
+        "send_reasoning" : false
+      },
+      "credential_account" : "CUSTOM_PROVIDER_claude-code_93a1dacddaf283e7790b6f9413a47847cd30e319906d6473e36be96fbe08f2e2",
+      "normalized" : {
+        "auth_type" : "bearer",
+        "endpoint_url" : "http:\/\/localhost:8080\/api\/v1\/responses",
+        "full_url" : false,
+        "harness_id" : "claude-code",
+        "model_mappings" : {
+          "claude-sonnet-5" : "relay-model"
+        },
+        "name" : "Relay",
+        "protocol" : "responses",
+        "schema_version" : 1,
+        "send_reasoning" : false
+      }
+    },
+    {
+      "binding" : {
+        "auth_type" : "bearer",
+        "endpoint_url" : "http:\/\/[::1]:9999\/v1\/messages",
+        "harness_id" : "claude-code",
+        "model_id" : "relay-model",
+        "profile_id" : "50bec14aea69487b1c3bdeab81743869ec90e35d4d04d12ec97760fdb6376243",
+        "protocol" : "messages",
+        "schema_version" : 1,
+        "send_reasoning" : false
+      },
+      "configuration" : {
+        "auth_type" : "bearer",
+        "endpoint_url" : "http:\/\/[::1]:9999\/v1",
+        "full_url" : false,
+        "harness_id" : "claude-code",
+        "model_mappings" : {
+          "claude-sonnet-5" : "relay-model"
+        },
+        "name" : "Relay",
+        "protocol" : "messages",
+        "schema_version" : 1,
+        "send_reasoning" : false
+      },
+      "credential_account" : "CUSTOM_PROVIDER_claude-code_f8f3222fea5b79fa9b18b9e41c80835bd6ea20bf6163bfa779952e2984f72e6a",
+      "normalized" : {
+        "auth_type" : "bearer",
+        "endpoint_url" : "http:\/\/[::1]:9999\/v1\/messages",
+        "full_url" : false,
+        "harness_id" : "claude-code",
+        "model_mappings" : {
+          "claude-sonnet-5" : "relay-model"
+        },
+        "name" : "Relay",
+        "protocol" : "messages",
+        "schema_version" : 1,
+        "send_reasoning" : false
+      }
+    },
+    {
+      "binding" : {
+        "auth_type" : "bearer",
+        "endpoint_url" : "https:\/\/relay.example\/a\/b\/%E4%B8%AD%E6%96%87\/v1\/messages",
+        "harness_id" : "claude-code",
+        "model_id" : "relay-model",
+        "profile_id" : "d31e37776e7d94ea1f93b9a8ca714dadbb86ed90bda94ba80d8a4be438d1db67",
+        "protocol" : "messages",
+        "schema_version" : 1,
+        "send_reasoning" : false
+      },
+      "configuration" : {
+        "auth_type" : "bearer",
+        "endpoint_url" : "https:\/\/relay.example\/a%2Fb\/%E4%B8%AD%E6%96%87",
+        "full_url" : false,
+        "harness_id" : "claude-code",
+        "model_mappings" : {
+          "claude-sonnet-5" : "relay-model"
+        },
+        "name" : "Relay",
+        "protocol" : "messages",
+        "schema_version" : 1,
+        "send_reasoning" : false
+      },
+      "credential_account" : "CUSTOM_PROVIDER_claude-code_d990dc8644a082299f114c074e2bcc650747d7439f517acf8a1da3163cedc416",
+      "normalized" : {
+        "auth_type" : "bearer",
+        "endpoint_url" : "https:\/\/relay.example\/a\/b\/%E4%B8%AD%E6%96%87\/v1\/messages",
+        "full_url" : false,
+        "harness_id" : "claude-code",
+        "model_mappings" : {
+          "claude-sonnet-5" : "relay-model"
+        },
+        "name" : "Relay",
+        "protocol" : "messages",
+        "schema_version" : 1,
+        "send_reasoning" : false
+      }
+    },
+    {
+      "binding" : {
+        "auth_type" : "bearer",
+        "endpoint_url" : "https:\/\/relay.example\/a%2Fb\/%E4%B8%AD%E6%96%87",
+        "harness_id" : "claude-code",
+        "model_id" : "relay-model",
+        "profile_id" : "d43f8f2851762f231fab0fedef895471dccff00c0377b1be4748abe778d646c7",
+        "protocol" : "responses",
+        "schema_version" : 1,
+        "send_reasoning" : false
+      },
+      "configuration" : {
+        "auth_type" : "bearer",
+        "endpoint_url" : "https:\/\/relay.example\/a%2Fb\/%E4%B8%AD%E6%96%87",
+        "full_url" : true,
+        "harness_id" : "claude-code",
+        "model_mappings" : {
+          "claude-sonnet-5" : "relay-model"
+        },
+        "name" : "Relay",
+        "protocol" : "responses",
+        "schema_version" : 1,
+        "send_reasoning" : false
+      },
+      "credential_account" : "CUSTOM_PROVIDER_claude-code_75f2a4db674f3e70d12846f9d5921d549ba7405673bc0d243f2f6dbc7a74f1cc",
+      "normalized" : {
+        "auth_type" : "bearer",
+        "endpoint_url" : "https:\/\/relay.example\/a%2Fb\/%E4%B8%AD%E6%96%87",
+        "full_url" : true,
+        "harness_id" : "claude-code",
+        "model_mappings" : {
+          "claude-sonnet-5" : "relay-model"
+        },
+        "name" : "Relay",
+        "protocol" : "responses",
+        "schema_version" : 1,
+        "send_reasoning" : false
+      }
+    },
+    {
+      "binding" : {
+        "auth_type" : "bearer",
+        "endpoint_url" : "https:\/\/relay.example\/%252F\/with%20space",
+        "harness_id" : "claude-code",
+        "model_id" : "relay-model",
+        "profile_id" : "d83f1010e8f46610ddc17711fc612d42a9d12f87140a59e052d17d9435791669",
+        "protocol" : "chat-completions",
+        "schema_version" : 1,
+        "send_reasoning" : false
+      },
+      "configuration" : {
+        "auth_type" : "bearer",
+        "endpoint_url" : "https:\/\/relay.example\/%252F\/with%20space",
+        "full_url" : true,
+        "harness_id" : "claude-code",
+        "model_mappings" : {
+          "claude-sonnet-5" : "relay-model"
+        },
+        "name" : "Relay",
+        "protocol" : "chat-completions",
+        "schema_version" : 1,
+        "send_reasoning" : false
+      },
+      "credential_account" : "CUSTOM_PROVIDER_claude-code_27e836a7f653c47b1a05310414837a6b1bec3a0b0177c9805fb5c2855e964c1d",
+      "normalized" : {
+        "auth_type" : "bearer",
+        "endpoint_url" : "https:\/\/relay.example\/%252F\/with%20space",
+        "full_url" : true,
+        "harness_id" : "claude-code",
+        "model_mappings" : {
+          "claude-sonnet-5" : "relay-model"
+        },
+        "name" : "Relay",
+        "protocol" : "chat-completions",
+        "schema_version" : 1,
+        "send_reasoning" : false
+      }
+    },
+    {
+      "binding" : {
+        "auth_type" : "bearer",
+        "endpoint_url" : "https:\/\/relay.example\/v1\/messages",
+        "harness_id" : "claude-code",
+        "model_id" : "relay-model",
+        "profile_id" : "c46b19792871c609d55f72b0de87c6ccc85fa7f21fa0dacd57ce8a3ea9a12db7",
+        "protocol" : "messages",
+        "schema_version" : 1,
+        "send_reasoning" : false
+      },
+      "configuration" : {
+        "auth_type" : "bearer",
+        "endpoint_url" : "https:\/\/relay.example\/v1\/messages",
+        "full_url" : false,
+        "harness_id" : "claude-code",
+        "model_mappings" : {
+          "claude-sonnet-5" : "relay-model"
+        },
+        "name" : "Relay",
+        "protocol" : "messages",
+        "schema_version" : 1,
+        "send_reasoning" : false
+      },
+      "credential_account" : "CUSTOM_PROVIDER_claude-code_265b8b09dcafae78fa752808e8e4541401a21e17769261782ed791854533a8c1",
+      "normalized" : {
+        "auth_type" : "bearer",
+        "endpoint_url" : "https:\/\/relay.example\/v1\/messages",
+        "full_url" : false,
+        "harness_id" : "claude-code",
+        "model_mappings" : {
+          "claude-sonnet-5" : "relay-model"
+        },
+        "name" : "Relay",
+        "protocol" : "messages",
+        "schema_version" : 1,
+        "send_reasoning" : false
+      }
+    },
+    {
+      "binding" : {
+        "auth_type" : "bearer",
+        "endpoint_url" : "https:\/\/relay.example\/custom\/responses",
+        "harness_id" : "claude-code",
+        "model_id" : "relay-model",
+        "profile_id" : "d3d57b6cef5c8ea71f78f8bceb808bebeebe66fed4490ba73f6c5f052b2d3773",
+        "protocol" : "responses",
+        "schema_version" : 1,
+        "send_reasoning" : false
+      },
+      "configuration" : {
+        "auth_type" : "bearer",
+        "endpoint_url" : "https:\/\/relay.example\/custom\/messages",
+        "full_url" : false,
+        "harness_id" : "claude-code",
+        "model_mappings" : {
+          "claude-sonnet-5" : "relay-model"
+        },
+        "name" : "Relay",
+        "protocol" : "responses",
+        "schema_version" : 1,
+        "send_reasoning" : false
+      },
+      "credential_account" : "CUSTOM_PROVIDER_claude-code_1ccf969e19625b431d44d5e0102edb1438e8a2aa4a2a47ff933f8d6b4c5c694b",
+      "normalized" : {
+        "auth_type" : "bearer",
+        "endpoint_url" : "https:\/\/relay.example\/custom\/responses",
+        "full_url" : false,
+        "harness_id" : "claude-code",
+        "model_mappings" : {
+          "claude-sonnet-5" : "relay-model"
+        },
+        "name" : "Relay",
+        "protocol" : "responses",
+        "schema_version" : 1,
+        "send_reasoning" : false
+      }
+    },
+    {
+      "binding" : {
+        "auth_type" : "bearer",
+        "endpoint_url" : "https:\/\/relay.example\/custom",
+        "harness_id" : "claude-code",
+        "model_id" : "relay-model",
+        "profile_id" : "80bbe8093efa6afb9c07f7d58fd303585a34934d914b94d5aa2034f946bbf2f4",
+        "protocol" : "messages",
+        "schema_version" : 1,
+        "send_reasoning" : false
+      },
+      "configuration" : {
+        "auth_type" : "bearer",
+        "endpoint_url" : "https:\/\/relay.example\/custom",
+        "full_url" : true,
+        "harness_id" : "claude-code",
+        "model_mappings" : {
+          "claude-sonnet-5" : "relay-model"
+        },
+        "name" : "Relay",
+        "protocol" : "messages",
+        "schema_version" : 1,
+        "send_reasoning" : false
+      },
+      "credential_account" : "CUSTOM_PROVIDER_claude-code_ea3565b89e48905029690509a441f47f70984027877ad866849e946f0957dee0",
+      "normalized" : {
+        "auth_type" : "bearer",
+        "endpoint_url" : "https:\/\/relay.example\/custom",
+        "full_url" : true,
+        "harness_id" : "claude-code",
+        "model_mappings" : {
+          "claude-sonnet-5" : "relay-model"
+        },
+        "name" : "Relay",
+        "protocol" : "messages",
+        "schema_version" : 1,
+        "send_reasoning" : false
+      }
+    },
+    {
+      "binding" : null,
+      "configuration" : {
+        "auth_type" : "bearer",
+        "endpoint_url" : "https:\/\/user@relay.example\/v1",
+        "full_url" : false,
+        "harness_id" : "claude-code",
+        "model_mappings" : {
+          "claude-sonnet-5" : "relay-model"
+        },
+        "name" : "Relay",
+        "protocol" : "messages",
+        "schema_version" : 1,
+        "send_reasoning" : false
+      },
+      "credential_account" : null,
+      "normalized" : null
+    },
+    {
+      "binding" : null,
+      "configuration" : {
+        "auth_type" : "bearer",
+        "endpoint_url" : "https:\/\/relay.example\/v1?",
+        "full_url" : false,
+        "harness_id" : "claude-code",
+        "model_mappings" : {
+          "claude-sonnet-5" : "relay-model"
+        },
+        "name" : "Relay",
+        "protocol" : "messages",
+        "schema_version" : 1,
+        "send_reasoning" : false
+      },
+      "credential_account" : null,
+      "normalized" : null
+    },
+    {
+      "binding" : null,
+      "configuration" : {
+        "auth_type" : "bearer",
+        "endpoint_url" : "https:\/\/relay.example\/v1#",
+        "full_url" : false,
+        "harness_id" : "claude-code",
+        "model_mappings" : {
+          "claude-sonnet-5" : "relay-model"
+        },
+        "name" : "Relay",
+        "protocol" : "messages",
+        "schema_version" : 1,
+        "send_reasoning" : false
+      },
+      "credential_account" : null,
+      "normalized" : null
+    },
+    {
+      "binding" : null,
+      "configuration" : {
+        "auth_type" : "bearer",
+        "endpoint_url" : "http:\/\/relay.example\/v1",
+        "full_url" : false,
+        "harness_id" : "claude-code",
+        "model_mappings" : {
+          "claude-sonnet-5" : "relay-model"
+        },
+        "name" : "Relay",
+        "protocol" : "messages",
+        "schema_version" : 1,
+        "send_reasoning" : false
+      },
+      "credential_account" : null,
+      "normalized" : null
+    }
+  ],
+  "description" : "Frozen from pre-Rust iOS provider implementation and native canonical codec, 2026-10-15. No user configuration or credential data."
+}

@@ -8,7 +8,7 @@
 //! One host had four of those wrong, which is what the frozen fixtures found.
 //!
 //! The bodies here are the ones in
-//! `apps/mobile/ios/RishTests/Fixtures/*-request-cases.json`, which were
+//! `modules/rish/ios/Tests/Fixtures/*-request-cases.json`, which were
 //! recorded from the host whose receipts have shipped. The tests read those
 //! files directly, so this cannot drift from them without saying so.
 
@@ -130,7 +130,11 @@ enum Family {
 }
 
 fn family_of(model: &str) -> Family {
-    if model.starts_with("claude-haiku-4-5") || model.starts_with("GLM-") {
+    if model.starts_with("claude-haiku-4-5")
+        || model
+            .get(..4)
+            .is_some_and(|prefix| prefix.eq_ignore_ascii_case("glm-"))
+    {
         Family::Budget
     } else if model.starts_with("claude-fable-") {
         Family::AlwaysOn
@@ -177,7 +181,11 @@ fn messages_body(
             // blocks are not in the closed transcript, and the budget API
             // rejects that -- so such a round runs unthinking.
             if thinking && !last_assistant_uses_tools(&turns) {
-                let budget = if maximal { HAIKU_BUDGET_MAX } else { HAIKU_BUDGET_HIGH };
+                let budget = if maximal {
+                    HAIKU_BUDGET_MAX
+                } else {
+                    HAIKU_BUDGET_HIGH
+                };
                 body.insert(
                     "thinking".into(),
                     json!({ "type": "enabled", "budget_tokens": budget }),
@@ -340,7 +348,10 @@ fn anthropic_tools(tools: &[Value]) -> Result<Vec<Value>, &'static str> {
     tools
         .iter()
         .map(|tool| {
-            let function = tool.get("function").and_then(Value::as_object).ok_or(TOOLS)?;
+            let function = tool
+                .get("function")
+                .and_then(Value::as_object)
+                .ok_or(TOOLS)?;
             let name = text(function.get("name")).ok_or(TOOLS)?;
             let parameters = function.get("parameters").ok_or(TOOLS)?;
             if !parameters.is_object() {
@@ -388,7 +399,11 @@ fn responses_body(
     body.insert("store".into(), json!(false));
     body.insert(
         "max_output_tokens".into(),
-        json!(if thinking { RESPONSES_THINKING } else { RESPONSES_PLAIN }),
+        json!(if thinking {
+            RESPONSES_THINKING
+        } else {
+            RESPONSES_PLAIN
+        }),
     );
     body.insert("input".into(), Value::Array(input));
     if !instructions.is_empty() {
@@ -442,7 +457,10 @@ fn append_input(
                     text(function.get("name")),
                     // Empty arguments are a call with no parameters, which
                     // is a call; only a missing string is a broken turn.
-                    function.get("arguments").and_then(Value::as_str).map(str::to_owned),
+                    function
+                        .get("arguments")
+                        .and_then(Value::as_str)
+                        .map(str::to_owned),
                 ) else {
                     return Err(TRANSCRIPT);
                 };
@@ -488,7 +506,10 @@ fn responses_tools(tools: &[Value]) -> Result<Vec<Value>, &'static str> {
     tools
         .iter()
         .map(|tool| {
-            let function = tool.get("function").and_then(Value::as_object).ok_or(TOOLS)?;
+            let function = tool
+                .get("function")
+                .and_then(Value::as_object)
+                .ok_or(TOOLS)?;
             let name = text(function.get("name")).ok_or(TOOLS)?;
             let parameters = function.get("parameters").ok_or(TOOLS)?;
             if !parameters.is_object() {

@@ -256,7 +256,28 @@ fn compare_section(
                     Ok(input) => mutation_oracle(&input, &env),
                     Err(_) => "-".to_string(),
                 };
-                if !matches(&got, expected_mutations[index].as_str()) {
+                // The frozen ObjC schema required a preselected model. The
+                // shared schema-9 contract now explicitly permits an unset
+                // default/provider preference; conversations and execution
+                // records retain their model checks. Keep the old oracle
+                // file frozen and isolate exactly these two null mutations.
+                let unconfigured_preference = section == "candidates"
+                    && tree["schema_version"] == 9
+                    && *op == "null"
+                    && matches!(path.as_slice(), [Step::Key(parent), Step::Key(field)]
+                        if parent == "preferences" && matches!(field.as_str(), "default_model" | "selected_harness_id"))
+                    && expected_mutations[index] == "-"
+                    && entry["base"]
+                        .as_str()
+                        .is_some_and(|base| !base.starts_with('-'));
+                let expanded = unconfigured_preference.then(|| {
+                    candidate_digest(&canonical_json(&mutated).expect("valid mutation JSON"))
+                        .expect("unconfigured preference still has a valid digest")
+                });
+                let expected = expanded
+                    .as_deref()
+                    .or_else(|| expected_mutations[index].as_str());
+                if !matches(&got, expected) {
                     mismatches.push(format!(
                         "{section}/{name}: mutation #{index} {path:?} {op} got {got} want {}",
                         expected_mutations[index]
@@ -361,4 +382,26 @@ fn session_validators_match_the_objc_engine() {
             .collect::<Vec<_>>()
             .join("\n")
     );
+}
+
+#[test]
+fn tombstones_preserve_input_order_and_reject_nonadjacent_duplicates() {
+    let ids = [
+        "ffffffff-ffff-4fff-8fff-ffffffffffff",
+        "11111111-1111-4111-8111-111111111111",
+        "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+    ];
+    let raw = serde_json::to_vec(&serde_json::json!({
+        "schema_version": 1, "generation": 7, "operation_ids": ids,
+    }))
+    .unwrap();
+    assert_eq!(
+        validate_tombstones(&raw),
+        Some((7, ids.iter().map(|id| (*id).to_owned()).collect()))
+    );
+    let duplicate = serde_json::to_vec(&serde_json::json!({
+        "schema_version": 1, "generation": 7, "operation_ids": [ids[0], ids[1], ids[2], ids[0]],
+    }))
+    .unwrap();
+    assert!(validate_tombstones(&duplicate).is_none());
 }

@@ -1,6 +1,6 @@
 #import "RuntimeEnvironmentStore.h"
-#import <React/RCTBridgeModule.h>
-#import <React/RCTUtils.h>
+#import <RishNative/RishNativeModule.h>
+#import <RishNative/RishUIKit.h>
 #import <UIKit/UIKit.h>
 #import <UniformTypeIdentifiers/UniformTypeIdentifiers.h>
 
@@ -11,7 +11,7 @@ static BOOL EnvironmentRequest(id request, NSArray *keys) {
   return [version isKindOfClass:NSNumber.class] && CFGetTypeID((__bridge CFTypeRef)version) != CFBooleanGetTypeID()
       && [version isEqual:@1];
 }
-static void EnvironmentReject(RCTPromiseRejectBlock reject, NSError *error) {
+static void EnvironmentReject(RishRejectBlock reject, NSError *error) {
   NSSet *codes = [NSSet setWithArray:@[@"E_ENV_BAD_ARGUMENTS",@"E_ENV_STORAGE",@"E_ENV_NOT_FOUND",@"E_ENV_NOT_INSTALLED",
       @"E_ENV_BUSY",@"E_ENV_IN_USE",@"E_ENV_LIMIT",@"E_ENV_PACKAGE_INVALID",@"E_ENV_PACKAGE_TOO_LARGE",
       @"E_ENV_INCOMPATIBLE",@"E_ENV_INTEGRITY",@"E_ENV_DISK_SPACE",@"E_ENV_DOWNLOAD",@"E_ENV_CANCELLED",
@@ -31,23 +31,23 @@ static void EnvironmentReject(RCTPromiseRejectBlock reject, NSError *error) {
 @implementation DSHOwnedEnvironmentInstall
 @end
 
-@interface LocalEnvironmentsModule : NSObject <RCTBridgeModule, UIDocumentPickerDelegate>
-@property(nonatomic, copy) RCTPromiseResolveBlock importResolve;
-@property(nonatomic, copy) RCTPromiseRejectBlock importReject;
+@interface LocalEnvironmentsModule : NSObject <RishNativeModule, UIDocumentPickerDelegate>
+@property(nonatomic, copy) RishResolveBlock importResolve;
+@property(nonatomic, copy) RishRejectBlock importReject;
 @property(nonatomic, strong) UIDocumentPickerViewController *picker;
 // Keep bounded completion tombstones so a late cleanup cannot reuse a task ID.
 @property(nonatomic, strong) NSMutableDictionary<NSString *, DSHOwnedEnvironmentInstall *> *ownedInstalls;
 @end
 
 @implementation LocalEnvironmentsModule
-RCT_EXPORT_MODULE(LocalEnvironments)
+RISH_NATIVE_MODULE(LocalEnvironments)
 + (BOOL)requiresMainQueueSetup { return NO; }
 // Override only in native tests. Store calls must stay outside the module lock:
 // beginInstallEnvironmentId may invoke its completion synchronously.
 - (DSHRuntimeEnvironmentStore *)environmentStore { return DSHRuntimeEnvironmentStore.sharedStore; }
 
-RCT_REMAP_METHOD(listEnvironments, listEnvironmentsRequest:(id)request
-    resolver:(RCTPromiseResolveBlock)resolve rejecter:(RCTPromiseRejectBlock)reject) {
+RISH_NATIVE_METHOD(listEnvironments, listEnvironmentsRequest:(id)request
+    resolver:(RishResolveBlock)resolve rejecter:(RishRejectBlock)reject) {
   if (!EnvironmentRequest(request, @[@"workspace_id"]) || (request[@"workspace_id"] != NSNull.null
       && !DSHEnvironmentValidWorkspaceId(request[@"workspace_id"]))) {
     EnvironmentReject(reject, DSHEnvironmentError(@"E_ENV_BAD_ARGUMENTS")); return;
@@ -57,8 +57,8 @@ RCT_REMAP_METHOD(listEnvironments, listEnvironmentsRequest:(id)request
       request[@"workspace_id"] == NSNull.null ? nil : request[@"workspace_id"] error:&error];
   if (result) resolve(result); else EnvironmentReject(reject, error);
 }
-RCT_REMAP_METHOD(selectEnvironment, selectEnvironmentRequest:(id)request
-    resolver:(RCTPromiseResolveBlock)resolve rejecter:(RCTPromiseRejectBlock)reject) {
+RISH_NATIVE_METHOD(selectEnvironment, selectEnvironmentRequest:(id)request
+    resolver:(RishResolveBlock)resolve rejecter:(RishRejectBlock)reject) {
   if (!EnvironmentRequest(request, @[@"workspace_id",@"environment_id"])) {
     EnvironmentReject(reject, DSHEnvironmentError(@"E_ENV_BAD_ARGUMENTS")); return;
   }
@@ -67,8 +67,8 @@ RCT_REMAP_METHOD(selectEnvironment, selectEnvironmentRequest:(id)request
     resolve(@{@"schema_version":@1,@"status":@"selected"});
   else EnvironmentReject(reject, error);
 }
-RCT_REMAP_METHOD(removeEnvironment, removeEnvironmentRequest:(id)request
-    resolver:(RCTPromiseResolveBlock)resolve rejecter:(RCTPromiseRejectBlock)reject) {
+RISH_NATIVE_METHOD(removeEnvironment, removeEnvironmentRequest:(id)request
+    resolver:(RishResolveBlock)resolve rejecter:(RishRejectBlock)reject) {
   if (!EnvironmentRequest(request, @[@"environment_id"])) {
     EnvironmentReject(reject, DSHEnvironmentError(@"E_ENV_BAD_ARGUMENTS")); return;
   }
@@ -77,8 +77,8 @@ RCT_REMAP_METHOD(removeEnvironment, removeEnvironmentRequest:(id)request
     resolve(@{@"schema_version":@1,@"status":@"removed"});
   else EnvironmentReject(reject, error);
 }
-RCT_REMAP_METHOD(installEnvironment, installEnvironmentRequest:(id)request
-    resolver:(RCTPromiseResolveBlock)resolve rejecter:(RCTPromiseRejectBlock)reject) {
+RISH_NATIVE_METHOD(installEnvironment, installEnvironmentRequest:(id)request
+    resolver:(RishResolveBlock)resolve rejecter:(RishRejectBlock)reject) {
   if (!EnvironmentRequest(request, @[@"environment_id"]) || !DSHEnvironmentValidId(request[@"environment_id"])) {
     EnvironmentReject(reject, DSHEnvironmentError(@"E_ENV_BAD_ARGUMENTS")); return;
   }
@@ -86,8 +86,8 @@ RCT_REMAP_METHOD(installEnvironment, installEnvironmentRequest:(id)request
     if (result) resolve(result); else EnvironmentReject(reject, error);
   }];
 }
-RCT_REMAP_METHOD(installEnvironmentOwned, installEnvironmentOwnedRequest:(id)request
-    resolver:(RCTPromiseResolveBlock)resolve rejecter:(RCTPromiseRejectBlock)reject) {
+RISH_NATIVE_METHOD(installEnvironmentOwned, installEnvironmentOwnedRequest:(id)request
+    resolver:(RishResolveBlock)resolve rejecter:(RishRejectBlock)reject) {
   if (!EnvironmentRequest(request, @[@"operation_id",@"environment_id"])
       || !DSHEnvironmentValidWorkspaceId(request[@"operation_id"])
       || !DSHEnvironmentValidId(request[@"environment_id"])) {
@@ -124,8 +124,8 @@ RCT_REMAP_METHOD(installEnvironmentOwned, installEnvironmentOwnedRequest:(id)req
   }
   if (cancelToken) [store cancelInstallToken:token];
 }
-RCT_REMAP_METHOD(cancelOwnedInstall, cancelOwnedInstallRequest:(id)request
-    resolver:(RCTPromiseResolveBlock)resolve rejecter:(RCTPromiseRejectBlock)reject) {
+RISH_NATIVE_METHOD(cancelOwnedInstall, cancelOwnedInstallRequest:(id)request
+    resolver:(RishResolveBlock)resolve rejecter:(RishRejectBlock)reject) {
   if (!EnvironmentRequest(request, @[@"operation_id"]) || !DSHEnvironmentValidWorkspaceId(request[@"operation_id"])) {
     EnvironmentReject(reject, DSHEnvironmentError(@"E_ENV_BAD_ARGUMENTS")); return;
   }
@@ -136,7 +136,7 @@ RCT_REMAP_METHOD(cancelOwnedInstall, cancelOwnedInstallRequest:(id)request
     DSHOwnedEnvironmentInstall *operation = self.ownedInstalls[operationId];
     if (!operation && self.ownedInstalls.count >= 256) limited = YES;
     else {
-      // Remember cancellation even when React Native delivers it before install.
+      // Remember cancellation even when app UI delivers it before install.
       if (!operation) { operation = [DSHOwnedEnvironmentInstall new]; self.ownedInstalls[operationId] = operation; }
       settled = operation.settled;
       if (!settled) { operation.cancelled = YES; token = operation.token; }
@@ -146,8 +146,8 @@ RCT_REMAP_METHOD(cancelOwnedInstall, cancelOwnedInstallRequest:(id)request
   if (token) [[self environmentStore] cancelInstallToken:token];
   resolve(@{@"schema_version":@1,@"status":settled ? @"idle" : @"cancelled"});
 }
-RCT_REMAP_METHOD(downloadEnvironment, downloadEnvironmentRequest:(id)request
-    resolver:(RCTPromiseResolveBlock)resolve rejecter:(RCTPromiseRejectBlock)reject) {
+RISH_NATIVE_METHOD(downloadEnvironment, downloadEnvironmentRequest:(id)request
+    resolver:(RishResolveBlock)resolve rejecter:(RishRejectBlock)reject) {
   if (!EnvironmentRequest(request, @[@"url"]) || !DSHEnvironmentValidHTTPSURL(request[@"url"])) {
     EnvironmentReject(reject, DSHEnvironmentError(@"E_ENV_BAD_ARGUMENTS")); return;
   }
@@ -155,15 +155,15 @@ RCT_REMAP_METHOD(downloadEnvironment, downloadEnvironmentRequest:(id)request
     if (result) resolve(result); else EnvironmentReject(reject, error);
   }];
 }
-RCT_REMAP_METHOD(cancelInstall, cancelInstallRequest:(id)request
-    resolver:(RCTPromiseResolveBlock)resolve rejecter:(RCTPromiseRejectBlock)reject) {
+RISH_NATIVE_METHOD(cancelInstall, cancelInstallRequest:(id)request
+    resolver:(RishResolveBlock)resolve rejecter:(RishRejectBlock)reject) {
   if (!EnvironmentRequest(request, @[])) { EnvironmentReject(reject, DSHEnvironmentError(@"E_ENV_BAD_ARGUMENTS")); return; }
   resolve(@{@"schema_version":@1,@"status":[DSHRuntimeEnvironmentStore.sharedStore cancelInstall] ? @"cancelled" : @"idle"});
 }
-RCT_REMAP_METHOD(importEnvironment, importEnvironmentResolver:(RCTPromiseResolveBlock)resolve
-    rejecter:(RCTPromiseRejectBlock)reject) {
+RISH_NATIVE_METHOD(importEnvironment, importEnvironmentResolver:(RishResolveBlock)resolve
+    rejecter:(RishRejectBlock)reject) {
   dispatch_async(dispatch_get_main_queue(), ^{
-    UIViewController *presenter = RCTPresentedViewController();
+    UIViewController *presenter = RishPresentedViewController();
     if (self.importResolve || self.picker || !presenter || presenter.isBeingDismissed || presenter.isBeingPresented) {
       EnvironmentReject(reject, DSHEnvironmentError(@"E_ENV_BUSY")); return;
     }
@@ -176,13 +176,13 @@ RCT_REMAP_METHOD(importEnvironment, importEnvironmentResolver:(RCTPromiseResolve
 }
 - (void)documentPickerWasCancelled:(UIDocumentPickerViewController *)controller {
   if (controller != self.picker) return;
-  RCTPromiseResolveBlock resolve = self.importResolve;
+  RishResolveBlock resolve = self.importResolve;
   self.importResolve = nil; self.importReject = nil; self.picker = nil;
   if (resolve) resolve(NSNull.null);
 }
 - (void)documentPicker:(UIDocumentPickerViewController *)controller didPickDocumentsAtURLs:(NSArray<NSURL *> *)urls {
   if (controller != self.picker) return;
-  RCTPromiseResolveBlock resolve = self.importResolve; RCTPromiseRejectBlock reject = self.importReject;
+  RishResolveBlock resolve = self.importResolve; RishRejectBlock reject = self.importReject;
   self.picker = nil;
   NSURL *url = urls.count == 1 ? urls.firstObject : nil;
   if (!url || ![url.pathExtension.lowercaseString isEqual:@"rishenv"]) {

@@ -13,8 +13,12 @@ extern NSString *const DSHGitSSHCredentialService;
 /// component is accepted.
 NSDictionary *_Nullable DSHGitSSHValidatedRemote(id value, NSError **error);
 
+/// Read-only compatibility for a credential host stored with Foundation's
+/// single IPv6 bracket pair. Does not authorize a different host or mutate it.
+BOOL DSHGitSSHCredentialHostsMatch(id storedHost, id requestedHost);
+
 /// Returns the app-private SSH credential for a profile and endpoint. The
-/// dictionary is native-only and must never cross the React Native bridge.
+/// dictionary is native-only and must never cross the app UI bridge.
 NSDictionary *_Nullable DSHGitSSHCredentialForProfile(NSString *profileId,
                                                      NSString *host,
                                                      NSInteger port,

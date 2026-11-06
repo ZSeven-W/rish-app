@@ -1,12 +1,17 @@
 #import "RishHarnessCatalog.h"
+#import "ProviderConfiguration.h"
+#import "HarnessAuthService.h"
+#include "rish_agent_core.h"
 
 static NSString *const DSHCatalogHarnessDsh = @"dsh";
 static NSString *const DSHCatalogHarnessClaudeCode = @"claude-code";
 static NSString *const DSHCatalogHarnessCodex = @"codex";
 static NSString *const DSHCodexDiscoveredModelsKey = @"rish.codex.discovered-models.v1";
+static NSString *const DSHProviderModelsKey = @"RishProviderModelsV1";
 static BOOL DSHCodexDiscoveryID(id value) {
   if (![value isKindOfClass:NSString.class] || [value length] > 80) return NO;
-  return [value rangeOfString:@"^(?:(?:gpt|codex)-[A-Za-z0-9][A-Za-z0-9._-]*|o[0-9][A-Za-z0-9._-]*)$" options:NSRegularExpressionSearch].location != NSNotFound;
+  NSRange match = [value rangeOfString:@"^(?:(?:gpt|codex)-[A-Za-z0-9][A-Za-z0-9._-]*|o[0-9][A-Za-z0-9._-]*)$" options:NSRegularExpressionSearch];
+  return match.location == 0 && match.length == [value length];
 }
 static NSSet<NSString *> *DSHCodexDiscoveredModels(void) {
   NSArray *values = [NSUserDefaults.standardUserDefaults arrayForKey:DSHCodexDiscoveredModelsKey];
@@ -31,26 +36,80 @@ BOOL DSHRegisterCodexSubscriptionModels(NSArray<NSString *> *models) {
 /// round has to be a fixed catalog fact, not mutable state.
 static NSString *const DSHCatalogHarnessGlm = @"glm";
 
-static NSDictionary<NSString *, NSString *> *DSHCatalogHarnessByModel(void) {
-  static NSDictionary<NSString *, NSString *> *table = nil;
-  static dispatch_once_t onceToken;
-  dispatch_once(&onceToken, ^{
-    table = @{
-      @"deepseek-v4-flash" : DSHCatalogHarnessDsh,
-      @"deepseek-v4-pro" : DSHCatalogHarnessDsh,
-      @"deepseek-v4-flash-vision-exp" : DSHCatalogHarnessDsh,
-      @"claude-sonnet-5" : DSHCatalogHarnessClaudeCode,
-      @"claude-opus-5" : DSHCatalogHarnessClaudeCode,
-      @"claude-haiku-4-5-20251001" : DSHCatalogHarnessClaudeCode,
-      @"claude-fable-5-1" : DSHCatalogHarnessClaudeCode,
-      @"gpt-5.6" : DSHCatalogHarnessCodex,
-      @"gpt-5.6-mini" : DSHCatalogHarnessCodex,
-      @"gpt-5.6-nano" : DSHCatalogHarnessCodex,
-      @"GLM-5.3" : DSHCatalogHarnessGlm,
-      @"GLM-5.3-Flash" : DSHCatalogHarnessGlm,
-    };
-  });
-  return table;
+// Custom model rules and built-in model identities are defined once in Rust.
+// This adapter owns NSUserDefaults and subscription-discovered registrations.
+static id DSHCatalogCore(NSString *op, NSDictionary *fields, BOOL provider) {
+  NSMutableDictionary *request = [fields mutableCopy];
+  request[@"op"] = op;
+  if (![NSJSONSerialization isValidJSONObject:request]) return nil;
+  NSData *bytes = [NSJSONSerialization dataWithJSONObject:request options:0 error:nil];
+  if (!bytes) return nil;
+  char *raw = provider ? rish_agent_provider_policy_reduce((const char *)bytes.bytes, bytes.length) :
+    rish_agent_model_catalog_reduce((const char *)bytes.bytes, bytes.length);
+  if (!raw) return nil;
+  size_t length = strnlen(raw, 1024 * 1024 + 1);
+  NSData *result = length <= 1024 * 1024 ? [NSData dataWithBytes:raw length:length] : nil;
+  rish_agent_string_free(raw);
+  id reply = result ? [NSJSONSerialization JSONObjectWithData:result options:0 error:nil] : nil;
+  if (![reply isKindOfClass:NSDictionary.class] || ![reply[@"ok"] isEqual:@YES]) return nil;
+  return reply[@"value"] == NSNull.null ? nil : reply[@"value"];
+}
+static id DSHCatalogReduce(NSString *op, NSDictionary *fields) {
+  return DSHCatalogCore(op, fields, NO);
+}
+static id DSHStoredDshCatalog(void) {
+  // Only missing storage is null. A malformed saved value must not silently
+  // become a new default catalog or be rewritten during a read.
+  return [NSUserDefaults.standardUserDefaults objectForKey:@"rish.dsh-models.v1"] ?: NSNull.null;
+}
+
+static id DSHProviderCatalogReduce(NSString *operation, NSDictionary *fields, NSError **error) {
+  NSMutableDictionary *request = [@{@"op":operation,
+    @"registry":[NSUserDefaults.standardUserDefaults objectForKey:DSHProviderModelsKey] ?: NSNull.null,
+    @"legacy_dsh_catalog":DSHStoredDshCatalog(),
+    @"discovered_models":DSHCodexDiscoveredModels().allObjects} mutableCopy];
+  [request addEntriesFromDictionary:fields];
+  NSData *bytes = [NSJSONSerialization dataWithJSONObject:request options:0 error:nil];
+  char *raw = bytes ? rish_agent_model_catalog_reduce((const char *)bytes.bytes, bytes.length) : NULL;
+  if (!raw) return nil;
+  size_t size = strnlen(raw, 1024 * 1024 + 1);
+  NSData *data = size <= 1024 * 1024 ? [NSData dataWithBytes:raw length:size] : nil;
+  rish_agent_string_free(raw);
+  NSDictionary *reply = data ? [NSJSONSerialization JSONObjectWithData:data options:0 error:nil] : nil;
+  if (![reply isKindOfClass:NSDictionary.class] || ![reply[@"ok"] isEqual:@YES]) {
+    NSString *code = [reply[@"error"] isKindOfClass:NSString.class] ? reply[@"error"] : @"E_MODEL_CATALOG_INVALID";
+    if (error) *error = [NSError errorWithDomain:@"RishProviderModelCatalog" code:1 userInfo:@{NSLocalizedDescriptionKey:code}];
+    return nil;
+  }
+  return reply[@"value"] == NSNull.null ? nil : reply[@"value"];
+}
+NSDictionary *DSHProviderModelCatalog(void) {
+  @synchronized(NSUserDefaults.standardUserDefaults) { return DSHProviderCatalogReduce(@"provider_read", @{}, nil); }
+}
+NSArray<NSDictionary *> *DSHProviderModelRows(BOOL includeRetired) {
+  @synchronized(NSUserDefaults.standardUserDefaults) {
+    return DSHProviderCatalogReduce(@"provider_models", @{@"include_retired":@(includeRetired)}, nil);
+  }
+}
+NSDictionary *DSHSaveProviderModelCatalog(NSDictionary *request, NSError **error) {
+  @synchronized(NSUserDefaults.standardUserDefaults) {
+    NSDictionary *saved = DSHProviderCatalogReduce(@"provider_save", @{@"request":request ?: NSNull.null}, error);
+    if (saved) [NSUserDefaults.standardUserDefaults setObject:saved forKey:DSHProviderModelsKey];
+    return saved;
+  }
+}
+BOOL DSHProviderModelIsActive(NSString *model) {
+  for (NSDictionary *row in DSHProviderModelRows(NO)) if ([row[@"id"] isEqual:model]) return YES;
+  return NO;
+}
+BOOL DSHHarnessModelIsExecutable(id model) {
+  if (![model isKindOfClass:NSString.class]) return NO;
+  if ([DSHCatalogCore(@"is_custom_model", @{@"model_id":model}, YES) boolValue])
+    return [DSHProviderConfigurationStore.sharedStore customRouteForModel:model requireActive:YES] != nil;
+  NSString *harness = DSHHarnessIdForModel(model);
+  if ([harness isEqual:@"codex"] && DSHCodexChatUsesSubscription())
+    return [DSHCodexDiscoveredModels() containsObject:model];
+  return harness && DSHProviderModelIsActive(model);
 }
 
 static NSDictionary<NSString *, NSString *> *DSHCatalogProviderByHarness(void) {
@@ -82,15 +141,15 @@ static NSDictionary<NSString *, NSString *> *DSHCatalogHostByProvider(void) {
 }
 
 static NSDictionary<NSString *, NSString *> *DSHCatalogAccountByHarness(void) {
-  static NSDictionary<NSString *, NSString *> *table = nil;
+  static NSDictionary<NSString *, NSString *> *table;
   static dispatch_once_t onceToken;
   dispatch_once(&onceToken, ^{
-    table = @{
-      DSHCatalogHarnessDsh : @"DEEPSEEK_API_KEY",
-      DSHCatalogHarnessClaudeCode : @"ANTHROPIC_API_KEY",
-      DSHCatalogHarnessCodex : @"OPENAI_API_KEY",
-      DSHCatalogHarnessGlm : @"BIGMODEL_API_KEY",
-    };
+    NSMutableDictionary *accounts = [NSMutableDictionary dictionary];
+    for (NSString *harness in DSHCatalogCore(@"harnesses", @{}, YES)) {
+      NSString *slot = DSHCatalogCore(@"slot_for_harness", @{@"harness_id":harness}, YES);
+      if (slot) accounts[harness] = slot;
+    }
+    table = [accounts copy];
   });
   return table;
 }
@@ -99,56 +158,98 @@ static NSString *_Nullable DSHCatalogString(id _Nullable value) {
   return [value isKindOfClass:NSString.class] ? value : nil;
 }
 
+// Retired identities remain recognizable when validating saved receipts and
+// session history. This catalog never authorizes a new request; dispatch uses
+// the registry's requireActive route and its captured configuration binding.
+static NSArray<NSDictionary *> *DSHCatalogCustomModels(void) {
+  return [DSHProviderConfigurationStore.sharedStore customModelsIncludingRetired:YES] ?: @[];
+}
+
+static NSArray<NSDictionary *> *DSHCatalogCustomProviders(void) {
+  // Providers exist before model discovery or selection. Their credential and
+  // endpoint identities must not depend on having an executable model row.
+  return [DSHProviderConfigurationStore.sharedStore customRegistry:nil][@"providers"] ?: @[];
+}
+
+static NSDictionary *_Nullable DSHCatalogCustomRowForHarness(NSString *harness) {
+  if (![harness hasPrefix:@"custom-"]) return nil;
+  for (NSDictionary *provider in DSHCatalogCustomProviders()) {
+    NSDictionary *configuration = provider[@"configuration"];
+    if ([configuration[@"harness_id"] isEqual:harness])
+      return @{@"harness_id":harness, @"provider_id":harness, @"configuration":configuration};
+  }
+  return nil;
+}
+
+static NSString *_Nullable DSHCatalogCustomHost(NSDictionary *row) {
+  NSString *endpoint = DSHCatalogString(row[@"configuration"][@"endpoint_url"]);
+  return endpoint ? [NSURLComponents componentsWithString:endpoint].host : nil;
+}
+
 NSSet<NSString *> *DSHHarnessSupportedModels(void) {
-  NSMutableSet *models = [NSMutableSet setWithArray:DSHCatalogHarnessByModel().allKeys];
-  [models unionSet:DSHCodexDiscoveredModels()];
-  NSDictionary *catalog = DSHDshModelCatalog();
-  for (NSArray *rows in @[catalog[@"models"] ?: @[], catalog[@"retired_models"] ?: @[]])
-    for (NSDictionary *row in rows) [models addObject:row[@"id"]];
-  return models;
+  NSArray *models = DSHCatalogReduce(@"supported_models", @{@"catalog":DSHStoredDshCatalog(),
+    @"discovered_models":DSHCodexDiscoveredModels().allObjects});
+  NSMutableSet *result = [NSMutableSet setWithArray:models ?: @[]];
+  for (NSDictionary *row in DSHProviderModelRows(YES)) {
+    NSString *model = DSHCatalogString(row[@"id"]);
+    if (model) [result addObject:model];
+  }
+  for (NSDictionary *row in DSHCatalogCustomModels()) {
+    NSString *model = DSHCatalogString(row[@"id"]);
+    if (model) [result addObject:model];
+  }
+  return result;
 }
 
 BOOL DSHHarnessIsSupportedModel(id value) {
-  NSString *model = DSHCatalogString(value);
-  return model != nil && (DSHCatalogHarnessByModel()[model] != nil || DSHDshModelEntry(model) != nil || [DSHCodexDiscoveredModels() containsObject:model]);
+  return DSHHarnessIdForModel(value) != nil;
 }
 
 NSSet<NSString *> *DSHHarnessSupportedHarnessIds(void) {
-  static NSSet<NSString *> *ids = nil;
-  static dispatch_once_t onceToken;
-  dispatch_once(&onceToken, ^{
-    ids = [NSSet setWithArray:DSHCatalogProviderByHarness().allKeys];
-  });
+  NSMutableSet *ids = [NSMutableSet setWithArray:DSHCatalogProviderByHarness().allKeys];
+  for (NSDictionary *provider in DSHCatalogCustomProviders()) {
+    NSString *harness = DSHCatalogString(provider[@"configuration"][@"harness_id"]);
+    if (harness) [ids addObject:harness];
+  }
   return ids;
 }
 
 BOOL DSHHarnessIsSupportedHarnessId(id value) {
   NSString *harness = DSHCatalogString(value);
-  return harness != nil && DSHCatalogProviderByHarness()[harness] != nil;
+  return harness != nil && (DSHCatalogProviderByHarness()[harness] != nil ||
+                           DSHCatalogCustomRowForHarness(harness) != nil);
 }
 
 NSString *DSHHarnessIdForModel(id model) {
   NSString *key = DSHCatalogString(model);
-  return key == nil ? nil : (DSHCatalogHarnessByModel()[key] ?: (DSHDshModelEntry(key) ? @"dsh" : ([DSHCodexDiscoveredModels() containsObject:key] ? @"codex" : nil)));
+  if ([DSHCatalogCore(@"is_custom_model", @{@"model_id":key ?: NSNull.null}, YES) boolValue]) {
+    NSDictionary *row = [DSHProviderConfigurationStore.sharedStore customRouteForModel:key requireActive:NO];
+    return DSHCatalogString(row[@"harness_id"]);
+  }
+  NSString *registered = DSHProviderCatalogReduce(@"provider_harness", @{@"model":model ?: NSNull.null}, nil);
+  if (registered) return registered;
+  return DSHCatalogReduce(@"harness_for_model", @{@"catalog":DSHStoredDshCatalog(),
+    @"model":model ?: NSNull.null, @"discovered_models":DSHCodexDiscoveredModels().allObjects});
 }
 
 NSSet<NSString *> *DSHHarnessSupportedProviderIds(void) {
-  static NSSet<NSString *> *ids = nil;
-  static dispatch_once_t onceToken;
-  dispatch_once(&onceToken, ^{
-    ids = [NSSet setWithArray:DSHCatalogHostByProvider().allKeys];
-  });
+  NSMutableSet *ids = [NSMutableSet setWithArray:DSHCatalogHostByProvider().allKeys];
+  for (NSDictionary *provider in DSHCatalogCustomProviders()) {
+    NSString *identifier = DSHCatalogString(provider[@"configuration"][@"harness_id"]);
+    if (identifier) [ids addObject:identifier];
+  }
   return ids;
 }
 
 BOOL DSHHarnessIsProviderId(id value) {
   NSString *provider = DSHCatalogString(value);
-  return provider != nil && DSHCatalogHostByProvider()[provider] != nil;
+  return provider != nil && [DSHHarnessSupportedProviderIds() containsObject:provider];
 }
 
 NSString *DSHProviderIdForHarnessId(id harnessId) {
   NSString *key = DSHCatalogString(harnessId);
-  return key == nil ? nil : DSHCatalogProviderByHarness()[key];
+  if (key == nil) return nil;
+  return DSHCatalogProviderByHarness()[key] ?: DSHCatalogString(DSHCatalogCustomRowForHarness(key)[@"provider_id"]);
 }
 
 NSString *DSHProviderIdForModel(id model) {
@@ -156,11 +257,11 @@ NSString *DSHProviderIdForModel(id model) {
 }
 
 NSSet<NSString *> *DSHHarnessSupportedProviderHosts(void) {
-  static NSSet<NSString *> *hosts = nil;
-  static dispatch_once_t onceToken;
-  dispatch_once(&onceToken, ^{
-    hosts = [NSSet setWithArray:DSHCatalogHostByProvider().allValues];
-  });
+  NSMutableSet *hosts = [NSMutableSet setWithArray:DSHCatalogHostByProvider().allValues];
+  for (NSDictionary *provider in DSHCatalogCustomProviders()) {
+    NSString *host = DSHCatalogCustomHost(provider);
+    if (host) [hosts addObject:host];
+  }
   return hosts;
 }
 
@@ -171,7 +272,8 @@ BOOL DSHHarnessIsProviderHost(id value) {
 
 NSString *DSHProviderHostForProviderId(id providerId) {
   NSString *key = DSHCatalogString(providerId);
-  return key == nil ? nil : DSHCatalogHostByProvider()[key];
+  if (key == nil) return nil;
+  return DSHCatalogHostByProvider()[key] ?: DSHCatalogCustomHost(DSHCatalogCustomRowForHarness(key));
 }
 
 NSString *DSHProviderHostForModel(id model) {
@@ -179,11 +281,12 @@ NSString *DSHProviderHostForModel(id model) {
 }
 
 NSSet<NSString *> *DSHHarnessCredentialAccounts(void) {
-  static NSSet<NSString *> *accounts = nil;
-  static dispatch_once_t onceToken;
-  dispatch_once(&onceToken, ^{
-    accounts = [NSSet setWithArray:DSHCatalogAccountByHarness().allValues];
-  });
+  NSMutableSet *accounts = [NSMutableSet setWithArray:DSHCatalogAccountByHarness().allValues];
+  for (NSDictionary *provider in DSHCatalogCustomProviders()) {
+    NSString *harness = DSHCatalogString(provider[@"configuration"][@"harness_id"]);
+    NSString *slot = harness ? DSHCatalogCore(@"slot_for_harness", @{@"harness_id":harness}, YES) : nil;
+    if (slot) [accounts addObject:slot];
+  }
   return accounts;
 }
 
@@ -194,70 +297,47 @@ BOOL DSHHarnessIsCredentialAccount(id value) {
 
 NSString *DSHCredentialAccountForHarnessId(id harnessId) {
   NSString *key = DSHCatalogString(harnessId);
-  return key == nil ? nil : DSHCatalogAccountByHarness()[key];
+  if (key == nil) return nil;
+  NSString *builtIn = DSHCatalogAccountByHarness()[key];
+  if (builtIn) return builtIn;
+  return DSHCatalogCustomRowForHarness(key) ?
+      DSHCatalogCore(@"slot_for_harness", @{@"harness_id":key}, YES) : nil;
 }
 
-static NSArray *DSHDshDefaultModels(void) {
-  return @[
-    @{@"id": @"deepseek-v4-flash", @"name": @"V4 Flash", @"supports_images": @YES},
-    @{@"id": @"deepseek-v4-pro", @"name": @"V4 Pro", @"supports_images": @NO},
-    @{@"id": @"deepseek-v4-flash-vision-exp", @"name": @"Flash Exp", @"supports_images": @YES},
-  ];
-}
-static NSArray *_Nullable DSHValidateDshModels(id value, BOOL retired) {
-  if (![value isKindOfClass:NSArray.class] || [value count] > (retired ? 256 : 32) || (!retired && [value count] == 0)) return nil;
-  NSMutableSet *seen = [NSMutableSet set];
-  NSMutableArray *result = [NSMutableArray array];
-  NSRegularExpression *pattern = [NSRegularExpression regularExpressionWithPattern:@"^[A-Za-z0-9][A-Za-z0-9._:/-]{0,127}$" options:0 error:nil];
-  for (id row in value) {
-    if (![row isKindOfClass:NSDictionary.class] || [row count] != 3) return nil;
-    NSString *model = row[@"id"], *name = row[@"name"];
-    id images = row[@"supports_images"];
-    if (![model isKindOfClass:NSString.class] || ![name isKindOfClass:NSString.class] ||
-        [pattern numberOfMatchesInString:model options:0 range:NSMakeRange(0, model.length)] != 1 ||
-        [seen containsObject:model] || (DSHCatalogHarnessByModel()[model] && ![DSHCatalogHarnessByModel()[model] isEqual:@"dsh"]) ||
-        ![images isKindOfClass:NSNumber.class] || CFGetTypeID((__bridge CFTypeRef)images) != CFBooleanGetTypeID()) return nil;
-    name = [name stringByTrimmingCharactersInSet:NSCharacterSet.whitespaceAndNewlineCharacterSet];
-    if (name.length < 1 || name.length > 80 || [name rangeOfCharacterFromSet:NSCharacterSet.controlCharacterSet].location != NSNotFound) return nil;
-    [seen addObject:model];
-    [result addObject:@{@"id":model, @"name":name, @"supports_images":images}];
-  }
-  return result;
-}
 NSDictionary *DSHDshModelCatalog(void) {
-  NSDictionary *value = [NSUserDefaults.standardUserDefaults dictionaryForKey:@"rish.dsh-models.v1"];
-  if (!value) return @{@"schema_version":@1, @"models":DSHDshDefaultModels(), @"retired_models":@[]};
-  if (![value[@"schema_version"] isKindOfClass:NSNumber.class] || [value[@"schema_version"] doubleValue] != 1 ||
-      !DSHValidateDshModels(value[@"models"], NO) || !DSHValidateDshModels(value[@"retired_models"], YES)) return nil;
-  return value;
-}
-NSDictionary *DSHDshModelEntry(NSString *model) {
-  NSDictionary *value = DSHDshModelCatalog();
-  for (NSArray *rows in @[value[@"models"] ?: @[], value[@"retired_models"] ?: @[], DSHDshDefaultModels()]) {
-    for (NSDictionary *row in rows) if ([row[@"id"] isEqual:model]) return row;
+  NSDictionary *registry = DSHProviderModelCatalog();
+  if (!registry) return nil;
+  for (NSDictionary *provider in registry[@"providers"]) {
+    if ([provider[@"harness_id"] isEqual:@"dsh"])
+      return @{@"schema_version":@1, @"models":provider[@"models"], @"retired_models":provider[@"retired_models"]};
   }
   return nil;
 }
-BOOL DSHDshModelSupportsImages(NSString *model) { return [DSHDshModelEntry(model)[@"supports_images"] boolValue]; }
+NSDictionary *DSHDshModelEntry(NSString *model) {
+  for (NSDictionary *row in DSHProviderModelRows(YES)) {
+    if ([row[@"harness_id"] isEqual:@"dsh"] && [row[@"id"] isEqual:model])
+      return @{@"id":row[@"id"], @"name":row[@"name"], @"supports_images":row[@"supports_images"]};
+  }
+  return DSHCatalogReduce(@"lookup", @{@"catalog":DSHStoredDshCatalog(), @"model":model ?: NSNull.null});
+}
+BOOL DSHDshModelSupportsImages(NSString *model) {
+  if ([DSHCatalogCore(@"is_custom_model", @{@"model_id":model ?: NSNull.null}, YES) boolValue])
+    return [[DSHProviderConfigurationStore.sharedStore customRouteForModel:model requireActive:YES][@"supports_images"] boolValue];
+  for (NSDictionary *row in DSHProviderModelRows(YES)) {
+    if ([row[@"id"] isEqual:model]) return [row[@"supports_images"] boolValue];
+  }
+  return [DSHCatalogReduce(@"supports_images", @{@"catalog":DSHStoredDshCatalog(),
+    @"model":model ?: NSNull.null}) boolValue];
+}
 NSDictionary *DSHSaveDshModelCatalog(NSDictionary *request) {
-  if (![request isKindOfClass:NSDictionary.class] || request.count != 2 ||
-      ![request[@"schema_version"] isKindOfClass:NSNumber.class] ||
-      CFGetTypeID((__bridge CFTypeRef)request[@"schema_version"]) == CFBooleanGetTypeID() ||
-      [request[@"schema_version"] doubleValue] != 1) return nil;
-  NSArray *models = DSHValidateDshModels(request[@"models"], NO);
-  if (!models) return nil;
   @synchronized(NSUserDefaults.standardUserDefaults) {
-    NSDictionary *old = DSHDshModelCatalog();
-    if (!old) return nil;
-    NSMutableDictionary *known = [NSMutableDictionary dictionary];
-    for (NSArray *rows in @[DSHDshDefaultModels(), old[@"retired_models"], old[@"models"]])
-      for (NSDictionary *row in rows) known[row[@"id"]] = row;
-    for (NSDictionary *row in models) [known removeObjectForKey:row[@"id"]];
-    if (known.count > 256) return nil;
-    NSMutableArray *retired = [NSMutableArray array];
-    for (NSString *key in [known.allKeys sortedArrayUsingSelector:@selector(compare:)]) [retired addObject:known[key]];
-    NSDictionary *saved = @{@"schema_version":@1, @"models":models, @"retired_models":retired};
-    [NSUserDefaults.standardUserDefaults setObject:saved forKey:@"rish.dsh-models.v1"];
-    return saved;
+    if (![request isKindOfClass:NSDictionary.class] || request.count != 2 ||
+        ![request[@"schema_version"] isEqual:@1] || ![request[@"models"] isKindOfClass:NSArray.class]) return nil;
+    NSDictionary *current = DSHProviderModelCatalog();
+    if (!current) return nil;
+    NSDictionary *saved = DSHSaveProviderModelCatalog(@{@"schema_version":@1,
+      @"harness_id":@"dsh", @"expected_revision":current[@"revision"], @"models":request[@"models"]}, nil);
+    if (!saved) return nil;
+    return DSHDshModelCatalog();
   }
 }

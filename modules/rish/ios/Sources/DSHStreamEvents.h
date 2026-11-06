@@ -20,7 +20,7 @@ extern NSString * const DSHStreamEventErrorDomain;
 /// that distinguishes more finely than they do.
 extern NSString * const DSHStreamFailureReasonKey;
 
-/// A parsed streaming delta emitted to JS.
+/// A parsed streaming delta emitted to UI.
 typedef NSDictionary<NSString *, id> DSHStreamDelta;
 
 /// Error 2106: a tool-call fragment has an unusable shape.

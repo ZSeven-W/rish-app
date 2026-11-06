@@ -17,9 +17,9 @@ generate_android = platform_flag != '--ios-only'
 
 ios_root = File.join(
   root,
-  'apps/mobile/ios/Rish/Images.xcassets/AppIcon.appiconset',
+  'apps/gpui/ios/Resources/Images.xcassets/AppIcon.appiconset',
 )
-android_root = File.join(root, 'apps/mobile/android/app/src/main/res')
+android_root = File.join(root, 'apps/gpui/android/app/src/main/res')
 
 def resize(source, output, size)
   FileUtils.mkdir_p(File.dirname(output))

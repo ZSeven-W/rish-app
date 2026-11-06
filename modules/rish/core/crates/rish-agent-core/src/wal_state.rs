@@ -415,7 +415,11 @@ pub fn registry_shape(registry: Option<&Value>) -> bool {
         || !canonical_sha256(r("toolset_sha256"))
         || !r("tools").is_some_and(Value::is_array)
         || array(r("tools")).len()
-            > if r("registry_version") == Some(&json!(3)) {
+            > if r("registry_version") == Some(&json!(5)) {
+                20
+            } else if r("registry_version") == Some(&json!(4)) {
+                14
+            } else if r("registry_version") == Some(&json!(3)) {
                 13
             } else {
                 8
@@ -424,6 +428,7 @@ pub fn registry_shape(registry: Option<&Value>) -> bool {
         return false;
     }
     const NAMES: &[&str] = &[
+        "ask_user",
         "list_dir",
         "read_file",
         "write_file",
@@ -437,6 +442,12 @@ pub fn registry_shape(registry: Option<&Value>) -> bool {
         "run_program",
         "start_runtime_service",
         "stop_runtime_service",
+        "list_assistant_tasks",
+        "create_assistant_task",
+        "update_assistant_task",
+        "search_assistant_memory",
+        "remember_assistant_memory",
+        "forget_assistant_memory",
     ];
     let mut seen: Vec<&str> = Vec::new();
     let mut previous: Option<&str> = None;
@@ -449,7 +460,20 @@ pub fn registry_shape(registry: Option<&Value>) -> bool {
         .is_none()
             || get(tool, "schema_version") != Some(&json!(2))
             || !NAMES.contains(&name)
-            || (crate::runtime_tools::is_runtime(name) && r("registry_version") != Some(&json!(3)))
+            || (crate::runtime_tools::is_runtime(name)
+                && !matches!(r("registry_version").and_then(Value::as_u64), Some(3..=5)))
+            || (name == "ask_user"
+                && !matches!(r("registry_version").and_then(Value::as_u64), Some(4 | 5)))
+            || (crate::assistant_tools::is_assistant(name)
+                && r("registry_version") != Some(&json!(5)))
+            || (crate::assistant_tools::is_assistant(name)
+                && (get(tool, "safe_summary_key") != Some(&json!(format!("agent.{name}")))
+                    || as_str(get(tool, "access"))
+                        != Some(if crate::assistant_tools::is_mutation(name) {
+                            "conversation_confirm"
+                        } else {
+                            "auto"
+                        })))
             || seen.contains(&name)
             || bounded_utf8(get(tool, "safe_summary_key"), 128, false).is_none()
             || !matches!(
@@ -469,7 +493,7 @@ pub fn registry_shape(registry: Option<&Value>) -> bool {
 /// `DSHAgentWALAuthorityShape`: the attempt authority, including the exact
 /// tool set its root capabilities imply.
 pub fn authority_shape(authority: &Value, env: &Env) -> bool {
-    let keys = [
+    let mut keys = vec![
         "schema_version",
         "task_id",
         "conversation_id",
@@ -492,6 +516,12 @@ pub fn authority_shape(authority: &Value, env: &Env) -> bool {
         "created_at",
         "updated_at",
     ];
+    if authority["registry"]["registry_version"] == 5 {
+        keys.push("assistant_context");
+    }
+    if !crate::assistant_context::authority_valid(authority) {
+        return false;
+    }
     let a = |key: &str| get(authority, key);
     let visible = array(a("visible_message_ids"));
     if exact_keys(Some(authority), &keys).is_none()
@@ -523,67 +553,82 @@ pub fn authority_shape(authority: &Value, env: &Env) -> bool {
         return false;
     }
     let root = a("root").expect("checked");
-    let capabilities: Vec<&str> = array(get(root, "capabilities"))
-        .iter()
-        .filter_map(|c| as_str(Some(c)))
-        .collect();
-    let has = |name: &str| capabilities.contains(&name);
-    let runtime_registry =
-        get(a("registry").expect("checked"), "registry_version") == Some(&json!(3));
     let project = string_eq(get(root, "kind"), "project");
-    let mut expected: Vec<(&str, &str)> = Vec::new();
-    if has("file_read") {
-        expected.push(("list_dir", "auto"));
-        expected.push(("read_file", "auto"));
-        if runtime_registry {
-            expected.push(("list_runtime_environments", "auto"));
-        }
-    }
-    if has("file_write") {
-        expected.push(("write_file", "conversation_confirm"));
-    }
-    if project && has("git_status") {
-        expected.push(("git_status", "auto"));
-    }
-    if project && has("git_commit") {
-        expected.push(("git_commit", "conversation_confirm"));
-    }
-    if project && has("git_push") {
-        // git_push follows the git_commit pattern (see AgentToolRegistry).
-        expected.push(("git_push", "conversation_confirm"));
-    }
-    if has("guest_service") {
-        if !runtime_registry
-            && get(a("registry").expect("checked"), "registry_version") != Some(&json!(2))
+    let registry = a("registry").expect("checked");
+    if matches!(
+        get(registry, "registry_version").and_then(Value::as_u64),
+        Some(4 | 5)
+    ) {
+        // V4 freezes whether this host offers runtime/guest tools in its table
+        // digest. Android's no-runtime identity is as valid as iOS's full one.
+        if ![false, true]
+            .into_iter()
+            .any(|guest| crate::tool_registry::registry_shape(registry, root, guest))
         {
             return false;
         }
-        expected.push(("start_guest_cgi", "conversation_confirm"));
-        expected.push(("stop_guest_cgi", "conversation_confirm"));
-        if runtime_registry {
-            expected.extend(
-                crate::runtime_tools::MUTATIONS
-                    .iter()
-                    .map(|name| (*name, "conversation_confirm")),
-            );
+    } else {
+        let capabilities: Vec<&str> = array(get(root, "capabilities"))
+            .iter()
+            .filter_map(|c| as_str(Some(c)))
+            .collect();
+        let has = |name: &str| capabilities.contains(&name);
+        let runtime_registry =
+            get(a("registry").expect("checked"), "registry_version") == Some(&json!(3));
+        let mut expected: Vec<(&str, &str)> = Vec::new();
+        if has("file_read") {
+            expected.push(("list_dir", "auto"));
+            expected.push(("read_file", "auto"));
+            if runtime_registry {
+                expected.push(("list_runtime_environments", "auto"));
+            }
         }
-    }
-    let tools = array(get(a("registry").expect("checked"), "tools"));
-    if expected.len() != tools.len() {
-        return false;
-    }
-    for tool in tools {
-        let name = as_str(get(tool, "name")).unwrap_or_default();
-        let access = as_str(get(tool, "access")).unwrap_or_default();
-        if expected.iter().any(|(n, a)| *n == name && *a == access) {
-            continue;
+        if has("file_write") {
+            expected.push(("write_file", "conversation_confirm"));
         }
-        // Authorities prepared by builds that registered git_push as once-only
-        // stay readable; the pulled device evidence fixtures carry that shape.
-        if name == "git_push" && access == "confirm_once" {
-            continue;
+        if project && has("git_status") {
+            expected.push(("git_status", "auto"));
         }
-        return false;
+        if project && has("git_commit") {
+            expected.push(("git_commit", "conversation_confirm"));
+        }
+        if project && has("git_push") {
+            // git_push follows the git_commit pattern (see AgentToolRegistry).
+            expected.push(("git_push", "conversation_confirm"));
+        }
+        if has("guest_service") {
+            if !runtime_registry
+                && get(a("registry").expect("checked"), "registry_version") != Some(&json!(2))
+            {
+                return false;
+            }
+            expected.push(("start_guest_cgi", "conversation_confirm"));
+            expected.push(("stop_guest_cgi", "conversation_confirm"));
+            if runtime_registry {
+                expected.extend(
+                    crate::runtime_tools::MUTATIONS
+                        .iter()
+                        .map(|name| (*name, "conversation_confirm")),
+                );
+            }
+        }
+        let tools = array(get(a("registry").expect("checked"), "tools"));
+        if expected.len() != tools.len() {
+            return false;
+        }
+        for tool in tools {
+            let name = as_str(get(tool, "name")).unwrap_or_default();
+            let access = as_str(get(tool, "access")).unwrap_or_default();
+            if expected.iter().any(|(n, a)| *n == name && *a == access) {
+                continue;
+            }
+            // Authorities prepared by builds that registered git_push as once-only
+            // stay readable; the pulled device evidence fixtures carry that shape.
+            if name == "git_push" && access == "confirm_once" {
+                continue;
+            }
+            return false;
+        }
     }
     if a("transport_schema_version") == Some(&json!(3)) {
         if !project
@@ -942,6 +987,10 @@ fn reduce_json_inner(input: &str) -> Result<Value, crate::store::StoreError> {
     let envelope: Value = serde_json::from_str(input).map_err(|_| StoreError::Corrupt)?;
     let op = as_str(get(&envelope, "op")).ok_or(StoreError::Corrupt)?;
     let value = get(&envelope, "value").ok_or(StoreError::InvalidArgument)?;
+    if let Some(result) = crate::assistant_tools::reduce_contract(op, value, get(&envelope, "name"))
+    {
+        return Ok(result);
+    }
     if let Some(result) = crate::runtime_tools::reduce_contract(op, value, get(&envelope, "name")) {
         return Ok(result);
     }
@@ -957,6 +1006,9 @@ fn reduce_json_inner(input: &str) -> Result<Value, crate::store::StoreError> {
         return Ok(json!({ "valid": true }));
     }
     let valid = match op {
+        "question_arguments" => crate::user_question::arguments_valid(value),
+        "question_precondition" => crate::user_question::question_shape(Some(value)),
+        "question_facts" => crate::user_question::facts_shape(Some(value)),
         "reference" => reference_shape(Some(value)),
         "root" => root_full(Some(value)),
         "message" => message_shape(value),
@@ -979,6 +1031,23 @@ fn reduce_json_inner(input: &str) -> Result<Value, crate::store::StoreError> {
         "batch_v2" => batch_shape_v2(value),
         "tool_receipt" => tool_receipt_shape(Some(value)),
         "denied_call" => denied_call_shape(value),
+        "round_v3_valid" => {
+            // A V3 projection proves its conversion shape only. Persistent
+            // readers need the complete journal invariant, including the
+            // host's model membership and captured provider binding verdict.
+            let supplied = get(&envelope, "env")
+                .filter(|env| env.is_object())
+                .ok_or(StoreError::InvalidArgument)?;
+            let env = crate::round_journal::Env {
+                supported_models: crate::session_schema::env_from_json(Some(supplied))
+                    .supported_models,
+                receipt_harness_id: as_str(get(supplied, "receipt_harness_id")).map(str::to_owned),
+                receipt_binding_valid: get(supplied, "receipt_binding_valid")
+                    == Some(&Value::Bool(true)),
+                ..Default::default()
+            };
+            crate::round_journal::round_v3_row(value, &env)
+        }
         "round_v3" => {
             // The caller still puts the returned schema-2 projection through
             // the round journal's own V2 entry validator.
@@ -1033,6 +1102,7 @@ fn reduce_json_inner(input: &str) -> Result<Value, crate::store::StoreError> {
 // MARK: - batches, receipts, denied calls and rounds
 
 const KNOWN_TOOL_NAMES: &[&str] = &[
+    "ask_user",
     "list_dir",
     "read_file",
     "write_file",
@@ -1046,6 +1116,12 @@ const KNOWN_TOOL_NAMES: &[&str] = &[
     "run_program",
     "start_runtime_service",
     "stop_runtime_service",
+    "list_assistant_tasks",
+    "create_assistant_task",
+    "update_assistant_task",
+    "search_assistant_memory",
+    "remember_assistant_memory",
+    "forget_assistant_memory",
 ];
 
 /// `DSHAgentCanonicalIdentityKey`: the canonical bytes of a locator, used to
@@ -1247,7 +1323,11 @@ fn manifest_call_shape_v2(
             | "install_runtime_environment"
             | "run_program"
             | "start_runtime_service"
-            | "stop_runtime_service",
+            | "stop_runtime_service"
+            | "create_assistant_task"
+            | "update_assistant_task"
+            | "remember_assistant_memory"
+            | "forget_assistant_memory",
         ) => {
             if exact_keys(
                 Some(call),
@@ -1507,11 +1587,12 @@ pub fn denied_call_shape(row: &Value) -> bool {
             && (matches!(
                 as_str(p("failure_code")),
                 Some("E_AGENT_BAD_ARGUMENTS" | "E_AGENT_BAD_PATH")
-            ) || (as_str(r("name")).is_some_and(crate::runtime_tools::is_runtime)
-                && matches!(
-                    as_str(p("failure_code")),
-                    Some("E_AGENT_CAPABILITY" | "E_AGENT_TOOL_FAILED")
-                )))
+            ) || (as_str(r("name")).is_some_and(|name| {
+                crate::runtime_tools::is_runtime(name) || crate::assistant_tools::is_assistant(name)
+            }) && matches!(
+                as_str(p("failure_code")),
+                Some("E_AGENT_CAPABILITY" | "E_AGENT_TOOL_FAILED")
+            )))
     } else {
         exact_keys(payload, &["schema_version", "failure_code"]).is_some()
             && matches!(
@@ -1581,7 +1662,25 @@ fn round_call_v3_shape(call: &Value, expected_index: usize) -> Option<bool> {
     };
     // An unknown tool can only appear as a durable denial, under the one
     // summary key that carries no arguments.
-    if !approval || (!known && (!durable || !string_eq(c("safe_summary_key"), "agent.unknown"))) {
+    if !approval
+        || (!known && (!durable || !string_eq(c("safe_summary_key"), "agent.unknown")))
+        || (string_eq(c("name"), "ask_user")
+            && !((durable && string_eq(c("safe_summary_key"), "agent.unknown"))
+                || (access == "auto" && string_eq(c("safe_summary_key"), "agent.ask_user"))))
+    {
+        return None;
+    }
+    let name = as_str(c("name")).unwrap_or_default();
+    if crate::assistant_tools::is_assistant(name)
+        && !((durable && string_eq(c("safe_summary_key"), "agent.unknown"))
+            || (access
+                == if crate::assistant_tools::is_mutation(name) {
+                    "conversation_confirm"
+                } else {
+                    "auto"
+                }
+                && c("safe_summary_key") == Some(&json!(format!("agent.{name}")))))
+    {
         return None;
     }
     Some(durable)
@@ -1696,7 +1795,10 @@ pub fn migrate_round_v2_to_v3(row: &Value) -> Option<(Value, Value)> {
     let mut executable = 0usize;
     let mut denied = 0usize;
     for (index, call) in array(get(row, "calls")).iter().enumerate() {
-        let known = as_str(get(call, "name")).is_some_and(|name| KNOWN_TOOL_NAMES.contains(&name));
+        // Schema-2 rounds predate ask_user. Its formerly unknown name must
+        // remain denied even though the current registry recognizes it.
+        let known = as_str(get(call, "name"))
+            .is_some_and(|name| name != "ask_user" && KNOWN_TOOL_NAMES.contains(&name));
         calls.push(json!({
             "schema_version": 3,
             "call_index": index,
@@ -2379,6 +2481,9 @@ fn denied_calls(state: &Value) -> StateVerdict {
     StateVerdict::Valid
 }
 
+#[path = "wal_question.rs"]
+mod question;
+
 /// The dispatch relation: every round and ledger row needs its marker, the
 /// marker's state has to agree with the row's own state, and no marker may
 /// outlive its row — an orphan could otherwise be mistaken for proof about a
@@ -2409,10 +2514,9 @@ fn dispatch_relation(state: &Value) -> StateVerdict {
             return StateVerdict::Corrupt;
         }
         if row_state == "settled" && marker != "dispatched" {
-            // The only settlement without a dispatch is a user denial: the
-            // intent row was never dispatched, carries no settled facts or
-            // approval reference, and its receipt is exactly the
-            // denied-by-user shape.
+            // A user denial has no settled facts or approval reference. An
+            // answered question is also undispatched, but needs its exact
+            // protected response, receipt and settled-facts binding.
             let receipt = get(ledger, "receipt").filter(|receipt| receipt.is_object());
             let user_denial = marker == "not_dispatched"
                 && receipt.is_some_and(|receipt| {
@@ -2422,7 +2526,9 @@ fn dispatch_relation(state: &Value) -> StateVerdict {
                 })
                 && is_null(get(ledger, "settled_facts"))
                 && is_null(get(ledger, "owner"));
-            if !user_denial {
+            let user_response =
+                marker == "not_dispatched" && question::undispatched_settlement(state, ledger);
+            if !user_denial && !user_response {
                 return StateVerdict::Corrupt;
             }
         }

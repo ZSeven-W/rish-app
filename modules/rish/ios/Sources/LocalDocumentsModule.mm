@@ -1,6 +1,6 @@
 #import <Foundation/Foundation.h>
-#import <React/RCTBridgeModule.h>
-#import <React/RCTUtils.h>
+#import <RishNative/RishNativeModule.h>
+#import <RishNative/RishUIKit.h>
 #import <UIKit/UIKit.h>
 #import <UniformTypeIdentifiers/UniformTypeIdentifiers.h>
 
@@ -652,12 +652,12 @@ static BOOL LDRemoveTree(int descriptor, NSError **error) {
   return valid;
 }
 
-@interface LocalDocumentsModule : NSObject <RCTBridgeModule, UIDocumentPickerDelegate>
+@interface LocalDocumentsModule : NSObject <RishNativeModule, UIDocumentPickerDelegate>
 @property(nonatomic, strong) dispatch_queue_t documentQueue;
 @property(nonatomic, strong) DSHLocalWorkspaceAccess *access;
 @property(nonatomic, strong) DSHLocalProjectAccess *projectAccess;
-@property(nonatomic, copy) RCTPromiseResolveBlock pendingResolve;
-@property(nonatomic, copy) RCTPromiseRejectBlock pendingReject;
+@property(nonatomic, copy) RishResolveBlock pendingResolve;
+@property(nonatomic, copy) RishRejectBlock pendingReject;
 @property(nonatomic) LDPickerMode pendingMode;
 @property(nonatomic, copy) NSDictionary *pendingRoot;
 @property(nonatomic, copy) NSString *pendingDestinationPath;
@@ -707,7 +707,7 @@ static BOOL LDRemoveTree(int descriptor, NSError **error) {
 
 @implementation LocalDocumentsModule
 
-RCT_EXPORT_MODULE(LocalDocuments)
+RISH_NATIVE_MODULE(LocalDocuments)
 
 + (BOOL)requiresMainQueueSetup { return NO; }
 
@@ -760,13 +760,13 @@ RCT_EXPORT_MODULE(LocalDocuments)
   return self;
 }
 
-- (void)reject:(RCTPromiseRejectBlock)reject error:(NSError *)error {
+- (void)reject:(RishRejectBlock)reject error:(NSError *)error {
   if (error == nil) error = LDError(DSHLocalWorkspaceAccessErrorUnavailable);
   NSString *code = LDStableCode(error);
   reject(code, LDMessage(code), nil);
 }
 
-- (void)dispatchInvalid:(RCTPromiseRejectBlock)reject {
+- (void)dispatchInvalid:(RishRejectBlock)reject {
   dispatch_async(self.documentQueue, ^{
     [self reject:reject error:LDError(DSHLocalWorkspaceAccessErrorInvalid)];
   });
@@ -1887,8 +1887,8 @@ RCT_EXPORT_MODULE(LocalDocuments)
       }
       return;
     }
-    RCTPromiseResolveBlock resolve = self.pendingResolve;
-    RCTPromiseRejectBlock reject = self.pendingReject;
+    RishResolveBlock resolve = self.pendingResolve;
+    RishRejectBlock reject = self.pendingReject;
     self.pendingResolve = nil;
     self.pendingReject = nil;
     self.pendingRoot = nil;
@@ -1916,14 +1916,14 @@ RCT_EXPORT_MODULE(LocalDocuments)
 }
 
 - (BOOL)beginPickerMode:(LDPickerMode)mode
-                 resolve:(RCTPromiseResolveBlock)resolve
-                  reject:(RCTPromiseRejectBlock)reject {
+                 resolve:(RishResolveBlock)resolve
+                  reject:(RishRejectBlock)reject {
   NSAssert(NSThread.isMainThread, @"document picker state must stay on main");
   if (self.pendingMode != LDPickerModeNone) {
     reject(@"E_WORKSPACE_PICKER_BUSY", LDMessage(@"E_WORKSPACE_PICKER_BUSY"), nil);
     return NO;
   }
-  UIViewController *presenter = RCTPresentedViewController();
+  UIViewController *presenter = RishPresentedViewController();
   if (presenter == nil || [presenter isKindOfClass:UIAlertController.class]) {
     reject(@"E_WORKSPACE_UNAVAILABLE", LDMessage(@"E_WORKSPACE_UNAVAILABLE"), nil);
     return NO;
@@ -1979,10 +1979,10 @@ RCT_EXPORT_MODULE(LocalDocuments)
   return YES;
 }
 
-RCT_REMAP_METHOD(presentImportPicker,
+RISH_NATIVE_METHOD(presentImportPicker,
                  presentImportPickerRequest:(id)requestValue
-                 resolver:(RCTPromiseResolveBlock)resolve
-                 rejecter:(RCTPromiseRejectBlock)reject) {
+                 resolver:(RishResolveBlock)resolve
+                 rejecter:(RishRejectBlock)reject) {
   NSDictionary *request = [requestValue isKindOfClass:NSDictionary.class] ? requestValue : nil;
   if (!LDExact(request, @[@"schema_version", @"root", @"operation_id", @"destination_path"]) ||
       !LDSchemaOne(request[@"schema_version"]) || ![request[@"destination_path"] isKindOfClass:NSString.class]) {
@@ -2072,15 +2072,15 @@ RCT_REMAP_METHOD(presentImportPicker,
       picker.allowsMultipleSelection = YES;
       picker.delegate = self;
       self.pendingController = picker;
-      [RCTPresentedViewController() presentViewController:picker animated:YES completion:nil];
+      [RishPresentedViewController() presentViewController:picker animated:YES completion:nil];
     });
   });
 }
 
-RCT_REMAP_METHOD(presentExportPicker,
+RISH_NATIVE_METHOD(presentExportPicker,
                  presentExportPickerRequest:(id)requestValue
-                 resolver:(RCTPromiseResolveBlock)resolve
-                 rejecter:(RCTPromiseRejectBlock)reject) {
+                 resolver:(RishResolveBlock)resolve
+                 rejecter:(RishRejectBlock)reject) {
   NSDictionary *request = [requestValue isKindOfClass:NSDictionary.class] ? requestValue : nil;
   NSArray *sourcePaths = [request[@"source_paths"] isKindOfClass:NSArray.class] ? request[@"source_paths"] : nil;
   if (!LDExact(request, @[@"schema_version", @"root", @"operation_id", @"source_paths"]) ||
@@ -2219,15 +2219,15 @@ RCT_REMAP_METHOD(presentExportPicker,
       UIDocumentPickerViewController *picker = [[UIDocumentPickerViewController alloc] initForExportingURLs:urls asCopy:YES];
       picker.delegate = self;
       self.pendingController = picker;
-      [RCTPresentedViewController() presentViewController:picker animated:YES completion:nil];
+      [RishPresentedViewController() presentViewController:picker animated:YES completion:nil];
     });
   });
 }
 
-RCT_REMAP_METHOD(queryOperation,
+RISH_NATIVE_METHOD(queryOperation,
                  queryOperationRequest:(id)requestValue
-                 resolver:(RCTPromiseResolveBlock)resolve
-                 rejecter:(RCTPromiseRejectBlock)reject) {
+                 resolver:(RishResolveBlock)resolve
+                 rejecter:(RishRejectBlock)reject) {
   NSDictionary *request = [requestValue isKindOfClass:NSDictionary.class] ? requestValue : nil;
   if (!LDExact(request, @[@"schema_version", @"operation_id", @"root"]) ||
       !LDSchemaOne(request[@"schema_version"]) || !LDUUID(request[@"operation_id"])) {
@@ -2264,10 +2264,10 @@ RCT_REMAP_METHOD(queryOperation,
   });
 }
 
-RCT_REMAP_METHOD(retryOperation,
+RISH_NATIVE_METHOD(retryOperation,
                  retryOperationRequest:(id)requestValue
-                 resolver:(RCTPromiseResolveBlock)resolve
-                 rejecter:(RCTPromiseRejectBlock)reject) {
+                 resolver:(RishResolveBlock)resolve
+                 rejecter:(RishRejectBlock)reject) {
   NSDictionary *request = [requestValue isKindOfClass:NSDictionary.class] ? requestValue : nil;
   if (!LDExact(request, @[@"schema_version", @"operation_id", @"root"]) ||
       !LDSchemaOne(request[@"schema_version"]) || !LDUUID(request[@"operation_id"])) {
@@ -2325,10 +2325,10 @@ RCT_REMAP_METHOD(retryOperation,
   });
 }
 
-RCT_REMAP_METHOD(cleanupOperation,
+RISH_NATIVE_METHOD(cleanupOperation,
                  cleanupOperationRequest:(id)requestValue
-                 resolver:(RCTPromiseResolveBlock)resolve
-                 rejecter:(RCTPromiseRejectBlock)reject) {
+                 resolver:(RishResolveBlock)resolve
+                 rejecter:(RishRejectBlock)reject) {
   NSDictionary *request = [requestValue isKindOfClass:NSDictionary.class] ? requestValue : nil;
   if (!LDExact(request, @[@"schema_version", @"operation_id", @"root"]) ||
       !LDSchemaOne(request[@"schema_version"]) || !LDUUID(request[@"operation_id"])) {

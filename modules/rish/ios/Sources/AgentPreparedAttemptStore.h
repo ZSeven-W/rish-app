@@ -8,6 +8,8 @@
 
 NS_ASSUME_NONNULL_BEGIN
 
+@class DSHAssistantTaskExecutor;
+
 /// Native-only prepared Agent authority.  This store owns the one durable
 /// authority row per `(task_id, attempt_id)` and its operation/result replay
 /// relation.  Its public methods return only safe projections; raw session
@@ -43,7 +45,7 @@ NS_ASSUME_NONNULL_BEGIN
                         error:(NSError **)error;
 
 /// Returns the detached native authority snapshot for other native services.
-/// This selector is not an RN bridge method; callers must still run the root
+/// This selector is not a UI bridge method; callers must still run the root
 /// assertion above before any effect.
 - (nullable NSDictionary *)nativeAuthorityForTaskId:(NSString *)taskId
                                           attemptId:(NSString *)attemptId
@@ -54,6 +56,7 @@ NS_ASSUME_NONNULL_BEGIN
 @property(nonatomic, strong, readonly) DSHAgentToolRegistry *toolRegistry;
 @property(nonatomic, strong, readonly) DSHSessionSnapshotStore *sessionSnapshotStore;
 @property(nonatomic, strong, readonly) DSHAgentTranscriptStore *transcriptStore;
+@property(nonatomic, strong, readonly) DSHAssistantTaskExecutor *assistantTaskExecutor;
 
 @end
 

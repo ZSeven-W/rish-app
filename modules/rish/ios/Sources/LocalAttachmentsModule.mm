@@ -4,8 +4,8 @@
 #import <ImageIO/ImageIO.h>
 #import <PhotosUI/PhotosUI.h>
 #import <QuickLook/QuickLook.h>
-#import <React/RCTBridgeModule.h>
-#import <React/RCTUtils.h>
+#import <RishNative/RishNativeModule.h>
+#import <RishNative/RishUIKit.h>
 #import <UIKit/UIKit.h>
 #import <UniformTypeIdentifiers/UniformTypeIdentifiers.h>
 
@@ -569,13 +569,13 @@ static NSString *LADataURL(NSData *data) {
 }
 
 @interface LocalAttachmentsModule : NSObject
-  <RCTBridgeModule, PHPickerViewControllerDelegate, UIDocumentPickerDelegate,
+  <RishNativeModule, PHPickerViewControllerDelegate, UIDocumentPickerDelegate,
    UIImagePickerControllerDelegate, UINavigationControllerDelegate,
    UIAdaptivePresentationControllerDelegate, QLPreviewControllerDataSource,
    QLPreviewControllerDelegate>
 @property(nonatomic, strong) dispatch_queue_t attachmentQueue;
-@property(nonatomic, copy) RCTPromiseResolveBlock pendingResolve;
-@property(nonatomic, copy) RCTPromiseRejectBlock pendingReject;
+@property(nonatomic, copy) RishResolveBlock pendingResolve;
+@property(nonatomic, copy) RishRejectBlock pendingReject;
 @property(nonatomic) LAPickerSource pendingSource;
 @property(nonatomic, strong) UIViewController *pendingController;
 @property(nonatomic) BOOL pendingSelectionStarted;
@@ -585,7 +585,7 @@ static NSString *LADataURL(NSData *data) {
 
 @implementation LocalAttachmentsModule
 
-RCT_EXPORT_MODULE(LocalAttachments)
+RISH_NATIVE_MODULE(LocalAttachments)
 
 + (BOOL)requiresMainQueueSetup {
   return NO;
@@ -606,14 +606,14 @@ RCT_EXPORT_MODULE(LocalAttachments)
 }
 
 - (BOOL)beginSource:(LAPickerSource)source
-            resolve:(RCTPromiseResolveBlock)resolve
-             reject:(RCTPromiseRejectBlock)reject {
+            resolve:(RishResolveBlock)resolve
+             reject:(RishRejectBlock)reject {
   NSAssert(NSThread.isMainThread, @"attachment picker state must stay on main");
   if (self.pendingSource != LAPickerSourceNone) {
     reject(@"busy", @"Another attachment picker is already active", nil);
     return NO;
   }
-  UIViewController *presenter = RCTPresentedViewController();
+  UIViewController *presenter = RishPresentedViewController();
   if (presenter == nil || [presenter isKindOfClass:UIAlertController.class]) {
     reject(@"presentation", @"The attachment picker cannot be presented right now", nil);
     return NO;
@@ -640,8 +640,8 @@ RCT_EXPORT_MODULE(LocalAttachments)
 
 - (void)finishResult:(NSDictionary *)result error:(NSError *)error code:(NSString *)code {
   dispatch_async(dispatch_get_main_queue(), ^{
-    RCTPromiseResolveBlock resolve = self.pendingResolve;
-    RCTPromiseRejectBlock reject = self.pendingReject;
+    RishResolveBlock resolve = self.pendingResolve;
+    RishRejectBlock reject = self.pendingReject;
     NSURL *previewRoot = self.pendingPreviewRoot;
     NSError *finalError = error;
     if (previewRoot != nil) {
@@ -1177,10 +1177,10 @@ RCT_EXPORT_MODULE(LocalAttachments)
     }];
 }
 
-RCT_REMAP_METHOD(present,
+RISH_NATIVE_METHOD(present,
                  presentSource:(id)sourceValue
-                 resolver:(RCTPromiseResolveBlock)resolve
-                 rejecter:(RCTPromiseRejectBlock)reject) {
+                 resolver:(RishResolveBlock)resolve
+                 rejecter:(RishRejectBlock)reject) {
   NSString *sourceName = LAString(sourceValue);
   LAPickerSource source = [sourceName isEqualToString:@"camera"] ? LAPickerSourceCamera
     : ([sourceName isEqualToString:@"photos"] ? LAPickerSourcePhotos
@@ -1197,7 +1197,7 @@ RCT_REMAP_METHOD(present,
       return;
     }
     if (![self beginSource:source resolve:resolve reject:reject]) return;
-    UIViewController *presenter = RCTPresentedViewController();
+    UIViewController *presenter = RishPresentedViewController();
     if (source == LAPickerSourceCamera) {
       UIImagePickerController *picker = [[UIImagePickerController alloc] init];
       picker.sourceType = UIImagePickerControllerSourceTypeCamera;
@@ -1305,10 +1305,10 @@ RCT_REMAP_METHOD(present,
   [self processNormalizedCandidates:candidates];
 }
 
-RCT_REMAP_METHOD(discard,
+RISH_NATIVE_METHOD(discard,
                  discardIdentifiers:(id)identifiersValue
-                 discardResolver:(RCTPromiseResolveBlock)resolve
-                 discardRejecter:(RCTPromiseRejectBlock)reject) {
+                 discardResolver:(RishResolveBlock)resolve
+                 discardRejecter:(RishRejectBlock)reject) {
   NSArray *values = [identifiersValue isKindOfClass:NSArray.class] ? identifiersValue : nil;
   if (values == nil || values.count > 1000) {
     reject(@"validation", @"Attachment identifiers are invalid", nil);
@@ -1358,10 +1358,10 @@ RCT_REMAP_METHOD(discard,
   });
 }
 
-RCT_REMAP_METHOD(prune,
+RISH_NATIVE_METHOD(prune,
                  pruneReferencedIdentifiers:(id)identifiersValue
-                 pruneResolver:(RCTPromiseResolveBlock)resolve
-                 pruneRejecter:(RCTPromiseRejectBlock)reject) {
+                 pruneResolver:(RishResolveBlock)resolve
+                 pruneRejecter:(RishRejectBlock)reject) {
   NSArray *values = [identifiersValue isKindOfClass:NSArray.class] ? identifiersValue : nil;
   if (values == nil || values.count > 10000) {
     reject(@"validation", @"Referenced attachment identifiers are invalid", nil);
@@ -1432,10 +1432,10 @@ RCT_REMAP_METHOD(prune,
   });
 }
 
-RCT_REMAP_METHOD(presentPreview,
+RISH_NATIVE_METHOD(presentPreview,
                  presentPreviewIdentifier:(id)identifierValue
-                 presentPreviewResolver:(RCTPromiseResolveBlock)resolve
-                 presentPreviewRejecter:(RCTPromiseRejectBlock)reject) {
+                 presentPreviewResolver:(RishResolveBlock)resolve
+                 presentPreviewRejecter:(RishRejectBlock)reject) {
   dispatch_async(dispatch_get_main_queue(), ^{
     if (![self beginSource:LAPickerSourcePreview resolve:resolve reject:reject]) return;
     dispatch_async(self.attachmentQueue, ^{
@@ -1452,7 +1452,7 @@ RCT_REMAP_METHOD(presentPreview,
           [[NSFileManager defaultManager] removeItemAtURL:prepared[@"root"] error:nil];
           return;
         }
-        UIViewController *presenter = RCTPresentedViewController();
+        UIViewController *presenter = RishPresentedViewController();
         if (presenter == nil || [presenter isKindOfClass:UIAlertController.class]) {
           self.pendingPreviewRoot = prepared[@"root"];
           [self finishResult:nil
@@ -1484,10 +1484,10 @@ RCT_REMAP_METHOD(presentPreview,
   });
 }
 
-RCT_REMAP_METHOD(preview,
+RISH_NATIVE_METHOD(preview,
                  previewIdentifier:(id)identifierValue
-                 previewResolver:(RCTPromiseResolveBlock)resolve
-                 previewRejecter:(RCTPromiseRejectBlock)reject) {
+                 previewResolver:(RishResolveBlock)resolve
+                 previewRejecter:(RishRejectBlock)reject) {
   dispatch_async(self.attachmentQueue, ^{
     NSRecursiveLock *storeLock = LAStoreLock();
     [storeLock lock];

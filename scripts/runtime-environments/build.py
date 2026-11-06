@@ -175,7 +175,7 @@ def build(family: str, output: Path, download_limit_mib: int, bootstrap_go_cache
     expected_manifest = {key: lock[key] for key in environment_package.MANIFEST_KEYS - {'disk_sha256', 'disk_bytes'}}
     expected_manifest.update({'disk_sha256': '0' * 64, 'disk_bytes': lock['disk_mib'] * 1024 * 1024})
     environment_package.validate_manifest(expected_manifest)
-    kernel = REPO / 'apps/mobile/ios/Rish/GuestAssets/vmlinuz-virt-6.18.35'
+    kernel = REPO / 'modules/rish/shared/GuestAssets/vmlinuz-virt-6.18.35'
     if sha256(kernel) != lock['kernel_sha256']:
         raise ValueError('locked kernel differs from application kernel')
     planned = sum(p['package_bytes'] for p in lock['packages'])

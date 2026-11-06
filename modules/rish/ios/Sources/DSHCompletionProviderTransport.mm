@@ -392,6 +392,13 @@ static NSString *DSHCompletionTransportDiagnosticKind(NSError *error,
     return nil;
   }
 
+  // Recheck at the last dispatch boundary too: a previously built body
+  // must not revive a removed custom model or provider.
+  if (![self providerSupportsModel:requestedModel]) {
+    [self settleStartFailure:@"E_COMPLETION_MODEL"
+                   claimRound:claimRound completion:completion];
+    return nil;
+  }
   NSDictionary *providerConfiguration = [self providerConfigurationForModel:requestedModel];
   NSURL *url = [self providerBaseURL];
   if (url == nil || [self providerHarnessId].length == 0) {

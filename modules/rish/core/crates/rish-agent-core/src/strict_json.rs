@@ -16,7 +16,16 @@ const MAX_DEPTH: usize = 64;
 
 /// Parses `text` as tool arguments; `None` means the ObjC parser would refuse.
 pub fn parse_arguments(text: &str) -> Option<serde_json::Map<String, Value>> {
-    if text.is_empty() || text.len() > MAX_ARGUMENTS_BYTES || text.contains('\0') {
+    parse_arguments_bounded(text, MAX_ARGUMENTS_BYTES)
+}
+
+/// Explicit opt-in for bounded non-tool payloads such as provider model lists.
+/// Scanner depth, node, duplicate-key and numeric rules remain unchanged.
+pub(crate) fn parse_arguments_bounded(
+    text: &str,
+    maximum_bytes: usize,
+) -> Option<serde_json::Map<String, Value>> {
+    if text.is_empty() || text.len() > maximum_bytes || text.contains('\0') {
         return None;
     }
     let mut scanner = Scanner {

@@ -18,7 +18,7 @@ typedef BOOL (^DSHAgentRuntimeOwnerValidator)(BOOL executionIntentRequired);
 - (NSDictionary *)recoverToolNamed:(NSString *)name arguments:(NSDictionary *)arguments root:(NSDictionary *)root
                              owner:(NSDictionary *)owner precondition:(NSDictionary *)precondition;
 - (void)cancelLocator:(NSDictionary *)locator;
-/// Out-of-band RN hint: only an immutable native registered target can match.
+/// Out-of-band UI hint: only an immutable native registered target can match.
 - (void)signalCancelRequest:(NSDictionary *)request;
 - (void)cancelAttempt:(NSString *)attemptId;
 - (void)cancelAll;

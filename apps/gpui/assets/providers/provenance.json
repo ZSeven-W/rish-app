@@ -1,0 +1,76 @@
+{
+  "schema_version": 1,
+  "retrieved_on": "2026-10-28",
+  "assets": [
+    {
+      "file": "dsh.svg",
+      "product": "DSH",
+      "width": 50,
+      "height": 50,
+      "source": "https://github.com/deepseek-ai/deepseek-harness/blob/b150a551b8d465e31e418e1b2eaf5e79bbb7d28e/website/public/favicon.svg",
+      "source_path": "website/public/favicon.svg",
+      "revision": "b150a551b8d465e31e418e1b2eaf5e79bbb7d28e",
+      "license_notice": "LICENSE.deepseek-harness",
+      "rights_note": "Original DSH website favicon from its MIT-licensed repository; product marks remain with their owners.",
+      "sha256": "035b68e57ac4490f6880e25f4e7f534d7b50b249308ccea77af34cc5d9e840c3"
+    },
+    {
+      "file": "claude-code.png",
+      "product": "Claude Code",
+      "width": 266,
+      "height": 266,
+      "source": "https://marketplace.visualstudio.com/items?itemName=anthropic.claude-code",
+      "source_kind": "official_installed_extension",
+      "source_path": "resources/claude-logo.png",
+      "package": "anthropic.claude-code",
+      "version": "2.1.92",
+      "rights_note": "Original publisher icon in the official Anthropic Claude Code extension. Copyright Anthropic PBC; proprietary, not relicensed by Rish.",
+      "rights_url": "https://www.anthropic.com/legal/trademark-guidelines",
+      "sha256": "7241633e5a39b44a947c7b9a821637f30d6e86716e7a8c847136d91f9c3f6ba1"
+    },
+    {
+      "file": "codex-light.png",
+      "product": "Codex",
+      "width": 1024,
+      "height": 1024,
+      "source": "https://openai.com/codex/",
+      "source_kind": "official_installed_app",
+      "source_path": "Contents/Resources/icon-codex-light.png",
+      "bundle_id": "com.openai.codex",
+      "version": "26.1023.50603",
+      "build": "22391",
+      "rights_note": "Original product artwork from the official Codex desktop distribution. Proprietary OpenAI artwork, not relicensed by Rish.",
+      "rights_url": "https://openai.com/brand/",
+      "sha256": "de7d43f3386105ab20952958c2c25beb0d903e2aeb6e1aef57c49a648c0d1c07"
+    },
+    {
+      "file": "codex-dark.png",
+      "product": "Codex",
+      "width": 1024,
+      "height": 1024,
+      "source": "https://openai.com/codex/",
+      "source_kind": "official_installed_app",
+      "source_path": "Contents/Resources/icon-codex-dark-color.png",
+      "bundle_id": "com.openai.codex",
+      "version": "26.1023.50603",
+      "build": "22391",
+      "rights_note": "Original dark product artwork from the official Codex desktop distribution. Proprietary OpenAI artwork, not relicensed by Rish.",
+      "rights_url": "https://openai.com/brand/",
+      "sha256": "69fb4384e161be8a20dcb94a9ac34aea4fbfaeb67514110a71e7b0732eccb0fc"
+    },
+    {
+      "file": "zcode.png",
+      "product": "zcode",
+      "width": 128,
+      "height": 128,
+      "source": "https://github.com/zai-org/ZCode/blob/3c5b227649371507ddc4eb46ac5133afe6db1cab/public/logo/icons/128x128.png",
+      "source_path": "public/logo/icons/128x128.png",
+      "revision": "3c5b227649371507ddc4eb46ac5133afe6db1cab",
+      "license_notice": "LICENSE.zcode",
+      "upstream_notice": "NOTICE.zcode.md",
+      "rights_note": "Original app icon from the official Apache-2.0 repository. The software license does not grant product trademark rights.",
+      "rights_url": "https://zcode.z.ai/en/terms",
+      "sha256": "1ec553f7eaeae4492c673e9d636692a3898d11800d912628d8c1e667222d6d19"
+    }
+  ]
+}

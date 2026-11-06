@@ -17,10 +17,7 @@ const FIXTURES: [(&str, &str); 3] = [
 ];
 
 fn fixture(name: &str) -> Value {
-    let path = concat!(
-        env!("CARGO_MANIFEST_DIR"),
-        "/../../../../../apps/mobile/ios/RishTests/Fixtures/"
-    );
+    let path = concat!(env!("CARGO_MANIFEST_DIR"), "/../../../ios/Tests/Fixtures/");
     let text = std::fs::read_to_string(format!("{path}{name}"))
         .unwrap_or_else(|error| panic!("{name}: {error}"));
     serde_json::from_str(&text).expect("the fixture is JSON")
@@ -137,7 +134,10 @@ fn a_budget_continuation_round_asks_for_no_thinking() {
             .clone()
     };
     let plain = round(json!({ "role": "assistant", "content": "hello" }));
-    assert_eq!(plain["thinking"], json!({ "type": "enabled", "budget_tokens": 4096 }));
+    assert_eq!(
+        plain["thinking"],
+        json!({ "type": "enabled", "budget_tokens": 4096 })
+    );
     assert_eq!(plain["max_tokens"], json!(4096 + 8192));
 
     let continuation = round(json!({
@@ -167,13 +167,24 @@ fn the_thinking_vocabulary_follows_the_family() {
         }))["body"]
             .clone()
     };
-    for budget in ["claude-haiku-4-5-20251001", "GLM-5.3"] {
+    for budget in [
+        "claude-haiku-4-5-20251001",
+        "GLM-5.3",
+        "glm-5.3",
+        "GlM-fetched-model",
+    ] {
         assert_eq!(spoken(budget, "high")["thinking"]["type"], json!("enabled"));
         assert_eq!(spoken(budget, "off").get("thinking"), None);
         assert_eq!(spoken(budget, "off").get("output_config"), None);
     }
-    assert_eq!(spoken("claude-sonnet-5", "high")["thinking"]["display"], json!("summarized"));
-    assert_eq!(spoken("claude-sonnet-5", "off")["thinking"], json!({ "type": "disabled" }));
+    assert_eq!(
+        spoken("claude-sonnet-5", "high")["thinking"]["display"],
+        json!("summarized")
+    );
+    assert_eq!(
+        spoken("claude-sonnet-5", "off")["thinking"],
+        json!({ "type": "disabled" })
+    );
     // The always-on family cannot say disabled, so it asks for little.
     let fable_off = spoken("claude-fable-5-1", "off");
     assert_eq!(fable_off.get("thinking"), None);
@@ -195,7 +206,10 @@ fn a_turn_that_cannot_be_placed_fails_the_body() {
         }))
     };
     let broken = json!({ "role": "developer", "content": "x" });
-    assert_eq!(refused(broken)["failure_code"], json!("E_COMPLETION_TRANSCRIPT"));
+    assert_eq!(
+        refused(broken)["failure_code"],
+        json!("E_COMPLETION_TRANSCRIPT")
+    );
     // An assistant turn whose call has no id cannot be answered later.
     let unanswerable = json!({
         "role": "assistant",
@@ -208,7 +222,10 @@ fn a_turn_that_cannot_be_placed_fails_the_body() {
     );
     // And a tool result with nothing to attach it to.
     let orphan = json!({ "role": "tool", "content": "done" });
-    assert_eq!(refused(orphan)["failure_code"], json!("E_COMPLETION_TRANSCRIPT"));
+    assert_eq!(
+        refused(orphan)["failure_code"],
+        json!("E_COMPLETION_TRANSCRIPT")
+    );
 }
 
 /// A tool this cannot read is refused rather than dropped, because a round
@@ -230,7 +247,11 @@ fn a_tool_that_cannot_be_read_fails_the_body() {
                 "messages": [{ "role": "user", "content": "x" }],
                 "tools": broken,
             }));
-            assert_eq!(answer["failure_code"], json!("E_COMPLETION_TOOLS"), "{dialect}");
+            assert_eq!(
+                answer["failure_code"],
+                json!("E_COMPLETION_TOOLS"),
+                "{dialect}"
+            );
         }
     }
 }
@@ -441,7 +462,10 @@ fn a_malformed_or_misplaced_part_fails_the_round() {
             "tools": [],
         }));
         assert_eq!(answer["ok"], json!(false), "{dialect}: {answer}");
-        answer["failure_code"].as_str().unwrap_or_default().to_owned()
+        answer["failure_code"]
+            .as_str()
+            .unwrap_or_default()
+            .to_owned()
     };
     let picture = json!({ "type": "image", "mime_type": "image/png", "data": "QUJD" });
 
@@ -502,8 +526,6 @@ fn a_malformed_or_misplaced_part_fails_the_round() {
         );
     }
 }
-
-
 
 /// The older spelling iOS still sends reaches every dialect the same way.
 ///
@@ -568,7 +590,10 @@ fn an_image_url_that_is_not_an_inlined_picture_is_refused() {
             "tools": [],
         }));
         assert_eq!(answer["ok"], json!(false), "{answer}");
-        answer["failure_code"].as_str().unwrap_or_default().to_owned()
+        answer["failure_code"]
+            .as_str()
+            .unwrap_or_default()
+            .to_owned()
     };
     assert_eq!(
         refusal(json!("https://example.com/cat.png")),
@@ -578,6 +603,12 @@ fn an_image_url_that_is_not_an_inlined_picture_is_refused() {
         refusal(json!("data:image/tiff;base64,QUJD")),
         "E_COMPLETION_CONTEXT_UNSUPPORTED",
     );
-    assert_eq!(refusal(json!("data:image/png;base64,")), "E_COMPLETION_TRANSCRIPT");
-    assert_eq!(refusal(json!("data:image/png,QUJD")), "E_COMPLETION_CONTEXT_UNSUPPORTED");
+    assert_eq!(
+        refusal(json!("data:image/png;base64,")),
+        "E_COMPLETION_TRANSCRIPT"
+    );
+    assert_eq!(
+        refusal(json!("data:image/png,QUJD")),
+        "E_COMPLETION_CONTEXT_UNSUPPORTED"
+    );
 }

@@ -1,0 +1,182 @@
+name: RishGPUI
+options:
+  deploymentTarget:
+    iOS: '16.0'
+  createIntermediateGroups: false
+settings:
+  base:
+    ARCHS: arm64
+    CLANG_ENABLE_OBJC_ARC: YES
+    CLANG_ENABLE_MODULES: YES
+    CLANG_CXX_LANGUAGE_STANDARD: c++20
+    ENABLE_BITCODE: NO
+    ENABLE_DEBUG_DYLIB: NO
+    RISH_GPUI_PROFILE: debug
+    RISH_GUEST_CGI_ENABLED: 0
+    RISH_GPUI_TARGET[sdk=iphoneos*]: aarch64-apple-ios
+    RISH_GPUI_TARGET[sdk=iphonesimulator*]: aarch64-apple-ios-sim
+    RISH_GPUI_STATIC_LIB: $(SRCROOT)/../mobile/target/$(RISH_GPUI_TARGET)/$(RISH_GPUI_PROFILE)/librish_gpui.a
+    RISH_NATIVE_ROOT: $(SRCROOT)/../../../modules/rish/ios
+    RISH_NATIVE_VENDOR: $(RISH_NATIVE_ROOT)/Vendor
+    RISH_NATIVE_INCLUDE: $(RISH_NATIVE_ROOT)/include
+    RISH_NATIVE_SLICE[sdk=iphoneos*]: ios-arm64
+    RISH_NATIVE_SLICE[sdk=iphonesimulator*]: ios-arm64-simulator
+  configs:
+    Release:
+      RISH_GPUI_PROFILE: release
+      GCC_OPTIMIZATION_LEVEL: s
+      DEBUG_INFORMATION_FORMAT: dwarf-with-dsym
+targets:
+  RishGPUI:
+    type: application
+    platform: iOS
+    sources:
+      - path: Sources
+      - path: Native
+        buildPhase: none
+      - path: ../../../modules/rish/ios/Sources
+      - path: ../../../modules/rish/ios/TaskExperience/TaskExperience.swift
+      - path: ../../../modules/rish/ios/TaskExperience/TaskBackgroundExecution.swift
+      - path: ../../../modules/rish/ios/TaskExperience/TaskAlertPolicy.swift
+      - path: ../../../modules/rish/ios/TaskExperience/Widget/TaskAttributes.swift
+      - path: Resources/Images.xcassets
+        buildPhase: resources
+      - path: Resources/LaunchScreen.storyboard
+        buildPhase: resources
+      - path: Resources/PrivacyInfo.xcprivacy
+        buildPhase: resources
+      # Native services resolve these resources at the bundle root.
+      - path: ../../../modules/rish/shared/GuestAssets
+        type: group
+        buildPhase: resources
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: tech.zseven.rish.gpui
+        PRODUCT_NAME: RishGPUI
+        SWIFT_VERSION: '5.0'
+        SWIFT_OBJC_INTERFACE_HEADER_NAME: RishGPUI-Swift.h
+        INFOPLIST_FILE: Info.plist
+        TARGETED_DEVICE_FAMILY: '1,2'
+        ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
+        MARKETING_VERSION: '0.1.0'
+        CURRENT_PROJECT_VERSION: '1'
+        GCC_PREPROCESSOR_DEFINITIONS:
+          - $(inherited)
+          - DSH_LOCAL_PROOF=1
+          - RISH_GUEST_CGI_ENABLED=$(RISH_GUEST_CGI_ENABLED)
+        HEADER_SEARCH_PATHS:
+          - $(inherited)
+          - $(SRCROOT)/Native
+          - $(RISH_NATIVE_INCLUDE)
+          - $(RISH_NATIVE_VENDOR)/rish_agent_core.xcframework/$(RISH_NATIVE_SLICE)/Headers
+          - $(RISH_NATIVE_VENDOR)/libgit2.xcframework/$(RISH_NATIVE_SLICE)/Headers
+          - $(RISH_NATIVE_VENDOR)/libssh2.xcframework/$(RISH_NATIVE_SLICE)/Headers
+        LIBRARY_SEARCH_PATHS:
+          - $(inherited)
+          - $(RISH_NATIVE_VENDOR)/rish_ffi.xcframework/$(RISH_NATIVE_SLICE)
+          - $(RISH_NATIVE_VENDOR)/rish_agent_core.xcframework/$(RISH_NATIVE_SLICE)
+          - $(RISH_NATIVE_VENDOR)/libgit2.xcframework/$(RISH_NATIVE_SLICE)
+          - $(RISH_NATIVE_VENDOR)/libssh2.xcframework/$(RISH_NATIVE_SLICE)
+          - $(RISH_NATIVE_VENDOR)/libcrypto.xcframework/$(RISH_NATIVE_SLICE)
+        OTHER_LDFLAGS:
+          - $(inherited)
+          - -ObjC
+          - -force_load
+          - $(RISH_GPUI_STATIC_LIB)
+          - -lrish_ffi
+          - -lrish_agent_ffi
+          - -lgit2
+          - -lssh2
+          - -lcrypto
+          - -lc++
+          - -lz
+    dependencies:
+      - sdk: UIKit.framework
+      - sdk: BackgroundTasks.framework
+      - sdk: UserNotifications.framework
+      - sdk: ActivityKit.framework
+      - sdk: Metal.framework
+      - sdk: MetalKit.framework
+      - sdk: QuartzCore.framework
+      - sdk: CoreGraphics.framework
+      - sdk: CoreText.framework
+      - sdk: CoreFoundation.framework
+      - sdk: Foundation.framework
+      - sdk: Security.framework
+      - sdk: SystemConfiguration.framework
+      - sdk: AudioToolbox.framework
+      - sdk: WebKit.framework
+      - sdk: CoreMedia.framework
+      - sdk: AVFoundation.framework
+      - sdk: LocalAuthentication.framework
+      - sdk: Contacts.framework
+      - sdk: EventKit.framework
+      - sdk: StoreKit.framework
+      - sdk: CoreMotion.framework
+      - sdk: SafariServices.framework
+      - sdk: ImageIO.framework
+      - sdk: PDFKit.framework
+      - sdk: Photos.framework
+      - sdk: PhotosUI.framework
+      - sdk: QuickLook.framework
+      - sdk: UniformTypeIdentifiers.framework
+    preBuildScripts:
+      - name: Check reviewed native export registry
+        script: python3 "${SRCROOT}/generate-exports.py" --check
+        basedOnDependencyAnalysis: false
+  RishTests:
+    type: bundle.unit-test
+    platform: iOS
+    sources:
+      - path: Tests/GitFormTests.m
+      - path: ../../../modules/rish/ios/Tests
+        excludes:
+          - Fixtures
+      - path: ../../../modules/rish/ios/Tests/Fixtures
+        type: group
+        buildPhase: resources
+      - path: ../../../modules/rish/core/fixtures/canonical-corpus.json
+        buildPhase: resources
+      - path: ../../../modules/rish/core/fixtures/canonical-golden.json
+        buildPhase: resources
+      - path: ../../../modules/rish/ios/TaskExperience/TaskAlertPolicy.swift
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: tech.zseven.rish.gpui.tests
+        GENERATE_INFOPLIST_FILE: YES
+        SWIFT_VERSION: '5.0'
+        TARGETED_DEVICE_FAMILY: '1,2'
+        TEST_HOST: $(BUILT_PRODUCTS_DIR)/RishGPUI.app/RishGPUI
+        BUNDLE_LOADER: $(TEST_HOST)
+        HEADER_SEARCH_PATHS:
+          - $(inherited)
+          - $(SRCROOT)/Native
+          - $(SRCROOT)/Sources
+          - $(RISH_NATIVE_INCLUDE)
+          - $(RISH_NATIVE_ROOT)/Sources
+          - $(RISH_NATIVE_VENDOR)/rish_agent_core.xcframework/$(RISH_NATIVE_SLICE)/Headers
+          - $(RISH_NATIVE_VENDOR)/libgit2.xcframework/$(RISH_NATIVE_SLICE)/Headers
+          - $(RISH_NATIVE_VENDOR)/libssh2.xcframework/$(RISH_NATIVE_SLICE)/Headers
+        LD_RUNPATH_SEARCH_PATHS:
+          - $(inherited)
+          - '@executable_path/Frameworks'
+          - '@loader_path/Frameworks'
+    dependencies:
+      - target: RishGPUI
+      - sdk: XCTest.framework
+      - sdk: PhotosUI.framework
+      - sdk: libz.tbd
+schemes:
+  RishGPUI:
+    build:
+      targets:
+        RishGPUI: all
+        RishTests: [test]
+    test:
+      config: Debug
+      targets:
+        - RishTests
+    run:
+      config: Debug
+    archive:
+      config: Release

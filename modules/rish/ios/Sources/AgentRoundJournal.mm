@@ -656,4 +656,13 @@ static id DSHAgentRoundLocatorOf(id container) {
                         error:error];
 }
 
+- (NSDictionary *)reconcileAgentRoundV3OwnerLossWithLocator:(NSDictionary *)locator
+                                              expectedCAS:(NSDictionary *)cas
+                                              failureCode:(NSString *)failureCode
+                                                    error:(NSError **)error {
+  return [self runV3Operation:@"reconcile" args:@{@"locator":DSHAgentRoundArgument(locator),
+    @"cas":DSHAgentRoundArgument(cas), @"failure_code":failureCode ?: NSNull.null}
+    locator:locator argOwner:nil receipt:nil needsTranscript:NO readOnly:NO error:error];
+}
+
 @end

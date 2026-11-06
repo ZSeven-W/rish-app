@@ -1,4 +1,5 @@
 #import "AgentProviderRoundService.h"
+#import "AgentProviderPreflightFailure.h"
 #import "AgentProviderRoundServiceInternals.h"
 #import "AgentToolRegistry.h"
 #import "DSHCompletionV2.h"
@@ -114,7 +115,7 @@ static const int64_t DSHAgentRoundPreviewCoalesceNanoseconds = 50 * NSEC_PER_MSE
     }
     if (self.emittedBytes + self.pendingBytes + bytes > DSHAgentRoundPreviewBudgetBytes) {
       // Beyond the preview budget the round keeps validating natively; the
-      // end event tells JS the preview stopped short.
+      // end event tells UI the preview stopped short.
       self.truncated = YES;
       [self flushLocked];
       return;
@@ -327,7 +328,8 @@ static const int64_t DSHAgentRoundPreviewCoalesceNanoseconds = 50 * NSEC_PER_MSE
   id rawHarness = request[@"harness_id"];
   if (rawHarness != nil && ![rawHarness isKindOfClass:NSString.class]) return nil;
   NSString *harnessId = rawHarness ?: @"dsh";
-  if (![DSHHarnessIdForModel(request[@"model"]) isEqual:harnessId]) return nil;
+  if (![DSHHarnessIdForModel(request[@"model"]) isEqual:harnessId] ||
+      !DSHHarnessModelIsExecutable(request[@"model"])) return nil;
   DSHCompletionProviderTransport *selected = self.transportResolver == nil
       ? nil : self.transportResolver(harnessId);
   if (self.transportResolver == nil) {
@@ -656,7 +658,11 @@ static const int64_t DSHAgentRoundPreviewCoalesceNanoseconds = 50 * NSEC_PER_MSE
       ? request[@"harness_id"] : @"dsh";
   DSHCompletionProviderTransport *providerTransport =
       [self transportForRequest:request];
-  if (self.visibleHistoryProvider == nil || providerTransport == nil ||
+  if (providerTransport == nil && self.rounds != nil && self.transcripts != nil) {
+    return DSHProviderFailBeforeDispatch(self.wal, self.rounds, request, requestSHA,
+      retryFailedRound, nil, nil, @"E_AGENT_CAPABILITY", error);
+  }
+  if (self.visibleHistoryProvider == nil ||
       self.rounds == nil || self.transcripts == nil) {
     NSError *commitError = nil;
     if ([self commitStartedOperationForRequest:request
@@ -804,7 +810,10 @@ static const int64_t DSHAgentRoundPreviewCoalesceNanoseconds = 50 * NSEC_PER_MSE
     }
     return nil;
   }
-  NSMutableArray *messages = [NSMutableArray arrayWithArray:contextMessages];
+  NSArray *assistantMessages = DSHProviderAssistantContextMessages(authority, error);
+  if (assistantMessages == nil) return nil;
+  NSMutableArray *messages = [NSMutableArray arrayWithArray:assistantMessages];
+  [messages addObjectsFromArray:contextMessages];
   [messages addObjectsFromArray:projectedHistory];
   [messages addObjectsFromArray:priorTranscript];
   NSError *toolsError = nil;
@@ -1000,7 +1009,6 @@ static const int64_t DSHAgentRoundPreviewCoalesceNanoseconds = 50 * NSEC_PER_MSE
     persistedRow = created[@"row"];
   }
   NSDictionary *dispatchCAS = DSHProviderRoundCASForRow(persistedRow);
-  NSError *credentialError = nil;
   NSUInteger credentialGeneration = 0;
   NSString *credential = nil;
   BOOL transportCurrent = YES;
@@ -1018,24 +1026,9 @@ static const int64_t DSHAgentRoundPreviewCoalesceNanoseconds = 50 * NSEC_PER_MSE
     credential = nil;
   }
   if (!transportCurrent || ![providerTransport isReadyWithCredential:credential]) {
-    // No provider request was dispatched; proof-gated cancellation is safe.
-    NSDictionary *cancelled = [self.rounds cancelAgentRoundV3WithCAS:dispatchCAS
-                                                                  error:&credentialError];
-    NSError *commitError = nil;
-    NSDictionary *row = cancelled[@"row"] ?: persistedRow;
-    if ([self commitStartedOperationForRequest:request
-                                     requestSHA:requestSHA
-                                           row:row
-                                         status:@"ambiguous"
-                                  failureCode:@"E_AGENT_PERSISTENCE"
-                                         error:&commitError] == nil &&
-        credentialError == nil) {
-      credentialError = commitError;
-    }
-    [self.wal unregisterNativeTaskId:nativeTaskId error:nil];
-    if (error != nullptr) *error = credentialError ?: DSHAgentNativeStoreError(
-        DSHAgentNativeStoreErrorUnavailable);
-    return nil;
+    return DSHProviderFailBeforeDispatch(self.wal, self.rounds, request, requestSHA,
+      retryFailedRound, persistedRow, nativeTaskId,
+      transportCurrent ? @"E_AGENT_PROVIDER_CREDENTIAL" : @"E_AGENT_CAPABILITY", error);
   }
   NSString *providerRequestErrorCode = nil;
   NSString *providerRequestId = [providerTransport nextProviderRequestId:
@@ -1510,7 +1503,15 @@ static const int64_t DSHAgentRoundPreviewCoalesceNanoseconds = 50 * NSEC_PER_MSE
         if (![conversation[@"id"] isEqual:request[@"conversation_id"]]) continue;
         for (NSDictionary *attempt in conversation[@"attempts"]) if ([attempt[@"attempt_id"] isEqual:request[@"attempt_id"]]) ownsAttempt = YES;
       }
-      if (ownsAttempt) [self.transcripts cacheRoundPresentationForRequest:request message:nativeMessage kind:terminalKind];
+      if (ownsAttempt) {
+        // Use the committed assistant's core-normalized index; legacy bridge
+        // requests may still represent an integral index as NSNumber double.
+        NSDictionary *presentationRequest = @{
+          @"conversation_id": request[@"conversation_id"], @"attempt_id": request[@"attempt_id"],
+          @"round_id": request[@"round_id"], @"round_index": nativeMessage[@"round_index"],
+        };
+        [self.transcripts cacheRoundPresentationForRequest:presentationRequest message:nativeMessage kind:terminalKind];
+      }
     }];
   } @catch (__unused NSException *exception) {}
   NSDictionary *after = completed[@"transcript"];

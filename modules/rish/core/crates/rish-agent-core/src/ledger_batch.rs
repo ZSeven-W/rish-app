@@ -167,7 +167,11 @@ pub fn write_manifest_call_shape(call: Option<&Value>) -> bool {
             | "install_runtime_environment"
             | "run_program"
             | "start_runtime_service"
-            | "stop_runtime_service",
+            | "stop_runtime_service"
+            | "create_assistant_task"
+            | "update_assistant_task"
+            | "remember_assistant_memory"
+            | "forget_assistant_memory",
         ) => {
             exact_keys(
                 Some(call),
@@ -188,6 +192,16 @@ pub fn write_manifest_call_shape(call: Option<&Value>) -> bool {
 
 /// `DSHAgentApprovalPreview`.
 pub fn approval_preview(preview: Option<&Value>) -> bool {
+    if preview
+        .and_then(|p| p.get("kind"))
+        .and_then(Value::as_str)
+        .is_some_and(crate::assistant_tools::is_mutation)
+    {
+        return crate::assistant_tools::approval_preview_shape(preview);
+    }
+    if preview.is_some_and(|value| value["kind"] == crate::user_question::NAME) {
+        return crate::user_question::question_shape(preview);
+    }
     let keys = [
         "schema_version",
         "kind",
@@ -216,10 +230,16 @@ pub fn approval_preview(preview: Option<&Value>) -> bool {
                     | "start_guest_cgi"
                     | "stop_guest_cgi"
                     | "list_runtime_environments"
+                    | "list_assistant_tasks"
+                    | "search_assistant_memory"
                     | "install_runtime_environment"
                     | "run_program"
                     | "start_runtime_service"
                     | "stop_runtime_service"
+                    | "create_assistant_task"
+                    | "update_assistant_task"
+                    | "remember_assistant_memory"
+                    | "forget_assistant_memory"
             )
         )
         || paths.len() > 8
@@ -650,9 +670,10 @@ fn prepare_tool_batch(request: &Value, env: &Env, view: &View) -> Result<Effect,
         if let Some(supplied_rejection) = supplied_rejection.as_ref() {
             if !supplied_rejection.is_null() {
                 if !(ledger_rejection(Some(supplied_rejection))
-                    || (as_str(get(supplied, "name"))
-                        .is_some_and(crate::runtime_tools::is_runtime)
-                        && crate::runtime_tools::prepare_rejection(Some(supplied_rejection))))
+                    || (as_str(get(supplied, "name")).is_some_and(|name| {
+                        crate::runtime_tools::is_runtime(name)
+                            || crate::assistant_tools::is_assistant(name)
+                    }) && crate::runtime_tools::prepare_rejection(Some(supplied_rejection))))
                 {
                     return Err(StoreError::InvalidArgument);
                 }
@@ -738,10 +759,16 @@ fn prepare_tool_batch(request: &Value, env: &Env, view: &View) -> Result<Effect,
                     | "start_guest_cgi"
                     | "stop_guest_cgi"
                     | "list_runtime_environments"
+                    | "list_assistant_tasks"
+                    | "search_assistant_memory"
                     | "install_runtime_environment"
                     | "run_program"
                     | "start_runtime_service"
                     | "stop_runtime_service"
+                    | "create_assistant_task"
+                    | "update_assistant_task"
+                    | "remember_assistant_memory"
+                    | "forget_assistant_memory"
             );
             denied.push(DeniedCandidate {
                 call: call.clone(),
@@ -833,10 +860,53 @@ fn prepare_tool_batch(request: &Value, env: &Env, view: &View) -> Result<Effect,
             "state": "intent", "owner": null, "settled_facts": null, "transcript_after": null,
             "receipt": null, "created_at": timestamp, "updated_at": timestamp,
         });
+        if crate::assistant_tools::is_assistant(&name) {
+            let expected_access = if crate::assistant_tools::is_mutation(&name) {
+                "conversation_confirm"
+            } else {
+                "auto"
+            };
+            let authorized = view.authorities.as_ref().is_some_and(|authorities| {
+                authorities.iter().any(|entry| {
+                    let authority = &entry.record;
+                    crate::assistant_context::authority_valid(authority)
+                        && authority["task_id"] == request["task_id"]
+                        && authority["attempt_id"] == request["attempt_id"]
+                        && authority["conversation_id"] == request["conversation_id"]
+                        && authority["registry"]["registry_version"] == 5
+                        && authority["root"] == request["root"]
+                        && authority["state"] == "prepared"
+                        && authority["registry"]["tools"]
+                            .as_array()
+                            .is_some_and(|tools| {
+                                tools.iter().any(|tool| {
+                                    tool["name"] == name && tool["access"] == expected_access
+                                })
+                            })
+                })
+            });
+            if !authorized
+                || access != expected_access
+                || precondition["conversation_id"] != request["conversation_id"]
+            {
+                return Err(StoreError::Conflict);
+            }
+        }
         if !ledger_row(&intent) {
             return Err(StoreError::Conflict);
         }
         raw_arguments_bind_intent(get(&call, "arguments_json"), &intent)?;
+        if crate::assistant_tools::is_mutation(&name) {
+            let arguments = as_str(get(&call, "arguments_json"))
+                .and_then(crate::strict_json::parse_arguments)
+                .map(Value::Object)
+                .ok_or(StoreError::InvalidArgument)?;
+            if call["approval_preview"]
+                != crate::assistant_tools::approval_preview(&name, &arguments)
+            {
+                return Err(StoreError::Conflict);
+            }
+        }
         let file_mutation = name == "write_file";
         let git_mutation = matches!(
             name.as_str(),
@@ -848,6 +918,10 @@ fn prepare_tool_batch(request: &Value, env: &Env, view: &View) -> Result<Effect,
                 | "run_program"
                 | "start_runtime_service"
                 | "stop_runtime_service"
+                | "create_assistant_task"
+                | "update_assistant_task"
+                | "remember_assistant_memory"
+                | "forget_assistant_memory"
         );
         if file_mutation || git_mutation {
             if file_mutation {
@@ -1277,6 +1351,11 @@ fn prepare_tool_batch(request: &Value, env: &Env, view: &View) -> Result<Effect,
     )?;
     let mut approval_registry_version = Value::from(
         if source_calls
+            .iter()
+            .any(|call| as_str(get(call, "name")).is_some_and(crate::assistant_tools::is_assistant))
+        {
+            5u64
+        } else if source_calls
             .iter()
             .any(|call| as_str(get(call, "name")).is_some_and(crate::runtime_tools::is_runtime))
         {

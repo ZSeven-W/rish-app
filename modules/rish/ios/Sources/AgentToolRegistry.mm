@@ -22,7 +22,7 @@ static NSDictionary *DSHAgentRegistryReduce(NSString *op,
                                             NSError **error) {
   NSMutableDictionary *envelope = [fields mutableCopy];
   envelope[@"op"] = op;
-  if (!envelope[@"registry_version"]) envelope[@"registry_version"] = @3; // iOS runtime adapter.
+  if (!envelope[@"registry_version"]) envelope[@"registry_version"] = @4; // Runtime and durable question adapters.
   envelope[@"guest_cgi"] = @(DSHAgentGuestCGIAvailable);
   NSData *bytes = [NSJSONSerialization dataWithJSONObject:envelope options:0 error:nil];
   if (bytes == nil) {
@@ -75,6 +75,14 @@ static NSDictionary *DSHAgentRegistryReduce(NSString *op,
                                      error:(NSError **)error {
   if (![DSHAgentRootResolver validateAgentRootProjection:root error:error]) return nil;
   return DSHAgentRegistryReduce(@"registry", @{ @"root" : root }, error)[@"registry"];
+}
+
+- (nullable NSDictionary *)registryForRoot:(NSDictionary *)root
+                                  version:(NSNumber *)version
+                                    error:(NSError **)error {
+  if (![DSHAgentRootResolver validateAgentRootProjection:root error:error]) return nil;
+  return DSHAgentRegistryReduce(@"registry", @{@"root":root,
+    @"registry_version":version ?: NSNull.null}, error)[@"registry"];
 }
 
 - (nullable NSDictionary *)policyForRoot:(NSDictionary *)root

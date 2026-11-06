@@ -5,6 +5,14 @@ cd "$(dirname "$0")/../.."
   echo 'Release preview tests require RISH_IOS_GUEST_CGI_ENABLED=1' >&2
   exit 1
 }
+# The GPUI host links the retained native services directly, without CocoaPods.
+export IPHONEOS_DEPLOYMENT_TARGET=16.0
+cargo rustc --locked --manifest-path apps/gpui/mobile/Cargo.toml \
+  --target-dir apps/gpui/mobile/target --target aarch64-apple-ios-sim \
+  --release --lib --crate-type staticlib
+xcodegen generate --spec apps/gpui/ios/project.yml
+vendor=${RISH_GPUI_NATIVE_VENDOR:-"$PWD/modules/rish/ios/Vendor"}
+include=${RISH_GPUI_NATIVE_INCLUDE:-"$PWD/modules/rish/ios/include"}
 output="$PWD/.build/preview-tests"
 mkdir -p "$output"
 xcrun simctl list devices available --json > "$output/devices.json"
@@ -24,9 +32,10 @@ PY
 xcrun simctl boot "$device" || true
 xcrun simctl bootstatus "$device" -b
 trap 'xcrun simctl shutdown "$device" >/dev/null 2>&1 || true' EXIT
-xcodebuild build-for-testing -workspace apps/mobile/ios/Rish.xcworkspace \
-  -scheme Rish -configuration Release -destination "id=$device" \
+xcodebuild build-for-testing -project apps/gpui/ios/RishGPUI.xcodeproj \
+  -scheme RishGPUI -configuration Release -destination "id=$device" \
   -derivedDataPath "$output/DerivedData" CODE_SIGNING_ALLOWED=NO \
+  RISH_GUEST_CGI_ENABLED=1 RISH_NATIVE_VENDOR="$vendor" RISH_NATIVE_INCLUDE="$include" \
   -only-testing:RishTests/RishGuestCgiLiveTests \
   -only-testing:RishTests/AgentGuestCgiAdapterTests \
   -only-testing:RishTests/AgentPolicyTests \

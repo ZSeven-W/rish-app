@@ -1,85 +1,81 @@
 #import "ProviderConfiguration.h"
 #import "RishHarnessCatalog.h"
 #import "HarnessAuthService.h"
-#import "AgentNativeWAL.h"
-#include <CoreFoundation/CoreFoundation.h>
+#include "rish_agent_core.h"
 
 static NSString *const SettingsKey = @"RishCustomProviderConfigurationsV1";
-/// Every harness can go through a relay the person configured.
+static NSString *const RegistryKey = @"RishIndependentProvidersV1";
+
+// Rust owns field validation, routing rules and stable profile/credential
+// identities. Foundation owns URL decoding/encoding and preference storage.
+static id PolicyWithError(NSString *op, NSDictionary *fields, NSError **error) {
+  NSMutableDictionary *request = [fields mutableCopy];
+  request[@"op"] = op;
+  if (![NSJSONSerialization isValidJSONObject:request]) return nil;
+  NSData *bytes = [NSJSONSerialization dataWithJSONObject:request options:0 error:nil];
+  if (!bytes) return nil;
+  char *raw = rish_agent_provider_policy_reduce((const char *)bytes.bytes, bytes.length);
+  if (!raw) return nil;
+  size_t length = strnlen(raw, 1024 * 1024 + 1);
+  NSData *result = length <= 1024 * 1024 ? [NSData dataWithBytes:raw length:length] : nil;
+  rish_agent_string_free(raw);
+  id reply = result ? [NSJSONSerialization JSONObjectWithData:result options:0 error:nil] : nil;
+  if (![reply isKindOfClass:NSDictionary.class] || ![reply[@"ok"] isEqual:@YES]) {
+    NSString *code = [reply[@"error"] isKindOfClass:NSString.class] ? reply[@"error"] : @"E_CUSTOM_PROVIDER_REGISTRY_INVALID";
+    if (error) *error = [NSError errorWithDomain:@"RishProviderConfiguration" code:1 userInfo:@{NSLocalizedDescriptionKey:code}];
+    return nil;
+  }
+  return reply[@"value"] == NSNull.null ? nil : reply[@"value"];
+}
+static id Policy(NSString *op, NSDictionary *fields) { return PolicyWithError(op, fields, nil); }
+BOOL DSHIsCustomProviderHarness(id value) {
+  return [value isKindOfClass:NSString.class] && [value hasPrefix:@"custom-"] &&
+    [Policy(@"slot_for_harness", @{@"harness_id":value}) isKindOfClass:NSString.class];
+}
+BOOL DSHProviderRequiresCredential(NSDictionary *configuration) {
+  return [Policy(@"credential_required", @{@"configuration":configuration ?: NSNull.null}) boolValue];
+}
 static BOOL Supported(id value) {
-  return [value isEqual:@"claude-code"] || [value isEqual:@"codex"] ||
-      [value isEqual:@"dsh"] || [value isEqual:@"glm"];
+  return [value isKindOfClass:NSString.class] && ([Policy(@"harnesses", @{}) containsObject:value] || DSHIsCustomProviderHarness(value));
 }
-static BOOL Text(id value, NSUInteger maximum) {
-  if (![value isKindOfClass:NSString.class]) return NO;
-  NSData *bytes = [value dataUsingEncoding:NSUTF8StringEncoding allowLossyConversion:NO];
-  if (bytes == nil || bytes.length == 0 || bytes.length > maximum) return NO;
-  return [value rangeOfCharacterFromSet:NSCharacterSet.controlCharacterSet].location == NSNotFound;
-}
-static BOOL Keys(NSDictionary *value, NSArray *keys) {
-  return [value isKindOfClass:NSDictionary.class] &&
-      [[NSSet setWithArray:value.allKeys] isEqual:[NSSet setWithArray:keys]];
-}
-static NSString *Digest(NSDictionary *value) {
-  return DSHAgentHJ(@"provider-configuration-v1", value, nil);
-}
-static NSString *NormalizeEndpoint(NSString *value, NSString *protocol, BOOL fullURL) {
-  if (!Text(value, 2048) || ![@[@"messages", @"responses", @"chat-completions"] containsObject:protocol]) return nil;
+static NSString *NormalizeEndpoint(id value, id protocol, id fullURL) {
+  if (![value isKindOfClass:NSString.class]) return nil;
   NSString *trimmed = [value stringByTrimmingCharactersInSet:NSCharacterSet.whitespaceAndNewlineCharacterSet];
   NSURLComponents *url = [NSURLComponents componentsWithString:trimmed];
-  NSString *host = url.host.lowercaseString;
-  BOOL local = [@[@"localhost", @"127.0.0.1", @"::1", @"[::1]"] containsObject:host];
-  if (host.length == 0 || url.user != nil || url.password != nil || url.query != nil ||
-      url.fragment != nil || (! [url.scheme.lowercaseString isEqual:@"https"] &&
-      !(local && [url.scheme.lowercaseString isEqual:@"http"]))) return nil;
-  if (url.port != nil && (url.port.integerValue < 1 || url.port.integerValue > 65535)) return nil;
-  url.scheme = url.scheme.lowercaseString;
-  url.host = host;
-  if (fullURL) return url.URL.absoluteString;
-  NSString *suffix = [protocol isEqual:@"messages"] ? @"messages" :
-      ([protocol isEqual:@"responses"] ? @"responses" : @"chat/completions");
-  NSString *path = url.path ?: @"";
-  while ([path hasSuffix:@"/"]) path = [path substringToIndex:path.length - 1];
-  BOOL knownEndpoint = NO;
-  for (NSString *known in @[@"/chat/completions", @"/responses", @"/messages"]) {
-    if ([path hasSuffix:known]) { path = [path substringToIndex:path.length - known.length]; knownEndpoint = YES; break; }
-  }
-  if (![path hasSuffix:[@"/" stringByAppendingString:suffix]]) {
-    if (!knownEndpoint && ![path hasSuffix:@"/v1"]) path = [path stringByAppendingString:@"/v1"];
-    path = [path stringByAppendingFormat:@"/%@", suffix];
-  }
-  url.path = path;
+  if (!url) return nil;
+  NSDictionary *parts = @{@"scheme":url.scheme ?: NSNull.null, @"host":url.host ?: NSNull.null,
+    @"port":url.port ?: NSNull.null, @"has_user":@(url.user != nil),
+    @"has_password":@(url.password != nil), @"has_query":@(url.query != nil),
+    @"has_fragment":@(url.fragment != nil), @"path":url.path ?: @""};
+  NSDictionary *plan = Policy(@"endpoint_plan", @{@"codec":@"foundation", @"raw":value, @"protocol":protocol ?: NSNull.null,
+    @"full_url":fullURL ?: @NO, @"parts":parts});
+  if (![plan isKindOfClass:NSDictionary.class]) return nil;
+  url.scheme = plan[@"scheme"];
+  url.host = plan[@"host"];
+  // A full URL must retain its existing percent-encoded path byte-for-byte.
+  // Base URLs keep Foundation's historical decoded-path serialization.
+  if (![fullURL boolValue]) url.path = plan[@"path"];
   return url.URL.absoluteString;
 }
 NSString *DSHNormalizeProviderEndpoint(NSString *value, NSString *protocol) {
-  return NormalizeEndpoint(value, protocol, NO);
+  return NormalizeEndpoint(value, protocol, @NO);
 }
 NSDictionary *DSHNormalizeProviderConfiguration(id raw) {
   if (![raw isKindOfClass:NSDictionary.class]) return nil;
-  id fullURL = raw[@"full_url"];
-  if (fullURL != nil && (![fullURL isKindOfClass:NSNumber.class] || CFGetTypeID((__bridge CFTypeRef)fullURL) != CFBooleanGetTypeID())) return nil;
-  NSMutableDictionary *required = [raw mutableCopy]; [required removeObjectForKey:@"full_url"];
-  if (!Keys(required, @[@"schema_version", @"harness_id", @"name", @"endpoint_url", @"protocol", @"auth_type", @"model_mappings", @"send_reasoning"]) ||
-      ![raw[@"schema_version"] isEqual:@1] || CFGetTypeID((__bridge CFTypeRef)raw[@"schema_version"]) == CFBooleanGetTypeID() ||
-      !Supported(raw[@"harness_id"]) || !Text(raw[@"name"], 80) ||
-      ![@[@"bearer", @"x-api-key", @"api-key"] containsObject:raw[@"auth_type"]] ||
-      ![raw[@"model_mappings"] isKindOfClass:NSDictionary.class] ||
-      ![raw[@"send_reasoning"] isKindOfClass:NSNumber.class] ||
-      CFGetTypeID((__bridge CFTypeRef)raw[@"send_reasoning"]) != CFBooleanGetTypeID()) return nil;
-  NSString *endpoint = NormalizeEndpoint(raw[@"endpoint_url"], raw[@"protocol"], [fullURL boolValue]);
-  if (endpoint == nil) return nil;
-  NSDictionary *mappings = raw[@"model_mappings"];
-  // DSH's catalog holds up to 32 models, and each may be mapped.
-  if (mappings.count > 32) return nil;
-  for (id model in mappings) {
-    if (![DSHHarnessIdForModel(model) isEqual:raw[@"harness_id"]] || !Text(mappings[model], 128) ||
-        [mappings[model] rangeOfCharacterFromSet:NSCharacterSet.whitespaceAndNewlineCharacterSet].location != NSNotFound) return nil;
+  NSString *endpoint = NormalizeEndpoint(raw[@"endpoint_url"], raw[@"protocol"], raw[@"full_url"]);
+  if (!endpoint) return nil;
+  NSMutableDictionary *candidate = [raw mutableCopy];
+  candidate[@"endpoint_url"] = endpoint;
+  NSMutableDictionary *harnesses = [NSMutableDictionary dictionary];
+  id mappings = raw[@"model_mappings"];
+  if ([mappings isKindOfClass:NSDictionary.class]) {
+    for (id model in mappings) {
+      NSString *harness = DSHIsCustomProviderHarness(raw[@"harness_id"]) ? raw[@"harness_id"] : DSHHarnessIdForModel(model);
+      if (harness) harnesses[model] = harness;
+    }
   }
-  NSMutableDictionary *normalized = [raw mutableCopy];
-  normalized[@"endpoint_url"] = endpoint;
-  normalized[@"full_url"] = fullURL ?: @NO;
-  normalized[@"model_mappings"] = [mappings copy];
-  return [normalized copy];
+  id result = Policy(@"validate_configuration", @{@"configuration":candidate, @"harness_by_model":harnesses});
+  return [result isKindOfClass:NSDictionary.class] ? result : nil;
 }
 
 @interface DSHProviderConfigurationStore ()
@@ -98,36 +94,101 @@ NSDictionary *DSHNormalizeProviderConfiguration(id raw) {
 }
 - (NSDictionary *)configurationForHarness:(NSString *)harness {
   if (!Supported(harness)) return nil;
+  if (DSHIsCustomProviderHarness(harness)) {
+    NSDictionary *provider = [self customProviderForId:[harness substringFromIndex:7]];
+    return [provider[@"active"] boolValue] ? provider[@"configuration"] : nil;
+  }
   @synchronized(self) {
     id all = [self.defaults objectForKey:SettingsKey];
     if (all != nil && ![all isKindOfClass:NSDictionary.class]) return nil;
     id saved = all[harness];
-    if (saved != nil) return DSHNormalizeProviderConfiguration(saved);
-    // The official service each harness speaks to, shown as the starting
-    // point of a custom configuration.
-    NSArray *official = @{
-      @"claude-code": @[@"https://api.anthropic.com/v1/messages", @"messages", @"x-api-key"],
-      @"codex": @[@"https://api.openai.com/v1/responses", @"responses", @"bearer"],
-      @"dsh": @[@"https://api.deepseek.com/chat/completions", @"chat-completions", @"bearer"],
-      @"glm": @[@"https://open.bigmodel.cn/api/anthropic/v1/messages", @"messages", @"x-api-key"],
-    }[harness];
-    return @{@"schema_version": @1, @"harness_id": harness, @"name": @"", @"endpoint_url": official[0],
-             @"protocol": official[1], @"auth_type": official[2],
-             @"model_mappings": @{}, @"send_reasoning": @YES, @"official": @YES};
+    if (saved == nil) return Policy(@"defaults", @{@"harness_id":harness});
+    NSDictionary *normalized = DSHNormalizeProviderConfiguration(saved);
+    return [normalized[@"harness_id"] isEqual:harness] ? normalized : nil;
   }
 }
 - (NSDictionary *)saveConfiguration:(NSDictionary *)configuration error:(NSError **)error {
-  NSDictionary *normalized = DSHNormalizeProviderConfiguration(configuration);
+  NSDictionary *normalized = DSHIsCustomProviderHarness(configuration[@"harness_id"]) ? nil : DSHNormalizeProviderConfiguration(configuration);
   if (normalized == nil) {
     if (error != nil) *error = [NSError errorWithDomain:@"RishProviderConfiguration" code:1
         userInfo:@{NSLocalizedDescriptionKey: @"E_PROVIDER_CONFIGURATION"}];
     return nil;
   }
   @synchronized(self) {
-    NSMutableDictionary *all = [[self.defaults dictionaryForKey:SettingsKey] mutableCopy] ?: [NSMutableDictionary dictionary];
+    id existing = [self.defaults objectForKey:SettingsKey];
+    if (existing != nil && ![existing isKindOfClass:NSDictionary.class]) {
+      if (error != nil) *error = [NSError errorWithDomain:@"RishProviderConfiguration" code:1
+          userInfo:@{NSLocalizedDescriptionKey: @"E_PROVIDER_CONFIGURATION"}];
+      return nil;
+    }
+    NSMutableDictionary *all = [existing mutableCopy] ?: [NSMutableDictionary dictionary];
     all[normalized[@"harness_id"]] = normalized;
     [self.defaults setObject:all forKey:SettingsKey];
     return normalized;
+  }
+}
+- (NSDictionary *)customRegistry:(NSError **)error {
+  @synchronized(self) {
+    NSDictionary *registry = PolicyWithError(@"registry_read", @{@"registry":[self.defaults objectForKey:RegistryKey] ?: NSNull.null}, error);
+    if (!registry) return nil;
+    // Rust validates schema and identity. The host validates its own codec's
+    // canonical endpoint bytes on read, without repairing malformed storage.
+    for (NSDictionary *provider in registry[@"providers"]) {
+      NSDictionary *profile = provider[@"configuration"];
+      NSString *endpoint = NormalizeEndpoint(profile[@"endpoint_url"], profile[@"protocol"], @YES);
+      if (![endpoint isEqual:profile[@"endpoint_url"]] || ![profile[@"full_url"] isEqual:@YES]) {
+        if (error) *error = [NSError errorWithDomain:@"RishProviderConfiguration" code:1 userInfo:@{NSLocalizedDescriptionKey:@"E_CUSTOM_PROVIDER_REGISTRY_INVALID"}];
+        return nil;
+      }
+    }
+    return registry;
+  }
+}
+- (NSDictionary *)customProviderForId:(NSString *)providerId {
+  if (![providerId isKindOfClass:NSString.class]) return nil;
+  for (NSDictionary *provider in [self customRegistry:nil][@"providers"])
+    if ([provider[@"id"] isEqual:providerId]) return provider;
+  return nil;
+}
+- (NSArray<NSDictionary *> *)customModelsIncludingRetired:(BOOL)includeRetired {
+  @synchronized(self) {
+    NSDictionary *registry = [self customRegistry:nil];
+    return registry ? Policy(@"registry_models", @{@"registry":registry, @"include_retired":@(includeRetired)}) ?: @[] : @[];
+  }
+}
+- (NSDictionary *)customRouteForModel:(NSString *)model requireActive:(BOOL)requireActive {
+  @synchronized(self) {
+    NSDictionary *registry = [self customRegistry:nil];
+    return registry ? Policy(@"registry_route", @{@"registry":registry,
+      @"model_id":model ?: NSNull.null, @"require_active":@(requireActive)}) : nil;
+  }
+}
+- (NSDictionary *)saveCustomProvider:(NSDictionary *)provider expectedRevision:(NSNumber *)revision error:(NSError **)error {
+  NSDictionary *raw = [provider isKindOfClass:NSDictionary.class] ? provider[@"configuration"] : nil;
+  NSDictionary *configuration = DSHNormalizeProviderConfiguration(raw);
+  if (!configuration || !DSHIsCustomProviderHarness(configuration[@"harness_id"])) {
+    if (error) *error = [NSError errorWithDomain:@"RishProviderConfiguration" code:1 userInfo:@{NSLocalizedDescriptionKey:@"E_CUSTOM_PROVIDER_REGISTRY_INVALID"}];
+    return nil;
+  }
+  NSMutableDictionary *canonical = [configuration mutableCopy]; canonical[@"full_url"] = @YES;
+  NSMutableDictionary *candidate = [provider mutableCopy]; candidate[@"configuration"] = canonical;
+  @synchronized(self) {
+    NSDictionary *registry = [self customRegistry:error];
+    if (!registry) return nil;
+    NSDictionary *value = PolicyWithError(@"registry_save", @{@"registry":registry,
+      @"expected_revision":revision ?: NSNull.null, @"provider":candidate}, error);
+    if (value) [self.defaults setObject:value forKey:RegistryKey];
+    return value;
+  }
+}
+- (NSDictionary *)removeCustomProvider:(NSString *)providerId expectedRevision:(NSNumber *)revision error:(NSError **)error {
+  @synchronized(self) {
+    NSDictionary *registry = [self customRegistry:error];
+    if (!registry) return nil;
+    NSDictionary *value = PolicyWithError(@"registry_remove", @{@"registry":registry,
+      @"expected_revision":revision ?: NSNull.null, @"provider_id":providerId ?: NSNull.null}, error);
+    if (value) [self.defaults setObject:value forKey:RegistryKey];
+    return value;
   }
 }
 - (NSDictionary *)resetHarness:(NSString *)harness {
@@ -141,15 +202,11 @@ NSDictionary *DSHNormalizeProviderConfiguration(id raw) {
 @end
 
 NSDictionary *DSHProviderBindingFromConfiguration(NSDictionary *configuration, NSString *model) {
-  if ([configuration[@"official"] isEqual:@YES]) return nil;
   NSDictionary *profile = DSHNormalizeProviderConfiguration(configuration);
-  if (profile == nil || ![DSHHarnessIdForModel(model) isEqual:profile[@"harness_id"]]) return nil;
-  NSDictionary *identity = @{@"schema_version": @1, @"harness_id": profile[@"harness_id"],
-      @"endpoint_url": profile[@"endpoint_url"], @"protocol": profile[@"protocol"],
-      @"auth_type": profile[@"auth_type"], @"send_reasoning": profile[@"send_reasoning"], @"model_id": profile[@"model_mappings"][model] ?: model};
-  NSMutableDictionary *binding = [identity mutableCopy];
-  binding[@"profile_id"] = Digest(identity);
-  return binding;
+  if (!profile) return nil;
+  id result = Policy(@"binding", @{@"configuration":profile ?: NSNull.null,
+    @"logical_model":model ?: NSNull.null, @"model_harness":(DSHIsCustomProviderHarness(profile[@"harness_id"]) ? profile[@"harness_id"] : DSHHarnessIdForModel(model)) ?: NSNull.null});
+  return [result isKindOfClass:NSDictionary.class] ? result : nil;
 }
 NSDictionary *DSHProviderBindingForModel(NSString *model) {
   NSString *harness = DSHHarnessIdForModel(model);
@@ -158,34 +215,31 @@ NSDictionary *DSHProviderBindingForModel(NSString *model) {
     NSDictionary *identity = @{@"schema_version":@1, @"harness_id":@"codex",
       @"endpoint_url":@"https://chatgpt.com/backend-api/codex/responses", @"protocol":@"responses",
       @"auth_type":@"bearer", @"send_reasoning":@YES, @"model_id":model};
+    NSString *digest = Policy(@"profile_digest", @{@"identity":identity});
+    if (!digest) return nil;
     NSMutableDictionary *binding = [identity mutableCopy];
-    binding[@"profile_id"] = Digest(identity);
+    binding[@"profile_id"] = digest;
     return binding;
   }
   return DSHProviderBindingFromConfiguration([[DSHProviderConfigurationStore sharedStore] configurationForHarness:harness], model);
 }
 BOOL DSHValidateProviderBinding(id raw, NSString *model) {
-  if (!Keys(raw, @[@"schema_version", @"harness_id", @"endpoint_url", @"protocol", @"auth_type", @"send_reasoning", @"model_id", @"profile_id"]) ||
-      ![raw[@"schema_version"] isEqual:@1] || !Supported(raw[@"harness_id"]) ||
-      ![DSHHarnessIdForModel(model) isEqual:raw[@"harness_id"]] || !Text(raw[@"model_id"], 128) ||
-      [raw[@"model_id"] rangeOfCharacterFromSet:NSCharacterSet.whitespaceAndNewlineCharacterSet].location != NSNotFound ||
-      ![raw[@"send_reasoning"] isKindOfClass:NSNumber.class] ||
-      CFGetTypeID((__bridge CFTypeRef)raw[@"send_reasoning"]) != CFBooleanGetTypeID() ||
-      ![@[@"bearer", @"x-api-key", @"api-key"] containsObject:raw[@"auth_type"]] ||
-      ![NormalizeEndpoint(raw[@"endpoint_url"], raw[@"protocol"], YES) isEqual:raw[@"endpoint_url"]]) return NO;
-  NSMutableDictionary *identity = [raw mutableCopy];
-  [identity removeObjectForKey:@"profile_id"];
-  return [Digest(identity) isEqual:raw[@"profile_id"]];
+  if (![raw isKindOfClass:NSDictionary.class]) return NO;
+  NSString *endpoint = NormalizeEndpoint(raw[@"endpoint_url"], raw[@"protocol"], @YES);
+  return [Policy(@"validate_binding", @{@"binding":raw, @"logical_model":model ?: NSNull.null,
+    @"model_harness":(DSHIsCustomProviderHarness(raw[@"harness_id"]) ? raw[@"harness_id"] : DSHHarnessIdForModel(model)) ?: NSNull.null,
+    @"endpoint_is_canonical":@([endpoint isEqual:raw[@"endpoint_url"]])}) boolValue];
 }
 BOOL DSHProviderBindingIsCurrent(id value, NSString *model) {
   NSString *harness = DSHHarnessIdForModel(model);
-  if (Supported(harness) && !([harness isEqual:@"codex"] && DSHCodexChatUsesSubscription()) && [[DSHProviderConfigurationStore sharedStore] configurationForHarness:harness] == nil) return NO;
+  if (!Supported(harness)) return NO;
+  if (DSHIsCustomProviderHarness(harness) && ![DSHProviderConfigurationStore.sharedStore customRouteForModel:model requireActive:YES]) return NO;
+  if (!([harness isEqual:@"codex"] && DSHCodexChatUsesSubscription()) && [[DSHProviderConfigurationStore sharedStore] configurationForHarness:harness] == nil) return NO;
   NSDictionary *current = DSHProviderBindingForModel(model);
   return (value == nil && current == nil) || [current isEqual:value];
 }
 NSString *DSHConfigurableHarnessForSlot(NSString *slot) {
-  return @{@"ANTHROPIC_API_KEY": @"claude-code", @"OPENAI_API_KEY": @"codex",
-           @"DEEPSEEK_API_KEY": @"dsh", @"BIGMODEL_API_KEY": @"glm"}[slot];
+  return Policy(@"harness_for_slot", @{@"slot":slot ?: NSNull.null});
 }
 BOOL DSHHarnessUsesCustomProvider(NSString *harness) {
   NSDictionary *profile = Supported(harness) ? [[DSHProviderConfigurationStore sharedStore] configurationForHarness:harness] : nil;
@@ -193,13 +247,8 @@ BOOL DSHHarnessUsesCustomProvider(NSString *harness) {
 }
 NSString *DSHEffectiveCredentialAccount(NSString *slot) {
   NSString *harness = DSHConfigurableHarnessForSlot(slot);
-  if (harness == nil) return slot;
-  NSDictionary *profile = [[DSHProviderConfigurationStore sharedStore] configurationForHarness:harness];
-  if (profile == nil) return nil;
-  if ([profile[@"official"] isEqual:@YES]) return slot;
-  NSString *identity = Digest(@{@"harness_id": harness, @"endpoint_url": profile[@"endpoint_url"],
-                               @"auth_type": profile[@"auth_type"], @"protocol": profile[@"protocol"]});
-  return [NSString stringWithFormat:@"CUSTOM_PROVIDER_%@_%@", harness, identity];
+  NSDictionary *profile = harness ? [[DSHProviderConfigurationStore sharedStore] configurationForHarness:harness] : nil;
+  return Policy(@"credential_account", @{@"slot":slot ?: NSNull.null, @"configuration":profile ?: NSNull.null});
 }
 
 NSDictionary *DSHProviderRecordWithoutConfiguration(NSDictionary *record, NSString *model) {

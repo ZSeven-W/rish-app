@@ -1,0 +1,34 @@
+Rish local patch to gpui-pre-wgpu 0.3.6
+
+Upstream and license
+The 14 upstream files are copied from the registry package identified in
+UPSTREAM.toml, including its normalized Cargo.toml, Cargo.toml.orig and full
+Apache-2.0 license. The official crate archive was verified against the
+checksum in the mobile workspace lockfile and compared byte for byte with
+the source before modification. The archive contains no NOTICE or Cargo VCS
+metadata. Its Cargo.lock is preserved as upstream package content; the
+application resolves dependencies through apps/gpui/mobile/Cargo.lock.
+
+Change
+Only src/wgpu_context.rs is modified. In the native instance constructor,
+Android removes InstanceFlags::DEBUG from the default flags. VALIDATION,
+VALIDATION_INDIRECT_CALL and all other default flags are unchanged. Other
+platforms keep the original default flags. The mobile workspace selects this
+copy with its crates.io path patch; no global Cargo cache is modified.
+
+Reason
+wgpu-hal 29.0.4 uses DEBUG to request Naga SPIR-V debug records whose OpSource
+language is WGSL (10). An Android API 34 arm64 emulator using the existing
+SwiftShader backend reported "Invalid source language operand: 10" while
+vkCreateGraphicsPipelines blocked the initial GPUI window creation. The
+Android main thread then waited for the native event loop to acknowledge
+Pause. This patch removes that diagnostic metadata without disabling GPU
+validation, changing rendering shaders, or bypassing lifecycle acknowledgments.
+
+Validation boundary
+The package checksum, copied files, license, Android-only flag difference and
+source formatting have been checked. A new Android renderer build and the two
+real Activity lifecycle tests remain required. This compatibility patch alone
+is not proof that the observed ANR is fixed. If pipeline creation still blocks
+the event loop, renderer initialization must be addressed separately while
+preserving normal NativeActivity lifecycle handling.

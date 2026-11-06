@@ -2,7 +2,7 @@
 
 NS_ASSUME_NONNULL_BEGIN
 
-/// Native-only versioned Agent registry; new iOS attempts use v3.  The public projection contains only
+/// Native-only versioned Agent registry; new iOS attempts use v4. The public projection contains only
 /// safe summary metadata; the complete descriptor table used for the toolset
 /// digest remains private to the implementation.
 @interface DSHAgentToolRegistry : NSObject
@@ -14,6 +14,9 @@ NS_ASSUME_NONNULL_BEGIN
 /// descriptor table, not of caller-provided descriptors.
 - (nullable NSDictionary *)registryForRoot:(NSDictionary *)root
                                      error:(NSError **)error;
+- (nullable NSDictionary *)registryForRoot:(NSDictionary *)root
+                                  version:(NSNumber *)version
+                                    error:(NSError **)error;
 
 /// Returns the fixed agent-v1 policy for a valid resolved root.  A nil root
 /// has no policy and is rejected by this method.
@@ -28,12 +31,12 @@ NS_ASSUME_NONNULL_BEGIN
                                             error:(NSError **)error;
 
 /// Returns the complete native descriptor for native provider adapters.  This
-/// is private native data and must not be sent to RN or ordinary logs.
+/// is private native data and must not be sent to UI or ordinary logs.
 - (nullable NSDictionary *)nativeDescriptorForToolName:(NSString *)name
                                                  error:(NSError **)error;
 
 /// Historical requests must select their recorded version AND digest. These
-/// overloads never substitute the current v3 schemas for a stored v1/v2 table.
+/// overloads never substitute current schemas for a stored v1/v2/v3 table.
 - (nullable NSDictionary *)descriptorForToolName:(NSString *)name
                                              root:(NSDictionary *)root
                                          registry:(NSDictionary *)registry

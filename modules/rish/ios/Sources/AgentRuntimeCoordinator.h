@@ -30,7 +30,7 @@ NS_ASSUME_NONNULL_BEGIN
 @end
 
 /// Native composition for Agent authority operations and read-only display
-/// projections.  It owns no React Native surface and returns only detached,
+/// projections.  It owns no app UI surface and returns only detached,
 /// redacted Foundation JSON projections.
 @interface DSHAgentRuntimeCoordinator : NSObject <DSHAgentRuntimeCoordinating>
 
@@ -45,7 +45,7 @@ NS_ASSUME_NONNULL_BEGIN
                        ledger:(DSHAgentExecutionLedger *)ledger
     NS_DESIGNATED_INITIALIZER;
 
-/// Focused native-test seam for recovery routing. It is never exposed by RCT
+/// Focused native-test seam for recovery routing. It is never exposed by native registry
 /// and still requires the queried ledger/transcript views to share `wal`.
 - (instancetype)initForRecoveryTestingWithWAL:(DSHAgentNativeWAL *)wal
                                   preparedStore:(DSHAgentPreparedAttemptStore *)preparedStore

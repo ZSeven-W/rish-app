@@ -365,3 +365,39 @@ fn a_discard_only_settles_a_cleanup_pending_authority() {
         json!(true)
     );
 }
+
+#[test]
+fn query_accepts_settled_tool_transcript_only_with_committed_old_handle() {
+    use rish_agent_core::runtime_coordinator::query_attempt_base_conflict;
+    let old = json!({"schema_version":1,"transcript_ref":"aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa","generation":1,"transcript_sha256":"a".repeat(64),"transcript_bytes":100});
+    let mut newer = old.clone();
+    newer["generation"] = json!(2);
+    newer["transcript_sha256"] = json!("b".repeat(64));
+    newer["transcript_bytes"] = json!(200);
+    let request = json!({"conversation_id":"conversation","expected_transcript":old,"expected_root_fingerprint_sha256":"c".repeat(64),"expected_workspace_binding_revision":1});
+    let base = json!({"conversation_id":"conversation","transcript":newer,"root":{"root_fingerprint_sha256":"c".repeat(64),"workspace_binding_revision":1}});
+    let proof = json!({"journal_transcript":old});
+    assert!(
+        query_attempt_base_conflict(&base, &request, &proof).is_some(),
+        "Committed provenance alone cannot replace the native WAL ancestry proof"
+    );
+    assert!(
+        query_attempt_base_conflict(&base, &request, &json!({})).is_some(),
+        "No committed provenance cannot admit a stale handle"
+    );
+    let mut forged = request.clone();
+    forged["expected_transcript"]["transcript_sha256"] = json!("d".repeat(64));
+    assert!(query_attempt_base_conflict(&base, &forged, &proof).is_some());
+    let mut mismatch = base.clone();
+    mismatch["transcript"]["generation"] = json!(1);
+    assert!(
+        query_attempt_base_conflict(&mismatch, &request, &proof).is_some(),
+        "same generation with another digest is not advancement"
+    );
+    mismatch = base.clone();
+    mismatch["transcript"]["transcript_ref"] = json!("bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb");
+    assert!(query_attempt_base_conflict(&mismatch, &request, &proof).is_some());
+    mismatch = base.clone();
+    mismatch["root"]["workspace_binding_revision"] = json!(2);
+    assert!(query_attempt_base_conflict(&mismatch, &request, &proof).is_some());
+}

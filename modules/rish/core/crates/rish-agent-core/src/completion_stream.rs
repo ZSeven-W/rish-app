@@ -56,11 +56,17 @@ pub struct Failure {
 }
 
 const fn unreadable(reason: &'static str) -> Failure {
-    Failure { code: RESPONSE_JSON, reason }
+    Failure {
+        code: RESPONSE_JSON,
+        reason,
+    }
 }
 
 const fn oversized(reason: &'static str) -> Failure {
-    Failure { code: RESPONSE_SIZE, reason }
+    Failure {
+        code: RESPONSE_SIZE,
+        reason,
+    }
 }
 
 /// A line, or trailing bytes, that are not valid UTF-8.
@@ -456,7 +462,10 @@ fn responses_event(
         .or_else(|| named.map(str::to_owned))
         .unwrap_or_default();
     let response = object.get("response").and_then(Value::as_object);
-    if matches!(kind.as_str(), "response.created" | "response.completed" | "response.incomplete") {
+    if matches!(
+        kind.as_str(),
+        "response.created" | "response.completed" | "response.incomplete"
+    ) {
         if let Some(response) = response {
             if state.id.is_none() {
                 state.id = non_empty(response.get("id"));
@@ -490,8 +499,7 @@ fn responses_event(
         }
         "response.output_item.added" => {
             let item = object.get("item").and_then(Value::as_object);
-            if item.and_then(|item| non_empty(item.get("type"))).as_deref()
-                != Some("function_call")
+            if item.and_then(|item| non_empty(item.get("type"))).as_deref() != Some("function_call")
             {
                 return Ok(None);
             }
@@ -541,9 +549,9 @@ fn responses_finish(response: &Map<String, Value>) -> Option<String> {
         .get("output")
         .and_then(Value::as_array)
         .is_some_and(|items| {
-            items.iter().any(|item| {
-                item.get("type").and_then(Value::as_str) == Some("function_call")
-            })
+            items
+                .iter()
+                .any(|item| item.get("type").and_then(Value::as_str) == Some("function_call"))
         });
     match non_empty(response.get("status"))
         .unwrap_or_else(|| "completed".to_owned())
@@ -625,7 +633,9 @@ fn messages_event(
         }
         "content_block_start" => {
             let block = object.get("content_block").and_then(Value::as_object);
-            if block.and_then(|block| non_empty(block.get("type"))).as_deref()
+            if block
+                .and_then(|block| non_empty(block.get("type")))
+                .as_deref()
                 != Some("tool_use")
             {
                 return Ok(None);
@@ -1225,9 +1235,9 @@ fn finished(envelope: &Value) -> Result<Value, Failure> {
 
 /// The answer, or the refusal written out for the host to translate.
 fn refused_or(answer: Result<Value, Failure>) -> Value {
-    answer.unwrap_or_else(|failure| {
-        json!({ "ok": false, "failure_code": failure.code, "reason": failure.reason })
-    })
+    answer.unwrap_or_else(
+        |failure| json!({ "ok": false, "failure_code": failure.code, "reason": failure.reason }),
+    )
 }
 
 const ALPHABET: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";

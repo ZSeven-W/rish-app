@@ -177,17 +177,34 @@ pub fn runtime_descriptors() -> Vec<Value> {
 /// Defaults remain v2 for hosts that have not implemented the runtime adapter.
 /// Version 1 has no CGI tools; v1/v2 table order and schemas are immutable hash
 /// inputs. Version 3 uses the previously shipped iOS sorted/nullable table.
+/// Version 5 is offered only after the host proves the assistant conversation.
 pub fn descriptors_for_version(version: u64, guest_cgi: bool) -> Option<Vec<Value>> {
-    if !(1..=3).contains(&version) {
+    if !(1..=5).contains(&version) {
         return None;
     }
     let mut table = descriptors(guest_cgi && version != 1);
-    if version == 3 {
+    if version >= 3 {
         let write = table.iter_mut().find(|tool| tool["name"] == "write_file")?;
         write["parameters"]["properties"]["expected_revision"] = nullable_string_property(256);
         table.extend(runtime_descriptors());
+        if version >= 4 {
+            table.push(crate::user_question::descriptor());
+        }
+        if version == 5 {
+            table.extend(crate::assistant_tools::descriptors());
+        }
         table.sort_by(|a, b| a["name"].as_str().cmp(&b["name"].as_str()));
     }
+    Some(table)
+}
+
+fn descriptors_without_runtime(version: u64, guest_cgi: bool) -> Option<Vec<Value>> {
+    let mut table = descriptors_for_version(version, guest_cgi)?;
+    table.retain(|tool| {
+        !tool["name"]
+            .as_str()
+            .is_some_and(crate::runtime_tools::is_runtime)
+    });
     Some(table)
 }
 
@@ -242,7 +259,12 @@ fn descriptors_for_identity(
     if !canonical_sha256(Some(digest)) {
         return None;
     }
-    let tables = if version == 3 {
+    let tables = if matches!(version, 4 | 5) {
+        vec![
+            descriptors_for_version(version, guest_cgi)?,
+            descriptors_without_runtime(version, guest_cgi)?,
+        ]
+    } else if version == 3 {
         vec![descriptors_for_version(version, guest_cgi)?]
     } else {
         historical_tables(version)
@@ -255,8 +277,8 @@ fn descriptors_for_identity(
 /// Projection/descriptor checks bind the identity to the recorded version.
 pub fn toolset_digest_valid(digest: &Value, version: u64, guest_cgi: bool) -> bool {
     descriptors_for_identity(version, guest_cgi, Some(digest)).is_some()
-        || (version == 3
-            && [1, 2]
+        || (version >= 3
+            && [1, 2, 3]
                 .iter()
                 .any(|v| descriptors_for_identity(*v, guest_cgi, Some(digest)).is_some()))
 }
@@ -300,6 +322,17 @@ fn capability_set(root: &Value) -> Option<Vec<&str>> {
 /// `DSHAgentRegistryAccessForName`: what this root lets this tool do, or
 /// `None` when it does not offer it at all.
 pub fn access_for(name: &str, capabilities: &[&str], project: bool) -> Option<&'static str> {
+    if name == crate::user_question::NAME {
+        return capabilities.contains(&"file_read").then_some("auto");
+    }
+    if crate::assistant_tools::is_assistant(name) {
+        let mutation = crate::assistant_tools::is_mutation(name);
+        return capabilities.contains(&"file_read").then_some(if mutation {
+            "conversation_confirm"
+        } else {
+            "auto"
+        });
+    }
     let required = REQUIRED
         .iter()
         .find(|(tool, _)| *tool == name)
@@ -373,7 +406,7 @@ pub fn registry_shape(registry: &Value, root: &Value, guest_cgi: bool) -> bool {
     ) else {
         return false;
     };
-    let Some(version @ 1..=3) = map.get("registry_version").and_then(Value::as_u64) else {
+    let Some(version @ 1..=5) = map.get("registry_version").and_then(Value::as_u64) else {
         return false;
     };
     let Some(Value::Array(tools)) = map.get("tools") else {
@@ -381,7 +414,16 @@ pub fn registry_shape(registry: &Value, root: &Value, guest_cgi: bool) -> bool {
     };
     if map.get("schema_version") != Some(&json!(2))
         || !canonical_sha256(map.get("toolset_sha256"))
-        || tools.len() > if version == 3 { 13 } else { 8 }
+        || tools.len()
+            > if version == 5 {
+                20
+            } else if version == 4 {
+                14
+            } else if version == 3 {
+                13
+            } else {
+                8
+            }
         || !root_full(Some(root))
     {
         return false;
@@ -566,7 +608,7 @@ fn reduce_json_inner(input: &str) -> Result<Value, StoreError> {
         .and_then(Value::as_str)
         .ok_or(StoreError::Corrupt)?;
     let mut keys = vec!["op"];
-    for option in ["guest_cgi", "registry_version"] {
+    for option in ["guest_cgi", "registry_version", "runtime_tools"] {
         if envelope.get(option).is_some() {
             keys.push(option);
         }
@@ -598,9 +640,22 @@ fn reduce_json_inner(input: &str) -> Result<Value, StoreError> {
         None => 2,
         Some(value) => value
             .as_u64()
-            .filter(|v| (1..=3).contains(v))
+            .filter(|v| (1..=5).contains(v))
             .ok_or(StoreError::InvalidArgument)?,
     };
+    let runtime_tools = match envelope.get("runtime_tools") {
+        None => true,
+        Some(Value::Bool(value)) if matches!(version, 4 | 5) => *value,
+        _ => return Err(StoreError::InvalidArgument),
+    };
+    let table = if matches!(version, 4 | 5) && !runtime_tools {
+        descriptors_without_runtime(version, guest_cgi)
+    } else {
+        descriptors_for_version(version, guest_cgi)
+    }
+    .ok_or(StoreError::InvalidArgument)?;
+    let current_digest = json!(table_hash(version, &table).ok_or(StoreError::InvalidArgument)?);
+    let requested_digest = envelope.get("toolset_sha256").unwrap_or(&current_digest);
     let root = || envelope.get("root").ok_or(StoreError::InvalidArgument);
     let name = || {
         envelope
@@ -609,24 +664,23 @@ fn reduce_json_inner(input: &str) -> Result<Value, StoreError> {
             .ok_or(StoreError::InvalidArgument)
     };
     match op {
-        "toolset_sha256" => Ok(
-            json!({"toolset_sha256":toolset_sha256_for_version(version, guest_cgi).ok_or(StoreError::InvalidArgument)?}),
-        ),
+        "toolset_sha256" => Ok(json!({"toolset_sha256":current_digest})),
         "toolset_valid" => Ok(
             json!({"valid":toolset_digest_valid(&envelope["toolset_sha256"], version, guest_cgi)}),
         ),
         "descriptors" => Ok(
-            json!({"descriptors":descriptors_for_identity(version, guest_cgi, envelope.get("toolset_sha256")).ok_or(StoreError::Conflict)?}),
+            json!({"descriptors":descriptors_for_identity(version, guest_cgi, Some(requested_digest)).ok_or(StoreError::Conflict)?}),
         ),
-        "registry" => {
-            Ok(json!({"registry":registry_for_root_version(root()?, guest_cgi, version)?}))
-        }
+        "registry" => Ok(
+            json!({"registry":{"schema_version":2,"registry_version":version,
+                "toolset_sha256":current_digest,"tools":projected_table(root()?, &table)?}}),
+        ),
         "policy" => Ok(json!({"policy":policy_for_root(root()?)?})),
         "descriptor" => Ok(
-            json!({"descriptor":descriptor_for_tool_identity(name()?, root()?, guest_cgi, version, envelope.get("toolset_sha256"))?}),
+            json!({"descriptor":descriptor_for_tool_identity(name()?, root()?, guest_cgi, version, Some(requested_digest))?}),
         ),
         "native_descriptor" => Ok(
-            json!({"descriptor":native_descriptor_for_identity(name()?, guest_cgi, version, envelope.get("toolset_sha256"))?}),
+            json!({"descriptor":native_descriptor_for_identity(name()?, guest_cgi, version, Some(requested_digest))?}),
         ),
         "registry_shape" => {
             Ok(json!({"valid":registry_shape(&envelope["registry"], root()?, guest_cgi)}))

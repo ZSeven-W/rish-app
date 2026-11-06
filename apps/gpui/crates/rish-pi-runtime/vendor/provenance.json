@@ -1,0 +1,11 @@
+{
+  "file": "vendor/pi-agent-core-1.4.0.js",
+  "sha256": "6968a15501790f43e7e9c75cfee14d04b7954a2da190d34284325dc1b777e6e1",
+  "bytes": 170309,
+  "esbuild": "0.25.12",
+  "packages": {
+    "@earendil-works/pi-agent-core": "1.4.0",
+    "@earendil-works/pi-ai": "1.4.0",
+    "typebox": "1.3.27"
+  }
+}

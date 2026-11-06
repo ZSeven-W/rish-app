@@ -291,6 +291,18 @@ fn completion_receipt(receipt: Option<&Value>, locator: &Value, env: &Env) -> bo
             .collect();
         &stripped
     } else {
+        if original
+            .get("model")
+            .and_then(Value::as_str)
+            .is_some_and(|model| {
+                crate::custom_provider_registry::provider_id_for_model(model).is_some()
+            })
+            || env.receipt_harness_id.as_deref().is_some_and(|harness| {
+                crate::custom_provider_registry::provider_id_for_harness(harness).is_some()
+            })
+        {
+            return false;
+        }
         original
     };
     let value = Value::Object(map.clone());
@@ -1046,10 +1058,14 @@ fn refusal_cause(
     existing: &Value,
     dispatch_state: &str,
 ) -> Result<Option<&'static str>, StoreError> {
-    let Some(evidence) = args.get("transport_evidence").filter(|value| !value.is_null()) else {
+    let Some(evidence) = args
+        .get("transport_evidence")
+        .filter(|value| !value.is_null())
+    else {
         return Ok(None);
     };
-    let Some(fields) = crate::schema::exact_keys(Some(evidence), &["kind", "http_status", "owner"]) else {
+    let Some(fields) = crate::schema::exact_keys(Some(evidence), &["kind", "http_status", "owner"])
+    else {
         return Err(StoreError::InvalidArgument);
     };
     let status = fields.get("http_status").and_then(Value::as_u64);
@@ -1126,7 +1142,10 @@ fn reconcile(args: &Map<String, Value>, env: &Env, view: &View) -> Result<Effect
     // whole marker exists to prevent.
     let stated = as_str(args.get("failure_code"))
         .filter(|_| not_dispatched && !cancel_before_dispatch)
-        .filter(|code| crate::schema::failure_code(args.get("failure_code")) && *code != "E_AGENT_ROUND_AMBIGUOUS");
+        .filter(|code| {
+            crate::schema::failure_code(args.get("failure_code"))
+                && *code != "E_AGENT_ROUND_AMBIGUOUS"
+        });
     let failure = if let Some(cause) = refused {
         cause
     } else if cancel_before_dispatch {

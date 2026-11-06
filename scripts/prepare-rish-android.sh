@@ -2,7 +2,7 @@
 set -euo pipefail
 
 # Builds the pinned rish runtime as an Android shared library and stages it
-# where apps/mobile/android/app/build.gradle picks it up. The pins below are
+# where apps/gpui/android/app/build.gradle picks it up. The pins below are
 # deliberately identical to prepare-rish-ios.sh: updating rish for the app is
 # a reviewed source upgrade, not a side effect of whatever is checked out next
 # door. Both scripts must move together.
@@ -15,7 +15,7 @@ readonly EXPECTED_CRATE_VERSION="0.1.0"
 readonly RUST_TOOLCHAIN="1.94"
 readonly EXPECTED_RUSTC_RELEASE="1.94.1"
 readonly EXPECTED_RUSTC_COMMIT="e408947bfd200af42db322daf0fadfe7e26d3bd1"
-# Matches rootProject.ext.ndkVersion / minSdkVersion in apps/mobile/android/build.gradle.
+# Matches the GPUI NDK pin; API 24 keeps these libraries reusable by native hosts.
 readonly EXPECTED_NDK_VERSION="27.1.12297006"
 readonly ANDROID_API_LEVEL="24"
 # Android 15 loads app libraries on 16 KiB pages; every ELF segment must align.
@@ -30,7 +30,7 @@ readonly OFFLINE=${RISH_ANDROID_OFFLINE:-0}
 readonly REQUESTED_ABIS=${RISH_ANDROID_ABIS:-arm64-v8a}
 RISH_ROOT=""
 rish_source_tmp=""
-readonly OUTPUT_ROOT=${APP_ROOT}/apps/mobile/android/rish-ffi
+readonly OUTPUT_ROOT=${APP_ROOT}/modules/rish/android/rish-ffi
 readonly VERSION_OUTPUT=${OUTPUT_ROOT}/rish_ffi.version
 
 fail() {
@@ -393,4 +393,4 @@ for abi in "${abis[@]}"; do
   print -- "  ${abi}: jniLibs/${abi}/librish_ffi.so (16 KiB page aligned, API ${ANDROID_API_LEVEL})"
 done
 print -- "  provenance: ${VERSION_OUTPUT}"
-print -- "build with: apps/mobile/android/gradlew -p apps/mobile/android :app:assembleDebug -PreactNativeArchitectures=${(j:,:)abis}"
+print -- "build with: apps/gpui/android/gradlew -p apps/gpui/android :app:assembleDebug -PrishArchitectures=${(j:,:)abis}"

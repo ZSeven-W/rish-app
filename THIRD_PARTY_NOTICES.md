@@ -3,9 +3,8 @@
 This file is a source-tree notice inventory for the current Rish App checkout.
 It is not a complete SBOM and is not a legal conclusion about a future App
 binary or guest distribution. It covers the fixed native libraries used by the
-current iOS build and the directly declared npm packages whose lockfile
-metadata and license files were available during this audit. Transitive npm
-packages, CocoaPods, guest package closures, and any optional externally
+native builds and GPUI sources described below. Rust transitive dependencies,
+Android dependencies, guest package closures, and any optional externally
 downloaded CLI must be audited against the exact release candidate before
 distribution.
 
@@ -13,7 +12,7 @@ The project source is licensed under the top-level [MIT License](LICENSE), with
 copyright stated there as `2026 Rish contributors`. That project license does
 not relicense third-party components, guest payloads, or brand/trademark assets.
 The Rish MIT text below also preserves the pinned sibling Rish source's own
-license record. The Podspec's MIT metadata does not replace these notices.
+license record.
 
 ## Copied license texts
 
@@ -31,32 +30,61 @@ The generated `libgit2`, `libssh2`, and `libcrypto` XCFramework archives are
 ignored build outputs; their source revision, configuration, architecture, and
 archive hashes are recorded there rather than copied into this source tree.
 
-## Direct npm dependencies
+## Native GPUI development shell
 
-The following direct runtime dependencies are pinned by
-`apps/mobile/package-lock.json` at the versions shown. Their exact package
-license files are copied under `third-party/licenses/`:
+The independent `apps/gpui` shell adds the following sources. Its two Cargo
+lockfiles record the complete resolved Rust dependencies.
 
-| Package | Locked version / source URL | Declared license | License text / copied-text SHA-256 |
-| --- | --- | --- | --- |
-| `react` | `19.2.3`; [facebook/react](https://github.com/facebook/react.git) | MIT | [react-MIT.txt](third-party/licenses/react-MIT.txt); `da6d3703ed11cbe42bd212c725957c98da23cbff1998c05fa4b3d976d1a58e93` |
-| `react-native` | `0.87.0`; [react/react-native](https://github.com/react/react-native.git) | MIT | [react-native-MIT.txt](third-party/licenses/react-native-MIT.txt); `da6d3703ed11cbe42bd212c725957c98da23cbff1998c05fa4b3d976d1a58e93` |
-| `react-native-safe-area-context` | `5.9.1`; [AppAndFlow/react-native-safe-area-context](https://github.com/AppAndFlow/react-native-safe-area-context.git) | MIT | [react-native-safe-area-context-MIT.txt](third-party/licenses/react-native-safe-area-context-MIT.txt); `f5c7a4d527258e11fdfe3d84eb73cd14fe6d64224ef051e59f6ee21fe378800c` |
-| `react-native-svg` | `15.15.5`; [software-mansion/react-native-svg](https://github.com/software-mansion/react-native-svg) | MIT | [react-native-svg-MIT.txt](third-party/licenses/react-native-svg-MIT.txt); `1bc2aa7dad15097cd71308d9ae013ff14d11a84357b170c1554f4035fb8a3acb` |
-| `lucide-react-native` | `1.34.0`; [lucide-icons/lucide](https://github.com/lucide-icons/lucide.git) | ISC | [lucide-react-native-ISC.txt](third-party/licenses/lucide-react-native-ISC.txt); `b495047bd93a9b06913511076f504daba17d5bbeb3e0650f3bb53a4220329c57` |
+- [GPUI Mobile](https://github.com/itsbalamurali/gpui-mobile) at
+  `5abbefa5f753ee9a1920d6d2eaeede981e79eeff` (the reviewed, unreleased
+  [PR #49](https://github.com/itsbalamurali/gpui-mobile/pull/49) revision), used
+  under its Apache-2.0 option.
+  Adapted Android host sources retain their upstream attribution and
+  [license text](apps/gpui/android/GPUI-MOBILE-LICENSE).
+  The pinned source is retained under `apps/gpui/vendor/gpui-mobile`; its
+  [local patch record](apps/gpui/vendor/gpui-mobile/RISH-PATCHES.txt) documents
+  the Android Activity recreation changes, with upstream hashes and licenses.
+- [GPUI Fast](https://github.com/longbridge/gpui-fast), published crates
+  `gpui-fast` and `gpui-fast-platform` at `0.1.7`, Apache-2.0.
+  The editable desktop input adapts its GPUI input example at source revision
+  `5ae2355035b956afc4ee37a32a1283f9c848fb50`, with changes for IME ranges,
+  selection and scrolling. [Apache license](apps/gpui/GPUI-LICENSE-APACHE).
+- Mobile core/renderer use `gpui-pre` and `gpui-pre-wgpu` at `0.3.6`, with
+  `wgpu` at `29.0.4`; the corresponding crate licenses and transitive
+  dependency notices remain applicable.
+  The renderer's Android debug-metadata workaround is documented in its
+  [local patch record](apps/gpui/vendor/gpui-pre-wgpu/RISH-PATCHES.txt), alongside
+  the source archive checksum and Apache-2.0 license.
+- The native interface embeds 36 unmodified [Lucide](https://github.com/lucide-icons/lucide)
+  SVGs from version `1.34.0`, commit
+  `1a60fd28ed7111bbf6acedc0896f3d83cd73945a`. Their
+  [license, source and checksums](apps/gpui/assets/icons/lucide/README.md) are
+  retained with the assets. Icons inherit the current interface color.
 
-The lockfile contains 879 package entries; 877 carry a license field. The
-remaining transitive entries with missing fields and all other non-MIT license
-families require candidate-level review. This table does not claim that the
-five direct packages exhaust the JavaScript or native dependency graph.
+## Embedded assistant runtime and engine artwork
+
+The mobile assistant embeds `@earendil-works/pi-agent-core` and
+`@earendil-works/pi-ai` at `1.4.0`, together with TypeBox `1.3.27` code used by
+those packages. Their original MIT notices, pinned npm dependency graph, bundle
+digest and reproducible build instructions are retained in
+[`rish-pi-runtime`](apps/gpui/crates/rish-pi-runtime/README.md). QuickJS is
+embedded through `rquickjs` `0.12.1`; the Cargo lockfiles record the Rust/C
+dependency versions. The Pi CLI and provider SDKs are not in the JavaScript
+bundle.
+
+Runtime-engine artwork uses original DSH, Claude Code, Codex and zcode assets.
+Their individual sources, hashes and available license texts are recorded in
+[`assets/providers`](apps/gpui/assets/providers/README.md). These brand assets
+are not relicensed under the application's MIT license.
 
 ## Guest and optional runtime boundary
 
 The app tracks a kernel and CPIO guest payload under
-`apps/mobile/ios/Rish/GuestAssets/`, with `SHA256SUMS` for the exact bytes.
-The same two files are packaged into the Android APK as assets when the
-runtime is staged with `scripts/prepare-rish-android.sh`; there is one copy in
-the source tree and one set of pinned digests.
+`modules/rish/shared/GuestAssets/`, with `SHA256SUMS` for the exact bytes.
+The Android guest diagnostic target can package the same files after the
+runtime is staged with `scripts/prepare-rish-android.sh`; the GPUI Android app
+does not bundle the experimental guest by default. There is one source copy
+and one set of pinned digests.
 The pinned sibling Rish source provides the guest provenance and license
 correspondence in
 [`guest/x86_64/SOURCES-AND-LICENSES.md`](https://github.com/ZSeven-W/rish/blob/ef660dc81fa31cbe279b1f4ba355a97734ff1740/guest/x86_64/SOURCES-AND-LICENSES.md)
@@ -111,14 +139,13 @@ future installer or release downloads or redistributes them, their exact
 source, version, hash, terms and user-facing boundary must be reviewed
 separately. No closed-source CLI authorization is asserted here.
 
-## CocoaPods and other scope limits
+## Dependency inventory
 
-`apps/mobile/ios/Podfile.lock` is tracked and fixes the React Native dependency
-graph, but the Pods sources and complete license set are not tracked. This
-notice file therefore does not claim to cover every Pod. Publishing this
-source tree does not redistribute them: a build resolves them from CocoaPods
-itself. Before distributing a built app, generate a license report from the
-exact clean checkout and the resolved Pods.
+The retired React Native app, npm dependency graph, CocoaPods integration and
+React source compatibility layer have been removed. Current resolved Rust
+dependencies are recorded by the two GPUI Cargo lockfiles and the shared core
+lockfile; Android dependencies are declared in the GPUI Gradle project. Produce
+a complete notice inventory from the exact candidate before distributing a build.
 
 No API keys, private keys, passwords, credential-bearing URLs, or user data are
 included in these notices. This file and the copied texts are source-release

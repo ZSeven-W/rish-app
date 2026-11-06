@@ -2,7 +2,7 @@
 
 NS_ASSUME_NONNULL_BEGIN
 
-// Native-only attachment store contract. JavaScript receives opaque identifiers.
+// Native-only attachment store contract. the UI receives opaque identifiers.
 // ReadPayload validates the manifest, file type, size, and SHA-256 while holding
 // the store lock, then returns an immutable snapshot that remains valid if the
 // attachment is discarded concurrently. It is safe to call from any thread.

@@ -1,5 +1,5 @@
 #import <Foundation/Foundation.h>
-#import <React/RCTBridgeModule.h>
+#import <RishNative/RishNativeModule.h>
 
 #import "LocalProjectAccess.h"
 #import "LocalWorkspaceAccess.h"
@@ -189,14 +189,14 @@ static NSDictionary *LWSafeWorkspaceDescriptor(id value) {
   };
 }
 
-@interface LocalWorkspacesModule : NSObject <RCTBridgeModule>
+@interface LocalWorkspacesModule : NSObject <RishNativeModule>
 @property(nonatomic, strong) dispatch_queue_t workspaceQueue;
 @property(nonatomic, strong) DSHLocalWorkspaceAccess *access;
 @end
 
 @implementation LocalWorkspacesModule
 
-RCT_EXPORT_MODULE(LocalWorkspaces)
+RISH_NATIVE_MODULE(LocalWorkspaces)
 
 + (BOOL)requiresMainQueueSetup {
   return NO;
@@ -244,7 +244,7 @@ RCT_EXPORT_MODULE(LocalWorkspaces)
   return self;
 }
 
-- (void)reject:(RCTPromiseRejectBlock)reject error:(NSError *)error {
+- (void)reject:(RishRejectBlock)reject error:(NSError *)error {
   if (error == nil) error = LWUnavailableError();
   NSString *code = error.userInfo[@"code"];
   NSString *message = [code isKindOfClass:NSString.class]
@@ -258,15 +258,15 @@ RCT_EXPORT_MODULE(LocalWorkspaces)
   reject(code, message, nil);
 }
 
-- (void)rejectInvalid:(RCTPromiseRejectBlock)reject {
+- (void)rejectInvalid:(RishRejectBlock)reject {
   [self reject:reject error:LWInvalidError()];
 }
 
-- (void)rejectUnavailable:(RCTPromiseRejectBlock)reject {
+- (void)rejectUnavailable:(RishRejectBlock)reject {
   [self reject:reject error:LWUnavailableError()];
 }
 
-- (void)dispatchInvalid:(RCTPromiseRejectBlock)reject {
+- (void)dispatchInvalid:(RishRejectBlock)reject {
   dispatch_async(self.workspaceQueue, ^{
     [self rejectInvalid:reject];
   });
@@ -297,9 +297,9 @@ static NSString *LWStableMessage(NSString *code) {
   return messages[code] ?: @"Workspace operation is unavailable.";
 }
 
-RCT_REMAP_METHOD(list,
-                 listWithResolver:(RCTPromiseResolveBlock)resolve
-                 rejecter:(RCTPromiseRejectBlock)reject) {
+RISH_NATIVE_METHOD(list,
+                 listWithResolver:(RishResolveBlock)resolve
+                 rejecter:(RishRejectBlock)reject) {
   dispatch_async(self.workspaceQueue, ^{
     NSError *error = nil;
     if (self.access == nil || ![self.access ensurePrivateLayoutWithError:&error]) {
@@ -316,10 +316,10 @@ RCT_REMAP_METHOD(list,
   });
 }
 
-RCT_REMAP_METHOD(create,
+RISH_NATIVE_METHOD(create,
                  createWorkspaceRequest:(id)requestValue
-                 resolver:(RCTPromiseResolveBlock)resolve
-                 rejecter:(RCTPromiseRejectBlock)reject) {
+                 resolver:(RishResolveBlock)resolve
+                 rejecter:(RishRejectBlock)reject) {
   NSDictionary *request = [requestValue isKindOfClass:NSDictionary.class]
       ? requestValue
       : nil;
@@ -345,10 +345,10 @@ RCT_REMAP_METHOD(create,
   });
 }
 
-RCT_REMAP_METHOD(bootstrapLegacyProject,
+RISH_NATIVE_METHOD(bootstrapLegacyProject,
                  bootstrapLegacyProjectRequest:(id)requestValue
-                 resolver:(RCTPromiseResolveBlock)resolve
-                 rejecter:(RCTPromiseRejectBlock)reject) {
+                 resolver:(RishResolveBlock)resolve
+                 rejecter:(RishRejectBlock)reject) {
   NSDictionary *request = [requestValue isKindOfClass:NSDictionary.class]
       ? requestValue
       : nil;
@@ -381,10 +381,10 @@ RCT_REMAP_METHOD(bootstrapLegacyProject,
   });
 }
 
-RCT_REMAP_METHOD(presentFolderPicker,
+RISH_NATIVE_METHOD(presentFolderPicker,
                  presentFolderPickerRequest:(id)requestValue
-                 resolver:(RCTPromiseResolveBlock)resolve
-                 rejecter:(RCTPromiseRejectBlock)reject) {
+                 resolver:(RishResolveBlock)resolve
+                 rejecter:(RishRejectBlock)reject) {
   NSDictionary *request = [requestValue isKindOfClass:NSDictionary.class]
       ? requestValue
       : nil;
@@ -401,10 +401,10 @@ RCT_REMAP_METHOD(presentFolderPicker,
   [self rejectUnavailable:reject];
 }
 
-RCT_REMAP_METHOD(importSelection,
+RISH_NATIVE_METHOD(importSelection,
                  importSelectionRequest:(id)requestValue
-                 resolver:(RCTPromiseResolveBlock)resolve
-                 rejecter:(RCTPromiseRejectBlock)reject) {
+                 resolver:(RishResolveBlock)resolve
+                 rejecter:(RishRejectBlock)reject) {
   NSDictionary *request = [requestValue isKindOfClass:NSDictionary.class]
       ? requestValue
       : nil;
@@ -420,10 +420,10 @@ RCT_REMAP_METHOD(importSelection,
   [self rejectUnavailable:reject];
 }
 
-RCT_REMAP_METHOD(cancelSelection,
+RISH_NATIVE_METHOD(cancelSelection,
                  cancelSelectionRequest:(id)requestValue
-                 resolver:(RCTPromiseResolveBlock)resolve
-                 rejecter:(RCTPromiseRejectBlock)reject) {
+                 resolver:(RishResolveBlock)resolve
+                 rejecter:(RishRejectBlock)reject) {
   NSDictionary *request = [requestValue isKindOfClass:NSDictionary.class]
       ? requestValue
       : nil;
@@ -437,10 +437,10 @@ RCT_REMAP_METHOD(cancelSelection,
   [self rejectUnavailable:reject];
 }
 
-RCT_REMAP_METHOD(presentRegrantPicker,
+RISH_NATIVE_METHOD(presentRegrantPicker,
                  presentRegrantPickerRequest:(id)requestValue
-                 resolver:(RCTPromiseResolveBlock)resolve
-                 rejecter:(RCTPromiseRejectBlock)reject) {
+                 resolver:(RishResolveBlock)resolve
+                 rejecter:(RishRejectBlock)reject) {
   NSDictionary *request = [requestValue isKindOfClass:NSDictionary.class]
       ? requestValue
       : nil;
@@ -459,10 +459,10 @@ RCT_REMAP_METHOD(presentRegrantPicker,
   [self rejectUnavailable:reject];
 }
 
-RCT_REMAP_METHOD(completeRegrant,
+RISH_NATIVE_METHOD(completeRegrant,
                  completeRegrantRequest:(id)requestValue
-                 resolver:(RCTPromiseResolveBlock)resolve
-                 rejecter:(RCTPromiseRejectBlock)reject) {
+                 resolver:(RishResolveBlock)resolve
+                 rejecter:(RishRejectBlock)reject) {
   NSDictionary *request = [requestValue isKindOfClass:NSDictionary.class]
       ? requestValue
       : nil;
@@ -482,10 +482,10 @@ RCT_REMAP_METHOD(completeRegrant,
   [self rejectUnavailable:reject];
 }
 
-RCT_REMAP_METHOD(resolve,
+RISH_NATIVE_METHOD(resolve,
                  resolveWorkspaceRequest:(id)requestValue
-                 resolver:(RCTPromiseResolveBlock)resolve
-                 rejecter:(RCTPromiseRejectBlock)reject) {
+                 resolver:(RishResolveBlock)resolve
+                 rejecter:(RishRejectBlock)reject) {
   NSDictionary *request = [requestValue isKindOfClass:NSDictionary.class]
       ? requestValue
       : nil;
@@ -516,10 +516,10 @@ RCT_REMAP_METHOD(resolve,
   });
 }
 
-RCT_REMAP_METHOD(forget,
+RISH_NATIVE_METHOD(forget,
                  forgetWorkspaceRequest:(id)requestValue
-                 resolver:(RCTPromiseResolveBlock)resolve
-                 rejecter:(RCTPromiseRejectBlock)reject) {
+                 resolver:(RishResolveBlock)resolve
+                 rejecter:(RishRejectBlock)reject) {
   NSDictionary *request = [requestValue isKindOfClass:NSDictionary.class]
       ? requestValue
       : nil;
@@ -551,10 +551,10 @@ RCT_REMAP_METHOD(forget,
   });
 }
 
-RCT_REMAP_METHOD(prepareDeleteOwnedContent,
+RISH_NATIVE_METHOD(prepareDeleteOwnedContent,
                  prepareDeleteOwnedContentRequest:(id)requestValue
-                 resolver:(RCTPromiseResolveBlock)resolve
-                 rejecter:(RCTPromiseRejectBlock)reject) {
+                 resolver:(RishResolveBlock)resolve
+                 rejecter:(RishRejectBlock)reject) {
   NSDictionary *request = [requestValue isKindOfClass:NSDictionary.class]
       ? requestValue
       : nil;
@@ -584,10 +584,10 @@ RCT_REMAP_METHOD(prepareDeleteOwnedContent,
   });
 }
 
-RCT_REMAP_METHOD(deleteOwnedContent,
+RISH_NATIVE_METHOD(deleteOwnedContent,
                  deleteOwnedContentRequest:(id)requestValue
-                 resolver:(RCTPromiseResolveBlock)resolve
-                 rejecter:(RCTPromiseRejectBlock)reject) {
+                 resolver:(RishResolveBlock)resolve
+                 rejecter:(RishRejectBlock)reject) {
   NSDictionary *request = [requestValue isKindOfClass:NSDictionary.class]
       ? requestValue
       : nil;
@@ -621,10 +621,10 @@ RCT_REMAP_METHOD(deleteOwnedContent,
   });
 }
 
-RCT_REMAP_METHOD(queryOperation,
+RISH_NATIVE_METHOD(queryOperation,
                  queryOperationRequest:(id)requestValue
-                 resolver:(RCTPromiseResolveBlock)resolve
-                 rejecter:(RCTPromiseRejectBlock)reject) {
+                 resolver:(RishResolveBlock)resolve
+                 rejecter:(RishRejectBlock)reject) {
   NSDictionary *request = [requestValue isKindOfClass:NSDictionary.class]
       ? requestValue
       : nil;
@@ -646,10 +646,10 @@ RCT_REMAP_METHOD(queryOperation,
   });
 }
 
-RCT_REMAP_METHOD(cancelPicker,
+RISH_NATIVE_METHOD(cancelPicker,
                  cancelPickerRequest:(id)requestValue
-                 resolver:(RCTPromiseResolveBlock)resolve
-                 rejecter:(RCTPromiseRejectBlock)reject) {
+                 resolver:(RishResolveBlock)resolve
+                 rejecter:(RishRejectBlock)reject) {
   NSDictionary *request = [requestValue isKindOfClass:NSDictionary.class]
       ? requestValue
       : nil;

@@ -28,11 +28,14 @@ pub fn is_guest(name: &str) -> bool {
     name.ends_with("_guest_cgi") || is_mutation(name)
 }
 pub fn registry_version(value: Option<&Value>) -> bool {
-    matches!(value.and_then(Value::as_u64), Some(1..=3))
+    matches!(value.and_then(Value::as_u64), Some(1..=5))
 }
 pub fn grant_supports_tool(version: Option<&Value>, name: &str) -> bool {
     registry_version(version)
-        && (!is_runtime(name) || version == Some(&json!(3)))
+        && (!is_runtime(name) || matches!(version.and_then(Value::as_u64), Some(3..=5)))
+        && (!crate::assistant_tools::is_assistant(name) || version == Some(&json!(5)))
+        && (name != crate::user_question::NAME
+            || matches!(version.and_then(Value::as_u64), Some(4 | 5)))
         && (!name.ends_with("_guest_cgi") || version != Some(&json!(1)))
 }
 pub fn environment_id(value: Option<&Value>) -> bool {

@@ -606,7 +606,10 @@ fn a_completion_that_won_is_not_cancelled_at_the_wal_revision() {
     completed["state"] = json!("completed");
     completed["row_revision"] = json!(2);
     completed["owner"] = Value::Null;
-    assert_eq!(cancel_planned(&completed, 0).unwrap_err(), StoreError::Conflict);
+    assert_eq!(
+        cancel_planned(&completed, 0).unwrap_err(),
+        StoreError::Conflict
+    );
 }
 
 // The plan read revision 1; the reply completed (revision 2) before the
@@ -622,7 +625,12 @@ fn a_completion_after_the_plan_makes_the_cancel_conflict() {
     let mut moved = row.clone();
     moved["state"] = json!("completed");
     moved["row_revision"] = json!(2);
-    let lost = reduce("cancel", &args(json!({ "cas": cas })), &env(), &view(Some(moved), Some("dispatched")));
+    let lost = reduce(
+        "cancel",
+        &args(json!({ "cas": cas })),
+        &env(),
+        &view(Some(moved), Some("dispatched")),
+    );
     assert_eq!(lost.unwrap_err(), StoreError::Conflict);
 }
 
@@ -639,7 +647,10 @@ fn a_stale_nonzero_revision_still_conflicts() {
     assert_eq!(plan["expected_round_revision"], json!(3));
     assert_eq!(cancel_planned(&row, 3).unwrap_err(), StoreError::Conflict);
     // The same row at the revision it has is cancelled.
-    assert_eq!(cancel_planned(&row, 0).unwrap()["state"], "cancel_requested");
+    assert_eq!(
+        cancel_planned(&row, 0).unwrap()["state"],
+        "cancel_requested"
+    );
 }
 
 // Revision 0 borrows only from the row the target names: another round or
@@ -660,7 +671,12 @@ fn revision_zero_borrows_only_from_the_named_round() {
 // A provider's refusal heard in full: the transport reports the status and
 // the owner it dispatched under; the core names the cause.
 
-fn refused_by(row: &Value, dispatch: &str, status: u64, owner: Value) -> Result<rish_agent_core::round_journal::Effect, StoreError> {
+fn refused_by(
+    row: &Value,
+    dispatch: &str,
+    status: u64,
+    owner: Value,
+) -> Result<rish_agent_core::round_journal::Effect, StoreError> {
     let mut dead = view(Some(row.clone()), Some(dispatch));
     dead.row_owner_alive = false;
     reduce(
@@ -691,7 +707,11 @@ fn a_refusal_the_provider_answered_is_retryable_with_its_cause() {
         assert!(row["owner"].is_null());
         // Recorded and cleared in one commit: failed_retryable beside a
         // dispatched marker is corrupt, and a reclaim needs it clear.
-        assert_eq!(effect.dispatch, Some(DispatchEffect::ResetNotDispatched), "{status}");
+        assert_eq!(
+            effect.dispatch,
+            Some(DispatchEffect::ResetNotDispatched),
+            "{status}"
+        );
     }
 }
 
@@ -737,8 +757,10 @@ fn a_stated_cause_never_replaces_the_derived_one() {
     dead.row_owner_alive = false;
     let stated = reduce(
         "reconcile",
-        &args(json!({ "locator": locator(), "cas": cas_for(&in_flight_row()),
-                      "failure_code": "E_AGENT_PROVIDER_CREDENTIAL" })),
+        &args(
+            json!({ "locator": locator(), "cas": cas_for(&in_flight_row()),
+                      "failure_code": "E_AGENT_PROVIDER_CREDENTIAL" }),
+        ),
         &env(),
         &dead,
     )
@@ -760,12 +782,18 @@ fn malformed_evidence_is_a_host_bug() {
     ] {
         let result = reduce(
             "reconcile",
-            &args(json!({ "locator": locator(), "cas": cas_for(&in_flight_row()),
-                          "transport_evidence": evidence })),
+            &args(
+                json!({ "locator": locator(), "cas": cas_for(&in_flight_row()),
+                          "transport_evidence": evidence }),
+            ),
             &env(),
             &dead,
         );
-        assert_eq!(result.unwrap_err(), StoreError::InvalidArgument, "{evidence}");
+        assert_eq!(
+            result.unwrap_err(),
+            StoreError::InvalidArgument,
+            "{evidence}"
+        );
     }
 }
 

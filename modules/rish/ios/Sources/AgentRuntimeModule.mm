@@ -1,7 +1,7 @@
 #import <Foundation/Foundation.h>
-#import <React/RCTBridge.h>
-#import <React/RCTBridgeModule.h>
-#import <React/RCTEventEmitter.h>
+#import <RishNative/RishNativeBridge.h>
+#import <RishNative/RishNativeModule.h>
+#import <RishNative/RishEventEmitter.h>
 #import <UIKit/UIKit.h>
 #import <os/log.h>
 
@@ -278,7 +278,7 @@ static NSString *DSHRuntimeFailureMessage(NSString *code, NSString *operation,
 /// Round preview events (see DSHAgentProviderRoundService.previewSink).
 static NSString *const DSHAgentRoundPreviewEventName = @"agentRoundPreview";
 
-@interface AgentRuntimeModule : RCTEventEmitter <RCTBridgeModule>
+@interface AgentRuntimeModule : RishEventEmitter <RishNativeModule>
 @property(atomic, strong) id<DSHAgentRuntimeCoordinating> runtimeCoordinator;
 @property(nonatomic, strong) DSHSessionWorkspaceCoordinator *serializationCoordinator;
 @property(nonatomic) NSUInteger previewObserverCount;
@@ -290,7 +290,7 @@ static NSString *const DSHAgentRoundPreviewEventName = @"agentRoundPreview";
 
 @implementation AgentRuntimeModule
 
-RCT_EXPORT_MODULE(AgentRuntime)
+RISH_NATIVE_MODULE(AgentRuntime)
 
 + (BOOL)requiresMainQueueSetup { return NO; }
 
@@ -461,8 +461,8 @@ RCT_EXPORT_MODULE(AgentRuntime)
   return coordinator;
 }
 
-- (void)invoke:(id)rawRequest resolver:(RCTPromiseResolveBlock)resolve
-       rejecter:(RCTPromiseRejectBlock)reject providerWait:(BOOL)providerWait
+- (void)invoke:(id)rawRequest resolver:(RishResolveBlock)resolve
+       rejecter:(RishRejectBlock)reject providerWait:(BOOL)providerWait
            name:(NSString *)name
          block:(DSHRuntimeModuleInvoke)block {
   NSError *copyError = nil;
@@ -528,9 +528,9 @@ RCT_EXPORT_MODULE(AgentRuntime)
 }
 
 #define DSH_RUNTIME_EXPORT(js_name, objc_name, selector) \
-  RCT_REMAP_METHOD(js_name, objc_name:(id)request \
-                   resolver:(RCTPromiseResolveBlock)resolve \
-                   rejecter:(RCTPromiseRejectBlock)reject) { \
+  RISH_NATIVE_METHOD(js_name, objc_name:(id)request \
+                   resolver:(RishResolveBlock)resolve \
+                   rejecter:(RishRejectBlock)reject) { \
     [self invoke:request resolver:resolve rejecter:reject \
         providerWait:([@#selector isEqualToString:@"completeAgentRoundV2"] || \
           ([@#selector isEqualToString:@"executeAgentTool"] && \

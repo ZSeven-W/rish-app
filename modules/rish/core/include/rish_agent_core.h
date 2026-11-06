@@ -35,6 +35,27 @@ char *rish_agent_hash_bytes(const char *tag, size_t tag_length,
 /// Canonical form of tool arguments when the strict parser accepts them.
 char *rish_agent_parse_arguments(const char *json, size_t json_length);
 
+/// Shared name normalization and validation: {kind:workspace|conversation,text}.
+/// Returns {ok:true,value:{text,issue:null|empty|invalid|too_long}}.
+char *rish_agent_name_policy_reduce(const char *json, size_t json_length);
+
+/// Shared Git remote URL policy: {url}. Returns {ok:true,value:{url,
+/// canonical_url,scheme,host,port,username,path,scp}} or a static error.
+char *rish_agent_git_remote_policy_reduce(const char *json, size_t json_length);
+
+/// Shared model directory validation, retirement and capability lookup.
+/// Exact {op,...} requests return {ok:true,value:...} or a static error.
+char *rish_agent_model_catalog_reduce(const char *json, size_t json_length);
+
+/// Shared provider fields, endpoint plans, bindings and credential identities.
+/// Native URL parsing/serialization and storage remain with the host.
+char *rish_agent_provider_policy_reduce(const char *json, size_t json_length);
+
+/// Display-only round archives: schema_version=1 identity/decode/upsert/project.
+/// Returns {ok:true,value:...} or {ok:false,error:store_error_code}.
+/// Hosts retain ownership checks, bounded file IO and encoded file-size limits.
+char *rish_agent_round_presentation_reduce(const char *json, size_t json_length);
+
 /// One schema-3 round-journal operation over a JSON envelope
 /// {"op","args","env","view"}; returns {"ok":true,...} or
 /// {"ok":false,"error":<DSHAgentNativeStoreErrorCode>}. NULL only when the

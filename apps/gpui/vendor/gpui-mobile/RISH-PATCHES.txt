@@ -1,0 +1,26 @@
+Pinned upstream: https://github.com/itsbalamurali/gpui-mobile
+Revision: 5abbefa5f753ee9a1920d6d2eaeede981e79eeff
+License used: Apache-2.0 (upstream license files retained)
+Original file SHA256 values: UPSTREAM.json
+
+Android NativeActivity recreation:
+- Keep AndroidPlatform in render-thread local storage, return owned Arc clones,
+  and release that slot on the same thread when its event loop ends.
+- Replace the process AndroidApp handle for each Activity. Pin a JNI local
+  Activity reference before releasing a handle clone so concurrent recreation
+  cannot invalidate an in-flight JNI call. Remove the unused bare Activity
+  pointer accessor; callers can retain android_app() or use activity().
+- Reset deferred lifecycle/readiness and chrome-cache flags for each renderer.
+  Publish initialized only after the first frame, matching the readiness API.
+- Keep the existing NativeActivity event/ACK protocol. No thread unsafe Send
+  additions, skipped lifecycle acknowledgements, or process restart workaround.
+
+Only src/android/jni.rs is changed from this pinned upstream snapshot.
+The iOS backend and every other upstream source file are unchanged.
+
+Bounded native input panel focus:
+- Separate real Activity lifecycle from primary/embedded window focus. A child
+  text panel can receive IME focus while GPUI continues rendering layout updates.
+- A short transfer flag bridges the focus change. Actual panel focus loss clears
+  it, and Activity Pause always overrides every focus bit.
+- JNI copies only atomic focus state; no Activity lifecycle/ACK is synthesized.

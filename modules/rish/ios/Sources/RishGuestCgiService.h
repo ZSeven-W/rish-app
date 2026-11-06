@@ -11,7 +11,7 @@ typedef void (^RishGuestCgiReject)(NSString *code, NSString *message);
 /// teardown). A shorter iOS grant produces a shorter preview. Grant denial or expiration stops the service;
 /// this is not a persistent background server. It creates and owns one LocalGuest session
 /// and exposes only loopback HTTP. It deliberately has no Node, filesystem
-/// path, or shell API at the JavaScript boundary. stop tears down this owned
+/// path, or shell API at the the UI boundary. stop tears down this owned
 /// session and never shuts down a caller-owned guest.
 /// Background preview denial/deadlines use the owned service teardown path.
 @interface RishGuestCgiService : NSObject

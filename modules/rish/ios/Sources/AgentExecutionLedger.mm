@@ -1,6 +1,7 @@
 #import "AgentExecutionLedger.h"
 #import "AgentWriteParentPlan.h"
 #import "AgentRuntimeToolContracts.h"
+#import "AssistantTaskExecutor.h"
 
 #include <math.h>
 #include "rish_agent_core.h"
@@ -166,6 +167,7 @@ static BOOL DSHAgentPrecondition(NSDictionary *precondition) {
   if (![precondition isKindOfClass:NSDictionary.class]) return NO;
   NSString *kind = precondition[@"kind"];
   if (![kind isKindOfClass:NSString.class]) return NO;
+  if ([kind isEqual:@"ask_user"]) return DSHAgentRuntimeContractValid(@"question_precondition", precondition);
   if (DSHAgentIsRuntimeTool(kind))
     return DSHAgentRuntimeContractValid(@"runtime_precondition", precondition);
   if ([kind isEqualToString:@"read_file"]) {
@@ -271,6 +273,7 @@ static BOOL DSHAgentSettledFacts(NSDictionary *facts) {
   if (![facts isKindOfClass:NSDictionary.class]) return NO;
   NSString *kind = facts[@"kind"];
   if (![kind isKindOfClass:NSString.class]) return NO;
+  if ([kind isEqual:@"ask_user"]) return DSHAgentRuntimeContractValid(@"question_facts", facts);
   if (DSHAgentIsRuntimeTool(kind))
     return DSHAgentRuntimeContractValid(@"runtime_facts", facts);
   if ([kind isEqualToString:@"start_guest_cgi"] || [kind isEqualToString:@"stop_guest_cgi"]) {
@@ -318,6 +321,8 @@ static BOOL DSHAgentSettledFacts(NSDictionary *facts) {
 }
 
 static BOOL DSHAgentLedgerRow(NSDictionary *row) {
+  if ([row isKindOfClass:NSDictionary.class] && DSHAgentIsAssistantTaskTool(row[@"name"]))
+    return DSHAgentRuntimeContractValid(@"assistant_ledger_row", row);
   if (!DSHAgentExactDictionaryKeys(row, DSHAgentLedgerKeys()) ||
       ![row[@"schema_version"] isEqual:@2] ||
       !DSHAgentLedgerLocator(row[@"locator"]) ||

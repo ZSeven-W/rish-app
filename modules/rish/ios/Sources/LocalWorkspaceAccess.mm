@@ -403,7 +403,7 @@ static NSDictionary *DSHMigrateLegacyAuthority(NSDictionary *authority,
 // Request digests are persisted in private authority records so an operation
 // id cannot be replayed with a different user request.  Keep the digest input
 // deliberately small and value-free: the raw request never crosses the
-// native/JS boundary or appears in a receipt.
+// native/UI boundary or appears in a receipt.
 // Defined below, next to the other workspace reducers.
 static NSDictionary *DSHWorkspaceJournalReduce(NSString *op,
                                                NSDictionary *fields);

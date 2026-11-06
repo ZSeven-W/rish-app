@@ -88,7 +88,7 @@ typedef void (^DSHCompletionProviderTransportPreviewBlock)(
                   monotonicClock:(NSTimeInterval (^ _Nullable)(void))monotonicClock;
 
 /// Mints the provider correlation id after the caller has reserved its
-/// completion slot.  The id is intentionally separate from the RN round id.
+/// completion slot.  The id is intentionally separate from the UI round id.
 - (NSString * _Nullable)nextProviderRequestId:(NSString * _Nullable * _Nullable)errorCode;
 
 /// Creates and starts one POST request once the caller has reserved its

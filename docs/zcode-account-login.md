@@ -9,14 +9,16 @@ Coding Plan, so API-key access is not necessarily pay-as-you-go.
 
 ## User flow
 
-1. Select the GLM entry in Rish.
-2. Open Settings; **Connect GLM account** is near the top.
+1. Open **Settings → Runtime Engine** in Rish.
+2. Expand **zcode** to open its subscription account panel.
 3. Choose BigModel or Z.ai and sign in on the official authorization page.
    iOS uses a system Safari view inside Rish.
-4. After account connection, choose **Verify and use trial** for ZCode trial
-   allowance, or **Verify and use subscription** for a personal Coding Plan.
+4. After account connection, choose **Use subscription / Verify subscription**
+   for the selected region's personal Coding Plan.
    Account sign-in and usable model access are separate states.
-5. Use **Use manual API key** to return to the separately stored manual key.
+5. Use **Use API key** to return to the separately stored manual key. The native
+   trial routes described below remain available internally; the current GPUI
+   subscription panel does not select trial allowance automatically.
 
 The account connection is independent from Rish's reserved general account
 and the Codex/Claude official-CLI login interfaces.
@@ -30,7 +32,7 @@ cancellation, and retry bounds. BigModel and Z.ai have distinct host/path/query
 allowlists and exact HTTPS callbacks under the official origin.
 
 OAuth material and selected model credentials remain in separate device-only
-Keychain services. Neither is returned to React Native. Selecting subscription
+Keychain services. Neither is returned to the application UI. Selecting subscription
 credentials clears the effective credential until personal-plan verification
 succeeds; a failed check never falls back to the manual key.
 

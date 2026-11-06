@@ -14,7 +14,7 @@ FOUNDATION_EXPORT NSData *_Nullable DSHEnvironmentReadSmallFile(NSURL *url, NSUI
 FOUNDATION_EXPORT NSString *_Nullable DSHEnvironmentHashFile(NSURL *url, uint64_t limit,
     BOOL (^_Nullable cancelled)(void));
 
-/// Validates and streams one package into a new disk. Neither URL is exposed to JS.
+/// Validates and streams one package into a new disk. Neither URL is exposed to UI.
 @interface DSHRuntimeEnvironmentPackage : NSObject
 + (nullable NSDictionary *)unpackURL:(NSURL *)packageURL
                              diskURL:(NSURL *)diskURL

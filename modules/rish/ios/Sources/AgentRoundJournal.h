@@ -15,7 +15,7 @@ NS_ASSUME_NONNULL_BEGIN
 
 /// Native schema-3 round view used by AgentProviderRoundService.  These
 /// selectors are native-only; no provider body, transcript message, owner,
-/// or row is exported through RN.  They are a facade over the shared Rust
+/// or row is exported through UI.  They are a facade over the shared Rust
 /// core (modules/rish/core, `rish_agent_round_reduce`); the older schema-2
 /// selectors were removed once nothing but low-level tests used them.
 - (nullable NSDictionary *)createAgentRoundV3WithInsertCAS:(NSDictionary *)insertCAS
@@ -47,6 +47,11 @@ NS_ASSUME_NONNULL_BEGIN
                                                           expectedCAS:(NSDictionary *)cas
                                                     transportEvidence:(nullable NSDictionary *)evidence
                                                                  error:(NSError **)error;
+/// A known local preflight cause. The core ignores it after any dispatch.
+- (nullable NSDictionary *)reconcileAgentRoundV3OwnerLossWithLocator:(NSDictionary *)locator
+                                                      expectedCAS:(NSDictionary *)cas
+                                                      failureCode:(NSString *)failureCode
+                                                            error:(NSError **)error;
 - (nullable NSDictionary *)queryAgentRoundV3WithLocator:(NSDictionary *)locator
                                                      error:(NSError **)error;
 

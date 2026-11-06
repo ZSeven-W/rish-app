@@ -334,7 +334,7 @@ static NSString *DSHGuestCgiHexDigest(NSData *data) {
   if (self.fileReader == nil) {
     NSError *error = DSHGuestCgiMakeError(@"E_AGENT_NATIVE"); completion(nil, error); return;
   }
-  // No source bytes cross the React Native boundary.
+  // No source bytes cross the app UI boundary.
   self.fileReader(precondition[@"index_path"], root, DSHGuestCgiIndexMax,
     ^(NSData *index, NSString *indexRevision, NSError *error) {
       (void)indexRevision;

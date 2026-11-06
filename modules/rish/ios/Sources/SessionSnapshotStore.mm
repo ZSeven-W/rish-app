@@ -2642,7 +2642,7 @@ static NSDictionary *DSHSessionClearanceResult(NSString *status,
   return result;
 }
 
-#pragma mark - Candidate digest (shared JS/native contract)
+#pragma mark - Candidate digest (shared shell/native contract)
 
 + (nullable NSString *)candidateDigestForSessionJSON:(NSString *)candidateJSON {
   // UTF-8 bounds, strict parse, schema-9 root, canonical JSON and the
@@ -2654,13 +2654,12 @@ static NSDictionary *DSHSessionClearanceResult(NSString *status,
       bytes.length > DSHSessionSnapshotMaximumBytes) {
     return nil;
   }
-  // The authority read right after a commit hands JS the exact bytes the CAS
+  // The authority read right after a commit hands UI the exact bytes the CAS
   // just validated and digested; a byte-equal hit returns that digest without
   // parsing and canonicalising a megabyte again.
   DSHSessionValidatedEnvelope *validated = DSHSessionValidatedEnvelopeCached(bytes);
   if (validated != nil && validated.digest.length > 0) return validated.digest;
-  // Same acceptance as the JS implementation this replaces: a JSON object
-  // whose schema_version is 9 and that canonicalises. The CAS path still
+  // Accept a JSON object whose schema_version is 9 and that canonicalises. The CAS path still
   // applies the full schema-9 validation before anything is written.
   NSDictionary *reply = DSHSessionCoreReduce(
       @"candidate_digest", nil, bytes, @{},

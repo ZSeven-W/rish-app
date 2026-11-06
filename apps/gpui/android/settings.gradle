@@ -1,0 +1,14 @@
+pluginManagement {
+    repositories { google(); mavenCentral(); gradlePluginPortal() }
+}
+dependencyResolutionManagement {
+    repositoriesMode.set(RepositoriesMode.FAIL_ON_PROJECT_REPOS)
+    repositories { google(); mavenCentral() }
+}
+rootProject.name = "RishGPUI"
+include(":app")
+// The diagnostic APK requires separately prepared guest runtime artifacts.
+if (providers.gradleProperty("rishGuestProbe").getOrElse("false").toBoolean()) {
+    include(":guestprobe")
+    project(":guestprobe").projectDir = file("../../../modules/rish/android/guestprobe")
+}

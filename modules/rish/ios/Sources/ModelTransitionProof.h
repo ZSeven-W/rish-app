@@ -4,7 +4,7 @@ NS_ASSUME_NONNULL_BEGIN
 
 static const NSUInteger DSHMaximumModelTransitionTraceEntries = 64;
 
-/// Validates the exact JS-to-native model transition envelope and returns the
+/// Validates the exact shell-to-native model transition envelope and returns the
 /// redacted row that may be persisted in runtime-proof.json. The conversation
 /// identifier is replaced by its SHA-256 digest; caller text and paths are not
 /// part of this contract.

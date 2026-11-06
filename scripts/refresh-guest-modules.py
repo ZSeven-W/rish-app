@@ -16,7 +16,7 @@ import subprocess
 import tempfile
 
 ROOT = Path(__file__).resolve().parent.parent
-ASSETS = ROOT / 'apps/mobile/ios/Rish/GuestAssets'
+ASSETS = ROOT / 'modules/rish/shared/GuestAssets'
 NETBOOT_MODULES = [
     'kernel/drivers/block/virtio_blk.ko',
     'kernel/fs/fat/fat.ko', 'kernel/fs/fat/vfat.ko',
@@ -160,7 +160,7 @@ def main():
     if args.preview is None:
         new_sha = sha(candidate)
         for path in [ASSETS / 'SHA256SUMS', ROOT / 'modules/rish/ios/Sources/LocalGuestModule.mm',
-                     ROOT / 'apps/mobile/android/app/src/main/java/tech/zseven/rish/guest/GuestAssets.kt']:
+                     ROOT / 'modules/rish/android/src/main/java/tech/zseven/rish/guest/GuestAssets.kt']:
             text = path.read_text()
             if old_sha not in text:
                 candidate_path.unlink(missing_ok=True)

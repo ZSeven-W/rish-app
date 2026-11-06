@@ -42,7 +42,7 @@ def run(family, library, base, wall_seconds, exec_seconds=None, run_label=None):
     copy = subprocess.run(['/bin/cp', '-c', receipt['disk_path'], str(disk)], capture_output=True)
     if copy.returncode:
         shutil.copyfile(receipt['disk_path'], disk)
-    kernel = REPO / 'apps/mobile/ios/Rish/GuestAssets/vmlinuz-virt-6.18.35'
+    kernel = REPO / 'modules/rish/shared/GuestAssets/vmlinuz-virt-6.18.35'
     request = {'kernel_path': str(kernel), 'initrd_path': str(base), 'root_disk_path': str(disk),
                'memory_mib': receipt['manifest']['minimum_memory_mib'], 'network': 'disabled', 'command': ['true'],
                'command_line': 'console=ttyS0,115200n8 rdinit=/init panic=-1 oops=panic nokaslr cgroup_no_v1=all 8250.nr_uarts=1',

@@ -12,21 +12,36 @@ modules/rish/ios/Vendor/rish_ffi-harness-auth.xcframework
 modules/rish/ios/Vendor/rish_agent_core.xcframework/
 modules/rish/ios/Vendor/rish_agent_core.version
 modules/rish/ios/include/rish.h
-apps/mobile/android/rish-ffi/
-apps/mobile/android/rish-agent-core/
+modules/rish/android/rish-ffi/
+modules/rish/android/rish-agent-core/
 # The Android libgit2 vendor build, like the iOS one: the archives are a
 # reproducible build product and stay out, the version file records the pins
 # and digests that make it reproducible and stays in.
-apps/mobile/android/rish-libgit2/*
-!apps/mobile/android/rish-libgit2/libgit2.version
+modules/rish/android/rish-libgit2/*
+!modules/rish/android/rish-libgit2/libgit2.version
 
 # Optional phone-local official CLI auth assets are verified build inputs,
 # never source-controlled release artifacts. Keep the directory itself so a
 # build that expects it still finds it, and nothing inside it: the kernel and
 # the CLI image staged there are a few hundred megabytes, and this repository
 # is public.
-apps/mobile/ios/Rish/HarnessAuth/*
-!apps/mobile/ios/Rish/HarnessAuth/.gitkeep
+modules/rish/ios/HarnessAuth/*
+!modules/rish/ios/HarnessAuth/.gitkeep
 
 # Rust workspace for the shared agent core
 modules/rish/core/target/
+
+# Native GPUI rewrite development products
+apps/gpui/target/
+apps/gpui/build/
+apps/gpui/mobile/target/
+apps/gpui/ios/build/
+apps/gpui/ios/*.xcodeproj/
+apps/gpui/android/.gradle/
+apps/gpui/android/.kotlin/
+apps/gpui/android/local.properties
+apps/gpui/android/app/build/
+apps/gpui/android/app/src/main/jniLibs/
+
+# Shared Android native diagnostics and generated artifacts
+modules/rish/android/guestprobe/build/

@@ -365,7 +365,12 @@ mod tests {
         }
         // The closed set still holds: unknown text cannot reach a transcript.
         assert_eq!(
-            failure_result("git_push", "E_AGENT_TOOL_FAILED", Some("fatal: repo not found"), false),
+            failure_result(
+                "git_push",
+                "E_AGENT_TOOL_FAILED",
+                Some("fatal: repo not found"),
+                false
+            ),
             Err(StoreError::InvalidArgument)
         );
     }

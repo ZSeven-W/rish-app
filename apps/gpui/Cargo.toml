@@ -1,0 +1,43 @@
+[package]
+name = "rish-gpui"
+version = "0.1.0"
+edition = "2024"
+license = "MIT"
+publish = false
+
+[workspace]
+members = ["crates/rish-shell-core", "crates/rish-pi-runtime"]
+exclude = ["mobile"]
+resolver = "2"
+
+[lib]
+name = "rish_gpui"
+
+[[bin]]
+name = "rish-gpui"
+path = "src/main.rs"
+
+[dependencies]
+gpui = { package = "gpui-fast", version = "=0.1.7", default-features = false }
+gpui_platform = { package = "gpui-fast-platform", version = "=0.1.7", features = ["font-kit", "runtime_shaders"] }
+rish-shell-core = { path = "crates/rish-shell-core" }
+rish-pi-runtime = { path = "crates/rish-pi-runtime" }
+serde_json = { version = "1", features = ["arbitrary_precision"] }
+futures = "0.3"
+uuid = { version = "1", features = ["v4"] }
+chrono = "0.4"
+unicode-segmentation = "1"
+log = "0.4"
+sys-locale = "0.3"
+
+[dev-dependencies]
+rish-shell-core = { path = "crates/rish-shell-core", features = ["test-support"] }
+gpui = { package = "gpui-fast", version = "=0.1.7", default-features = false, features = ["test-support"] }
+rish-agent-core = { path = "../../modules/rish/core/crates/rish-agent-core" }
+
+[profile.dev]
+debug = 0
+
+[profile.release]
+lto = "thin"
+codegen-units = 1

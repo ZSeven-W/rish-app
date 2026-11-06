@@ -5,7 +5,7 @@ use serde_json::Value;
 fn fixture() -> Value {
     let path = concat!(
         env!("CARGO_MANIFEST_DIR"),
-        "/../../../../../apps/mobile/ios/RishTests/Fixtures/project-secret-decisions.json"
+        "/../../../ios/Tests/Fixtures/project-secret-decisions.json"
     );
     let text = std::fs::read_to_string(path).expect("the secret fixture is beside the iOS tests");
     serde_json::from_str(&text).expect("the fixture is JSON")
@@ -30,15 +30,24 @@ fn every_frozen_text_is_decided_the_same_way() {
         });
         if case["decision"] == "PENDING" {
             pending += 1;
-            println!("RECORD {}", serde_json::json!({ "name": name, "decision": actual }));
+            println!(
+                "RECORD {}",
+                serde_json::json!({ "name": name, "decision": actual })
+            );
             continue;
         }
         if case["decision"] != actual {
-            mismatches.push(format!("{name}: expected {} got {actual}", case["decision"]));
+            mismatches.push(format!(
+                "{name}: expected {} got {actual}",
+                case["decision"]
+            ));
         }
     }
     assert!(mismatches.is_empty(), "{}", mismatches.join("\n"));
-    assert_eq!(pending, 0, "{pending} cases are still PENDING; record them from the shipped host");
+    assert_eq!(
+        pending, 0,
+        "{pending} cases are still PENDING; record them from the shipped host"
+    );
 }
 
 /// The scan reads no further than the file budget: a key entirely past it is
@@ -58,7 +67,9 @@ fn the_scan_stops_at_the_file_budget_and_trims_a_split_character() {
     assert!(suspected_secret(&split));
 
     // Undecodable within the budget, and not because of the cut: not scanned.
-    assert!(!suspected_secret(&[0xff, 0xfe, b'p', b'a', b's', b's', b'w', b'o', b'r', b'd', b'=', b'x']));
+    assert!(!suspected_secret(&[
+        0xff, 0xfe, b'p', b'a', b's', b's', b'w', b'o', b'r', b'd', b'=', b'x'
+    ]));
 }
 
 /// The adversarial inputs the iOS tests time: they must decide "no" and

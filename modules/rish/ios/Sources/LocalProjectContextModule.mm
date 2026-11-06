@@ -2,8 +2,8 @@
 #import "ProjectContextService.h"
 #import "RishHarnessCatalog.h"
 
-#import <React/RCTBridgeModule.h>
-#import <React/RCTInvalidating.h>
+#import <RishNative/RishNativeModule.h>
+#import <RishNative/RishInvalidating.h>
 
 #include <math.h>
 
@@ -946,7 +946,7 @@ static NSString *DSHPCServiceErrorCode(NSError *error) {
   return DSHPCNative;
 }
 
-static void DSHPCReject(RCTPromiseRejectBlock reject, NSString *code) {
+static void DSHPCReject(RishRejectBlock reject, NSString *code) {
   reject(code, code, nil);
 }
 
@@ -999,7 +999,7 @@ static DSHPCOperationScheduler *DSHPCSharedScheduler(void) {
   return scheduler;
 }
 
-@interface LocalProjectContextModule : NSObject <RCTBridgeModule, RCTInvalidating>
+@interface LocalProjectContextModule : NSObject <RishNativeModule, RishInvalidating>
 @property(nonatomic, strong) DSHProjectContextService *service;
 @property(nonatomic, strong) dispatch_queue_t operationQueue;
 @property(nonatomic, strong) DSHPCOperationScheduler *scheduler;
@@ -1016,7 +1016,7 @@ static DSHPCOperationScheduler *DSHPCSharedScheduler(void) {
 @implementation LocalProjectContextModule
 
 
-RCT_EXPORT_MODULE(LocalProjectContext)
+RISH_NATIVE_MODULE(LocalProjectContext)
 
 + (BOOL)requiresMainQueueSetup {
   return NO;
@@ -1057,8 +1057,8 @@ RCT_EXPORT_MODULE(LocalProjectContext)
 
 - (void)enqueueOperation:(DSHPCServiceOperation)operation
               projection:(DSHPCResultProjection)projection
-                resolver:(RCTPromiseResolveBlock)resolve
-                rejecter:(RCTPromiseRejectBlock)reject {
+                resolver:(RishResolveBlock)resolve
+                rejecter:(RishRejectBlock)reject {
   __block NSUInteger generation = 0;
   NSString *immediateFailure = nil;
   @synchronized (self) {
@@ -1125,12 +1125,12 @@ RCT_EXPORT_MODULE(LocalProjectContext)
   });
 }
 
-RCT_REMAP_METHOD(listProjectContextCandidates,
+RISH_NATIVE_METHOD(listProjectContextCandidates,
                  listProjectContextCandidates:(id)projectIdValue
                  query:(id)queryValue
                  cursor:(id)cursorValue
-                 resolver:(RCTPromiseResolveBlock)resolve
-                 rejecter:(RCTPromiseRejectBlock)reject) {
+                 resolver:(RishResolveBlock)resolve
+                 rejecter:(RishRejectBlock)reject) {
   NSString *projectId = nil;
   NSString *query = nil;
   NSData *queryData = nil;
@@ -1161,10 +1161,10 @@ RCT_REMAP_METHOD(listProjectContextCandidates,
   } resolver:resolve rejecter:reject];
 }
 
-RCT_REMAP_METHOD(prepareProjectContext,
+RISH_NATIVE_METHOD(prepareProjectContext,
                  prepareProjectContext:(id)selectionValue
-                 resolver:(RCTPromiseResolveBlock)resolve
-                 rejecter:(RCTPromiseRejectBlock)reject) {
+                 resolver:(RishResolveBlock)resolve
+                 rejecter:(RishRejectBlock)reject) {
   NSDictionary *selection = nil;
   @try {
     selection = DSHPCSelection(selectionValue);
@@ -1184,10 +1184,10 @@ RCT_REMAP_METHOD(prepareProjectContext,
   } resolver:resolve rejecter:reject];
 }
 
-RCT_REMAP_METHOD(confirmProjectContext,
+RISH_NATIVE_METHOD(confirmProjectContext,
                  confirmProjectContext:(id)snapshotIdValue
-                 resolver:(RCTPromiseResolveBlock)resolve
-                 rejecter:(RCTPromiseRejectBlock)reject) {
+                 resolver:(RishResolveBlock)resolve
+                 rejecter:(RishRejectBlock)reject) {
   NSString *snapshotId = nil;
   @try {
     snapshotId = DSHPCCanonicalIdentifier(snapshotIdValue);
@@ -1206,10 +1206,10 @@ RCT_REMAP_METHOD(confirmProjectContext,
   } resolver:resolve rejecter:reject];
 }
 
-RCT_REMAP_METHOD(inspectProjectContext,
+RISH_NATIVE_METHOD(inspectProjectContext,
                  inspectProjectContext:(id)snapshotIdValue
-                 resolver:(RCTPromiseResolveBlock)resolve
-                 rejecter:(RCTPromiseRejectBlock)reject) {
+                 resolver:(RishResolveBlock)resolve
+                 rejecter:(RishRejectBlock)reject) {
   NSString *snapshotId = nil;
   @try {
     snapshotId = DSHPCCanonicalIdentifier(snapshotIdValue);
@@ -1228,10 +1228,10 @@ RCT_REMAP_METHOD(inspectProjectContext,
   } resolver:resolve rejecter:reject];
 }
 
-RCT_REMAP_METHOD(discardProjectContext,
+RISH_NATIVE_METHOD(discardProjectContext,
                  discardProjectContext:(id)snapshotIdValue
-                 resolver:(RCTPromiseResolveBlock)resolve
-                 rejecter:(RCTPromiseRejectBlock)reject) {
+                 resolver:(RishResolveBlock)resolve
+                 rejecter:(RishRejectBlock)reject) {
   NSString *snapshotId = nil;
   @try {
     snapshotId = DSHPCCanonicalIdentifier(snapshotIdValue);
@@ -1251,10 +1251,10 @@ RCT_REMAP_METHOD(discardProjectContext,
   } resolver:resolve rejecter:reject];
 }
 
-RCT_REMAP_METHOD(listCandidatesV2,
+RISH_NATIVE_METHOD(listCandidatesV2,
                  listCandidatesV2Request:(id)requestValue
-                 resolver:(RCTPromiseResolveBlock)resolve
-                 rejecter:(RCTPromiseRejectBlock)reject) {
+                 resolver:(RishResolveBlock)resolve
+                 rejecter:(RishRejectBlock)reject) {
   NSDictionary *request = nil;
   @try {
     request = DSHPCV2ListRequest(requestValue);
@@ -1281,10 +1281,10 @@ RCT_REMAP_METHOD(listCandidatesV2,
   } resolver:resolve rejecter:reject];
 }
 
-RCT_REMAP_METHOD(prepareCandidateV2,
+RISH_NATIVE_METHOD(prepareCandidateV2,
                  prepareCandidateV2Request:(id)selectionValue
-                 resolver:(RCTPromiseResolveBlock)resolve
-                 rejecter:(RCTPromiseRejectBlock)reject) {
+                 resolver:(RishResolveBlock)resolve
+                 rejecter:(RishRejectBlock)reject) {
   NSDictionary *selection = nil;
   @try {
     selection = DSHPCV2Selection(selectionValue);
@@ -1306,10 +1306,10 @@ RCT_REMAP_METHOD(prepareCandidateV2,
   } resolver:resolve rejecter:reject];
 }
 
-RCT_REMAP_METHOD(confirmSnapshotV2,
+RISH_NATIVE_METHOD(confirmSnapshotV2,
                  confirmSnapshotV2Request:(id)requestValue
-                 resolver:(RCTPromiseResolveBlock)resolve
-                 rejecter:(RCTPromiseRejectBlock)reject) {
+                 resolver:(RishResolveBlock)resolve
+                 rejecter:(RishRejectBlock)reject) {
   NSDictionary *request = nil;
   @try {
     request = DSHPCV2SnapshotRequest(requestValue);
@@ -1330,10 +1330,10 @@ RCT_REMAP_METHOD(confirmSnapshotV2,
   } resolver:resolve rejecter:reject];
 }
 
-RCT_REMAP_METHOD(inspectSnapshotV2,
+RISH_NATIVE_METHOD(inspectSnapshotV2,
                  inspectSnapshotV2Request:(id)requestValue
-                 resolver:(RCTPromiseResolveBlock)resolve
-                 rejecter:(RCTPromiseRejectBlock)reject) {
+                 resolver:(RishResolveBlock)resolve
+                 rejecter:(RishRejectBlock)reject) {
   NSDictionary *request = nil;
   @try {
     request = DSHPCV2SnapshotRequest(requestValue);
@@ -1354,10 +1354,10 @@ RCT_REMAP_METHOD(inspectSnapshotV2,
   } resolver:resolve rejecter:reject];
 }
 
-RCT_REMAP_METHOD(discardProjectContextV2,
+RISH_NATIVE_METHOD(discardProjectContextV2,
                  discardProjectContextV2Request:(id)requestValue
-                 resolver:(RCTPromiseResolveBlock)resolve
-                 rejecter:(RCTPromiseRejectBlock)reject) {
+                 resolver:(RishResolveBlock)resolve
+                 rejecter:(RishRejectBlock)reject) {
   NSDictionary *request = nil;
   @try {
     request = DSHPCV2SnapshotRequest(requestValue);
@@ -1377,10 +1377,10 @@ RCT_REMAP_METHOD(discardProjectContextV2,
   } resolver:resolve rejecter:reject];
 }
 
-RCT_REMAP_METHOD(verifiedSendProjectContextV2,
+RISH_NATIVE_METHOD(verifiedSendProjectContextV2,
                  verifiedSendProjectContextV2Request:(id)requestValue
-                 resolver:(RCTPromiseResolveBlock)resolve
-                 rejecter:(RCTPromiseRejectBlock)reject) {
+                 resolver:(RishResolveBlock)resolve
+                 rejecter:(RishRejectBlock)reject) {
   NSDictionary *request = nil;
   @try {
     request = DSHPCV2VerifiedRequest(requestValue);
@@ -1400,7 +1400,7 @@ RCT_REMAP_METHOD(verifiedSendProjectContextV2,
                                                    receipt:&receipt
                                                      error:error];
     // The envelope is deliberately consumed inside native code. Only its
-    // redacted receipt is projected through React Native.
+    // redacted receipt is projected through the app UI.
     return envelope == nil ? nil : receipt;
   } projection:^id(id raw) {
     return DSHPCV2VerifiedReceipt(raw, root, snapshotId);

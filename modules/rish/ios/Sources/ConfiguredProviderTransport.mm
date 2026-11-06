@@ -45,11 +45,20 @@ static BOOL DSHRelayResponseIdUsable(id value) {
   if ([protocol isEqual:@"chat-completions"]) return self.chat;
   return nil;
 }
-- (NSURL *)providerBaseURL { return [NSURL URLWithString:[self profile][@"endpoint_url"] ?: @""]; }
+- (NSURL *)providerBaseURL {
+  NSString *endpoint = [self profile][@"endpoint_url"];
+  return endpoint ? [NSURL URLWithString:endpoint] : nil;
+}
 - (NSString *)providerHarnessId { return self.harness; }
-- (BOOL)providerSupportsModel:(NSString *)model { return [DSHHarnessIdForModel(model) isEqual:self.harness]; }
+- (BOOL)providerSupportsModel:(NSString *)model {
+  if (DSHIsCustomProviderHarness(self.harness)) {
+    NSDictionary *route = [self.store customRouteForModel:model requireActive:YES];
+    return [route[@"harness_id"] isEqual:self.harness];
+  }
+  return [DSHHarnessIdForModel(model) isEqual:self.harness];
+}
 - (NSDictionary *)providerConfigurationForModel:(NSString *)model {
-  return DSHProviderBindingFromConfiguration([self profile], model);
+  return [self providerSupportsModel:model] ? DSHProviderBindingFromConfiguration([self profile], model) : nil;
 }
 - (NSDictionary *)providerHeadersWithCredential:(NSString *)credential {
   NSString *auth = [self profile][@"auth_type"];
@@ -109,7 +118,7 @@ static BOOL DSHRelayResponseIdUsable(id value) {
     if (error) *error = ProviderError(@"E_COMPLETION_MODEL_MISMATCH"); return nil;
   }
   if ([echoed isKindOfClass:NSString.class] && ![echoed isEqual:wireModel]) {
-    NSLog(@"completion_model_alias requested_model=%@ reported_model=%@", wireModel, echoed);
+    NSLog(@"completion_model_alias harness=%@", self.harness);
   }
   NSString *parseModel = messages ? @"claude-haiku-4-5-20251001" : (chat ? model : @"gpt-5.6");
   if ([[self dialect] providerSupportsModel:model]) parseModel = model;

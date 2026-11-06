@@ -80,15 +80,14 @@ impl Scanner<'_> {
             self.index += 1;
             return true;
         }
-        let mut keys: Vec<String> = Vec::new();
+        let mut keys = std::collections::HashSet::new();
         while self.index < self.bytes.len() {
             let Some(key) = self.scan_string() else {
                 return false;
             };
-            if keys.contains(&key) {
+            if !keys.insert(key) {
                 return false;
             }
-            keys.push(key);
             self.skip_whitespace();
             if self.bytes.get(self.index) != Some(&b':') {
                 return false;

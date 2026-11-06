@@ -9,6 +9,14 @@ NS_ASSUME_NONNULL_BEGIN
 - (nullable NSDictionary *)configurationForHarness:(NSString *)harness;
 - (nullable NSDictionary *)saveConfiguration:(NSDictionary *)configuration error:(NSError **)error;
 - (NSDictionary *)resetHarness:(NSString *)harness;
+/// Independent providers. Reads preserve retired identities; routing requires active entries.
+- (nullable NSDictionary *)customRegistry:(NSError **)error;
+- (nullable NSDictionary *)saveCustomProvider:(NSDictionary *)provider expectedRevision:(NSNumber *)revision error:(NSError **)error;
+- (nullable NSDictionary *)removeCustomProvider:(NSString *)providerId expectedRevision:(NSNumber *)revision error:(NSError **)error;
+- (NSArray<NSDictionary *> *)customModelsIncludingRetired:(BOOL)includeRetired;
+- (nullable NSDictionary *)customRouteForModel:(NSString *)model requireActive:(BOOL)requireActive;
+- (nullable NSDictionary *)customProviderForId:(NSString *)providerId;
+
 @end
 
 FOUNDATION_EXPORT NSDictionary *_Nullable DSHNormalizeProviderConfiguration(id value);
@@ -22,5 +30,7 @@ FOUNDATION_EXPORT NSString *_Nullable DSHEffectiveCredentialAccount(NSString *sl
 FOUNDATION_EXPORT NSString *_Nullable DSHConfigurableHarnessForSlot(NSString *slot);
 /// Whether the person configured a relay for this harness.
 FOUNDATION_EXPORT BOOL DSHHarnessUsesCustomProvider(NSString *harness);
+FOUNDATION_EXPORT BOOL DSHIsCustomProviderHarness(id _Nullable harness);
+FOUNDATION_EXPORT BOOL DSHProviderRequiresCredential(NSDictionary *configuration);
 FOUNDATION_EXPORT NSString *_Nullable DSHNormalizeProviderEndpoint(NSString *value, NSString *protocol);
 NS_ASSUME_NONNULL_END

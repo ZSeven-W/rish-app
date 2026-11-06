@@ -7,6 +7,7 @@
 #import "AgentPreparedAttemptStore.h"
 #import "AgentTranscriptStore.h"
 #import "AgentWorkspaceToolExecutor.h"
+#import "AssistantTaskExecutor.h"
 #import "DSHAgentGuestCgiToolExecutor.h"
 #import "DSHAgentRuntimeToolExecutor.h"
 #import "AgentRuntimeToolContracts.h"
@@ -308,6 +309,9 @@ static NSDictionary *DSHAgentExecutionHistoricalResult(
     }
   }
   NSDictionary *row = [self executionRowInState:state request:request];
+  if ([request[@"name"] isEqual:@"ask_user"] &&
+      DSHAgentExecutionReduce(@"question_response", @{@"request":request,
+        @"row":row ?: NSNull.null}, error) == nil) return nil;
   // A same-operation replay must use the authority revision frozen on the
   // durable operation record. The first execution may legitimately advance
   // the live authority while claiming its native owner; using that newer
@@ -393,6 +397,18 @@ static NSDictionary *DSHAgentExecutionHistoricalResult(
     return DSHAgentExecutionConflict(
         self.wal, request, started, row, @"E_AGENT_CONFLICT", error);
   }
+  if ([request[@"name"] isEqual:@"ask_user"]) {
+    NSDictionary *plan = DSHAgentExecutionReduce(@"question_settlement", @{
+      @"request":request, @"row":row, @"arguments":arguments,
+      @"request_sha256":started[@"request_sha256"],
+    }, error);
+    if (plan == nil) return nil;
+    // No native owner or running state: the answer, receipt and transcript
+    // commit atomically. A lost response replays this same operation result.
+    NSDictionary *settled = [self.ledger settleAgentExecutionWithCAS:plan[@"cas"]
+      patch:plan[@"patch"] message:plan[@"message"] operation:plan[@"operation"] error:error];
+    return settled[@"operation_result"];
+  }
   NSDictionary *gateRequest = DSHAgentExecutionReduce(@"effect_gate", @{ @"request" : request }, error);
   if (gateRequest == nil) return nil;
   if ([gateRequest[@"needed"] isEqual:@YES]) {
@@ -476,7 +492,47 @@ static NSDictionary *DSHAgentExecutionHistoricalResult(
   NSDictionary *arguments = context[@"arguments"], *row = context[@"row"];
   NSDate *began = NSDate.date;
   NSDictionary *effect = nil;
-  if ([request[@"name"] isEqualToString:@"list_dir"] ||
+  if (DSHAgentIsAssistantTaskTool(request[@"name"])) {
+    // Re-load under the session coordinator after approval/claim/dispatch.
+    // The helper then holds the workspace proof across the Rust transaction.
+    __block NSDictionary *assistantEffect = nil;
+    NSError *assistantError = nil;
+    [self.preparedStore.sessionSnapshotStore.coordinator performSyncWithError:^BOOL(NSError **inner) {
+      NSDictionary *conversation = DSHAgentExecutionCommittedConversation(self.preparedStore, request);
+      NSDictionary *authority = [self.preparedStore nativeAuthorityForTaskId:request[@"task_id"]
+          attemptId:request[@"attempt_id"] error:inner];
+      if (conversation == nil || ![self.preparedStore validatePreparedRoot:request[@"root"]
+          taskId:request[@"task_id"] attemptId:request[@"attempt_id"] error:inner]) return NO;
+      assistantEffect = [self.preparedStore.assistantTaskExecutor executeToolNamed:request[@"name"]
+          arguments:arguments conversation:conversation request:request locator:row[@"locator"]
+          precondition:row[@"precondition"] registryVersion:authority[@"registry"][@"registry_version"]
+          error:inner];
+      return assistantEffect != nil;
+    } error:&assistantError];
+    effect = assistantEffect;
+    if (effect == nil) {
+      BOOL noEffect = [assistantError.domain isEqual:DSHAgentNativeStoreErrorDomain] &&
+          (assistantError.code == DSHAgentNativeStoreErrorInvalidArgument ||
+           assistantError.code == DSHAgentNativeStoreErrorConflict ||
+           assistantError.code == DSHAgentNativeStoreErrorNotFound ||
+           assistantError.code == DSHAgentNativeStoreErrorCapacity ||
+           assistantError.code == DSHAgentNativeStoreErrorOwnerLost);
+      if (noEffect) {
+        NSString *code = assistantError.code == DSHAgentNativeStoreErrorInvalidArgument
+            ? @"E_AGENT_BAD_ARGUMENTS" : assistantError.code == DSHAgentNativeStoreErrorNotFound
+            ? @"E_AGENT_NOT_FOUND" : @"E_AGENT_CONFLICT";
+        effect = DSHAgentExecutionReduce(@"assistant_failure",
+            @{@"request":request, @"failure_code":code}, nil)[@"effect"];
+      } else {
+        // An unavailable response does not prove that the atomic Rust task and
+        // receipt transaction failed. Keep the dispatched row recoverable;
+        // recovery must inspect that receipt before any terminal settlement.
+        [self.wal unregisterNativeTaskId:context[@"native_task_id"] error:nil];
+        if (error != nullptr) *error = nil;
+        return DSHAgentExecutionActiveResult(request, row, @"ambiguous", YES);
+      }
+    }
+  } else if ([request[@"name"] isEqualToString:@"list_dir"] ||
       [request[@"name"] isEqualToString:@"read_file"] ||
       [request[@"name"] isEqualToString:@"write_file"]) {
     effect = [self.workspaceExecutor executeToolNamed:request[@"name"]
@@ -636,6 +692,10 @@ static NSDictionary *DSHAgentExecutionHistoricalResult(
     }, error);
     return safe[@"result"];
   }
+  if ([request[@"name"] isEqual:@"ask_user"] && [row[@"state"] isEqual:@"intent"]) {
+    return DSHAgentExecutionReduce(@"active_result", @{@"request":request, @"row":row,
+      @"status":@"intent", @"effect_may_have_occurred":@NO}, error)[@"result"];
+  }
   NSArray *messages = [self nativeMessagesForRequest:request error:error];
   NSDictionary *parsed = DSHAgentExecutionReduce(@"recover_arguments", @{
     @"request" : request, @"messages" : DSHAgentExecutionValue(messages),
@@ -649,7 +709,22 @@ static NSDictionary *DSHAgentExecutionHistoricalResult(
     return nil;
   }
   NSDictionary *recovered = nil;
-  if ([request[@"name"] isEqualToString:@"list_dir"] ||
+  if (DSHAgentIsAssistantTaskTool(request[@"name"])) {
+    __block NSDictionary *assistantRecovery = nil;
+    [self.preparedStore.sessionSnapshotStore.coordinator performSyncWithError:^BOOL(NSError **inner) {
+      NSDictionary *conversation = DSHAgentExecutionCommittedConversation(self.preparedStore, request);
+      NSDictionary *authority = [self.preparedStore nativeAuthorityForTaskId:request[@"task_id"]
+          attemptId:request[@"attempt_id"] error:inner];
+      if (conversation == nil || ![self.preparedStore validatePreparedRoot:request[@"root"]
+          taskId:request[@"task_id"] attemptId:request[@"attempt_id"] error:inner]) return NO;
+      assistantRecovery = [self.preparedStore.assistantTaskExecutor recoverToolNamed:request[@"name"]
+          arguments:arguments conversation:conversation request:request locator:row[@"locator"]
+          precondition:row[@"precondition"] registryVersion:authority[@"registry"][@"registry_version"]
+          error:inner];
+      return assistantRecovery != nil;
+    } error:error];
+    recovered = assistantRecovery;
+  } else if ([request[@"name"] isEqualToString:@"list_dir"] ||
       [request[@"name"] isEqualToString:@"read_file"] ||
       [request[@"name"] isEqualToString:@"write_file"]) {
     recovered = [self.workspaceExecutor recoverToolNamed:request[@"name"]

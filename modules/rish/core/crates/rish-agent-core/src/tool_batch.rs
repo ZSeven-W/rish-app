@@ -46,7 +46,9 @@ fn array(value: Option<&Value>) -> &[Value] {
 }
 
 fn is_mutation(name: &str) -> bool {
-    matches!(name, "write_file" | "git_commit" | "git_push") || crate::runtime_tools::is_guest(name)
+    matches!(name, "write_file" | "git_commit" | "git_push")
+        || crate::runtime_tools::is_guest(name)
+        || crate::assistant_tools::is_mutation(name)
 }
 
 fn is_workspace_tool(name: &str) -> bool {
@@ -422,12 +424,22 @@ pub fn tool_arguments_accepted(
     let Some(tool_name) = tool_name_well_formed(name) else {
         return Err(SCHEMA);
     };
+    if crate::assistant_tools::is_assistant(tool_name) {
+        return crate::assistant_tools::arguments_valid(tool_name, arguments)
+            .then_some(())
+            .ok_or(SCHEMA);
+    }
     if crate::runtime_tools::is_runtime(tool_name) {
         return crate::runtime_tools::arguments_valid(tool_name, arguments)
             .then_some(())
             .ok_or(SCHEMA);
     }
     let object = Value::Object(arguments.clone());
+    if tool_name == crate::user_question::NAME {
+        return crate::user_question::arguments_valid(&object)
+            .then_some(())
+            .ok_or(SCHEMA);
+    }
     if is_workspace_tool(tool_name) {
         let list_directory = tool_name == "list_dir";
         let path = arguments.get("path");
@@ -469,8 +481,7 @@ pub fn tool_arguments_accepted(
             // prior revision is claimed -- and the write's own precondition
             // still decides whether that is true of the disk.
             let keys_ok = exact_keys(Some(&object), &["path", "content"]).is_some()
-                || exact_keys(Some(&object), &["path", "content", "expected_revision"])
-                    .is_some()
+                || exact_keys(Some(&object), &["path", "content", "expected_revision"]).is_some()
                 || exact_keys(Some(&object), &["path", "content", "expected_prior"]).is_some();
             let Some(Value::String(content)) = content else {
                 return Err(SCHEMA);
@@ -529,6 +540,10 @@ fn conversation_grant<'a>(
 ) -> Option<&'a Value> {
     let family = match name {
         "write_file" => "file_write",
+        "create_assistant_task"
+        | "update_assistant_task"
+        | "remember_assistant_memory"
+        | "forget_assistant_memory" => "assistant_metadata",
         "git_commit" => "git_commit",
         _ if crate::runtime_tools::is_mutation(name) || name.ends_with("_guest_cgi") => {
             "guest_service"
@@ -612,9 +627,14 @@ pub fn prepare_calls(
         let registry_tool = registry_tools
             .iter()
             .find(|tool| equal(get(tool, "name"), get(raw, "name")));
-        let access = registry_tool
+        let mut access = registry_tool
             .and_then(|t| as_str(get(t, "access")))
             .unwrap_or("durable_deny");
+        if crate::assistant_tools::is_assistant(name)
+            && authority["registry"]["registry_version"] != 5
+        {
+            access = "durable_deny";
+        }
         let grant = if access == "conversation_confirm" {
             conversation_grant(
                 grants,
@@ -641,6 +661,8 @@ pub fn prepare_calls(
                         executor = Value::String(
                             if is_workspace_tool(name) {
                                 "workspace"
+                            } else if crate::assistant_tools::is_assistant(name) {
+                                "assistant"
                             } else if crate::runtime_tools::is_runtime(name) {
                                 "runtime"
                             } else if name.ends_with("_guest_cgi") {
@@ -651,6 +673,9 @@ pub fn prepare_calls(
                             .to_string(),
                         );
                         arguments = Value::Object(parsed);
+                        if name == crate::user_question::NAME {
+                            executor = Value::Null;
+                        }
                     }
                 },
             }
@@ -691,7 +716,10 @@ fn approval_preview_for(name: &str, prepared: Option<&Value>) -> Value {
         }
         return json!({ "schema_version": 1, "kind": "start_guest_cgi", "paths": paths, "content_bytes": Value::Null, "prior": Value::Null, "diff_preview": Value::Null, "diff_truncated": false });
     }
-    if matches!(name, "git_commit" | "git_push") || crate::runtime_tools::is_guest(name) {
+    if matches!(name, "git_commit" | "git_push")
+        || crate::runtime_tools::is_guest(name)
+        || crate::assistant_tools::is_mutation(name)
+    {
         // Git calls never carry file content; the preview names only the
         // mutation kind. Commit/push messages stay native-private.
         return json!({ "schema_version": 1, "kind": name, "paths": [], "content_bytes": Value::Null, "prior": Value::Null, "diff_preview": Value::Null, "diff_truncated": false });
@@ -712,12 +740,16 @@ pub fn prepare_finish(request: &Value, calls: &[Value], outcomes: &[Value]) -> V
         mutation_batch = mutation_batch || get(call, "mutation") == Some(&Value::Bool(true));
         let outcome = outcomes.get(index).filter(|o| !o.is_null());
         let mut rejection = get(call, "rejection").cloned().unwrap_or(Value::Null);
-        let mut prepared: Option<&Value> = None;
+        let question_prepared = (name == crate::user_question::NAME)
+            .then(|| crate::user_question::prepared(&call["arguments"]))
+            .flatten();
+        let mut prepared: Option<&Value> = question_prepared.as_ref();
         if rejection.is_null() && !is_null(get(call, "executor")) && get(call, "executor").is_some()
         {
             match outcome {
                 Some(outcome)
-                    if crate::runtime_tools::is_runtime(name)
+                    if (crate::runtime_tools::is_runtime(name)
+                        || crate::assistant_tools::is_assistant(name))
                         && crate::runtime_tools::prepare_rejection(get(outcome, "rejection")) =>
                 {
                     rejection = get(outcome, "rejection").cloned().unwrap_or(Value::Null);
@@ -758,7 +790,11 @@ pub fn prepare_finish(request: &Value, calls: &[Value], outcomes: &[Value]) -> V
             }
         }
         let approval_preview = if rejection.is_null() {
-            approval_preview_for(name, prepared)
+            if crate::assistant_tools::is_mutation(name) {
+                crate::assistant_tools::approval_preview(name, &call["arguments"])
+            } else {
+                approval_preview_for(name, prepared)
+            }
         } else {
             Value::Null
         };
@@ -788,12 +824,13 @@ pub fn prepare_finish(request: &Value, calls: &[Value], outcomes: &[Value]) -> V
             if map.get("rejection").is_some_and(Value::is_null)
                 && !string_eq(map.get("access"), "durable_deny")
             {
-                let failure_code = if !as_str(map.get("name"))
-                    .is_some_and(crate::runtime_tools::is_runtime)
-                    && matches!(
-                        as_str(get(&first, "failure_code")),
-                        Some("E_AGENT_CAPABILITY" | "E_AGENT_TOOL_FAILED")
-                    ) {
+                let failure_code = if !as_str(map.get("name")).is_some_and(|name| {
+                    crate::runtime_tools::is_runtime(name)
+                        || crate::assistant_tools::is_assistant(name)
+                }) && matches!(
+                    as_str(get(&first, "failure_code")),
+                    Some("E_AGENT_CAPABILITY" | "E_AGENT_TOOL_FAILED")
+                ) {
                     json!("E_AGENT_BAD_ARGUMENTS")
                 } else {
                     get(&first, "failure_code").cloned().unwrap_or(Value::Null)
@@ -813,7 +850,16 @@ pub fn prepare_finish(request: &Value, calls: &[Value], outcomes: &[Value]) -> V
     let mut needs_project_write_lease = false;
     for call in &prepared_calls {
         let name = as_str(get(call, "name")).unwrap_or_default();
-        let capability = if matches!(name, "list_dir" | "read_file" | "list_runtime_environments") {
+        let capability = if crate::assistant_tools::is_assistant(name) {
+            "file_read"
+        } else if matches!(
+            name,
+            "list_dir"
+                | "read_file"
+                | "list_runtime_environments"
+                | "list_assistant_tasks"
+                | "search_assistant_memory"
+        ) {
             "file_read"
         } else if name == "write_file" {
             "file_write"
@@ -1350,7 +1396,9 @@ pub fn bind_check(
         .cloned();
     if grant.is_none() && decision == "allow_conversation" {
         let name = as_str(get(token, "name")).unwrap_or_default();
-        let family = if name == "git_commit" {
+        let family = if crate::assistant_tools::is_mutation(name) {
+            "assistant_metadata"
+        } else if name == "git_commit" {
             "git_commit"
         } else if crate::runtime_tools::is_guest(name) {
             "guest_service"
@@ -1585,16 +1633,32 @@ mod tests {
             )
         };
         assert_eq!(code(StoreError::Capacity).0, "E_AGENT_CAPACITY");
-        assert_eq!(code(StoreError::Conflict), ("E_AGENT_CONFLICT".into(), "requery".into()));
-        assert_eq!(code(StoreError::InvalidArgument), ("E_AGENT_BAD_ARGUMENTS".into(), "none".into()));
-        assert_eq!(code(StoreError::OwnerLost), ("E_AGENT_ROOT_STALE".into(), "requery".into()));
+        assert_eq!(
+            code(StoreError::Conflict),
+            ("E_AGENT_CONFLICT".into(), "requery".into())
+        );
+        assert_eq!(
+            code(StoreError::InvalidArgument),
+            ("E_AGENT_BAD_ARGUMENTS".into(), "none".into())
+        );
+        assert_eq!(
+            code(StoreError::OwnerLost),
+            ("E_AGENT_ROOT_STALE".into(), "requery".into())
+        );
         assert_eq!(
             code(StoreError::Persistence),
-            ("E_AGENT_PERSISTENCE".into(), "wait_for_reconciliation".into())
+            (
+                "E_AGENT_PERSISTENCE".into(),
+                "wait_for_reconciliation".into()
+            )
         );
         // These three have no code of their own; the ledger refusal is the
         // honest answer for them, not a default the others fall through to.
-        for store in [StoreError::Corrupt, StoreError::Unavailable, StoreError::NotFound] {
+        for store in [
+            StoreError::Corrupt,
+            StoreError::Unavailable,
+            StoreError::NotFound,
+        ] {
             assert_eq!(code(store).0, "E_AGENT_LEDGER", "{store:?}");
         }
     }

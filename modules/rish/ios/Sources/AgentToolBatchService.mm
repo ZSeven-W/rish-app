@@ -6,6 +6,7 @@
 #import "AgentPreparedAttemptStore.h"
 #import "AgentTranscriptStore.h"
 #import "AgentWorkspaceToolExecutor.h"
+#import "AssistantTaskExecutor.h"
 #import "DSHAgentGuestCgiToolExecutor.h"
 #import "DSHAgentRuntimeToolExecutor.h"
 
@@ -253,7 +254,10 @@ static NSDictionary *DSHAgentBatchConversation(NSDictionary *session,
 // maps that failure to a whole-batch rejection). Each outcome is
 // {prepared} | {error: <native code>} | null.
 - (NSArray *)executorOutcomesForCalls:(NSArray *)calls
-                                 root:(NSDictionary *)root {
+                                 root:(NSDictionary *)root
+                              request:(NSDictionary *)request
+                         conversation:(NSDictionary *)conversation
+                      registryVersion:(NSNumber *)registryVersion {
   NSMutableArray *outcomes = [NSMutableArray arrayWithCapacity:calls.count];
   BOOL stopped = NO;
   for (NSDictionary *call in calls) {
@@ -268,7 +272,11 @@ static NSDictionary *DSHAgentBatchConversation(NSDictionary *session,
     NSString *name = call[@"name"];
     NSError *prepareError = nil;
     NSDictionary *prepared = nil;
-    if ([executor isEqualToString:@"workspace"]) {
+    if ([executor isEqualToString:@"assistant"]) {
+      prepared = [self.preparedStore.assistantTaskExecutor prepareToolNamed:name
+          arguments:arguments conversation:conversation request:request
+          registryVersion:registryVersion error:&prepareError];
+    } else if ([executor isEqualToString:@"workspace"]) {
       prepared = [self.workspaceExecutor prepareToolNamed:name
                                                  arguments:arguments
                                                       root:root
@@ -363,7 +371,8 @@ static NSDictionary *DSHAgentBatchConversation(NSDictionary *session,
     return DSHAgentBatchCommitRejected(self.wal, request, started, analysis[@"reject"], error);
   }
   NSArray *calls = [analysis[@"calls"] isKindOfClass:NSArray.class] ? analysis[@"calls"] : @[];
-  NSArray *outcomes = [self executorOutcomesForCalls:calls root:request[@"root"]];
+  NSArray *outcomes = [self executorOutcomesForCalls:calls root:request[@"root"]
+      request:request conversation:conversation registryVersion:authority[@"registry"][@"registry_version"]];
   NSDictionary *finish = DSHAgentBatchReduce(@"prepare_finish", @{
     @"request" : request, @"calls" : calls, @"outcomes" : outcomes,
   }, error);

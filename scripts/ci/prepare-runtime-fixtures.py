@@ -63,11 +63,37 @@ def digest_file(path):
     return digest.hexdigest()
 
 
-def fetch(record, destination):
+def validate_fixture_catalog(fixture, catalog):
+    """Refuse stale integration fixtures before claiming current release coverage."""
+    records = catalog_records(catalog)
+    if (not isinstance(fixture, dict) or set(fixture) != {'schema_version', 'packages'}
+            or type(fixture['schema_version']) is not int or fixture['schema_version'] != 1
+            or not isinstance(fixture['packages'], list) or len(fixture['packages']) != 6):
+        raise ValueError('invalid runtime fixture manifest')
+    expected = {r['manifest']['family']: {
+        'family': r['manifest']['family'],
+        'file': r['manifest']['environment_id'] + '.rishenv',
+        'environment_id': r['manifest']['environment_id'],
+        'package_sha256': r['package_sha256'], 'package_bytes': r['package_bytes'],
+    } for r in records}
+    seen = set()
+    for record in fixture['packages']:
+        if not isinstance(record, dict) or not isinstance(record.get('family'), str):
+            raise ValueError('invalid runtime fixture record')
+        family = record['family']
+        if family in seen or record != expected.get(family):
+            raise ValueError('runtime fixture differs from current catalog: ' + family)
+        seen.add(family)
+    return True
+
+
+def fetch(record, destination, *, offline=False):
     if destination.is_symlink():
         raise ValueError('package cache must not contain symlinks')
     if destination.is_file() and destination.stat().st_size == record['package_bytes'] and digest_file(destination) == record['package_sha256']:
         return
+    if offline:
+        raise RuntimeError(f"Verified offline package missing: {record['manifest']['environment_id']}")
     partial = destination.with_suffix('.partial')
     if partial.exists() or partial.is_symlink():
         partial.unlink()
@@ -101,17 +127,18 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--catalog', type=Path, default=ROOT / 'runtime-environments/catalog.json')
     parser.add_argument('--output', type=Path, required=True)
+    parser.add_argument('--offline', action='store_true', help='Require existing hash-matched packages; never download')
     args = parser.parse_args()
     records = catalog_records(json.loads(args.catalog.read_text(), object_pairs_hook=package.unique_object))
     output = args.output.resolve()
     output.mkdir(parents=True, exist_ok=True)
-    kernel = next((ROOT / 'apps/mobile/ios/Rish/GuestAssets').glob('vmlinuz-virt-*'))
+    kernel = next((ROOT / 'modules/rish/shared/GuestAssets').glob('vmlinuz-virt-*'))
     kernel_sha = digest_file(kernel)
     fixtures = []
     for record in records:
         manifest = record['manifest']
         path = output / (manifest['environment_id'] + '.rishenv')
-        fetch(record, path)
+        fetch(record, path, offline=args.offline)
         verified = package.verify(path, expected_kernel=kernel_sha)
         if verified != {key: record[key] for key in ['manifest', 'package_sha256', 'package_bytes']}:
             raise ValueError('package and catalog differ')

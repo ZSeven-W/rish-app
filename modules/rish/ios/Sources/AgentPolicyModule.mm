@@ -1,5 +1,5 @@
 #import <Foundation/Foundation.h>
-#import <React/RCTBridgeModule.h>
+#import <RishNative/RishNativeModule.h>
 
 #import "AgentPolicyService.h"
 #import "AgentRootResolver.h"
@@ -12,18 +12,18 @@
 @property(nonatomic, strong, readonly) DSHLocalWorkspaceAccess *workspaceAccess;
 @end
 
-@interface AgentPolicyModule : NSObject <RCTBridgeModule>
+@interface AgentPolicyModule : NSObject <RishNativeModule>
 @property(nonatomic, strong) DSHAgentPolicyService *policyService;
 @end
 
 @implementation AgentPolicyModule
 
-RCT_EXPORT_MODULE(AgentPolicy)
+RISH_NATIVE_MODULE(AgentPolicy)
 
 + (BOOL)requiresMainQueueSetup { return NO; }
 - (dispatch_queue_t)methodQueue { return DSHSessionWorkspaceCoordinator.sharedQueue; }
 
-// Application-owned injection for native bridge tests; not exposed to JS.
+// Application-owned injection for native bridge tests; not exposed to UI.
 - (instancetype)initWithPolicyService:(DSHAgentPolicyService *)service {
   self = [super init];
   if (self) _policyService = service;
@@ -43,10 +43,10 @@ RCT_EXPORT_MODULE(AgentPolicy)
   return self.policyService;
 }
 
-RCT_REMAP_METHOD(describe,
+RISH_NATIVE_METHOD(describe,
                  describeRequest:(id)request
-                 resolver:(RCTPromiseResolveBlock)resolve
-                 rejecter:(RCTPromiseRejectBlock)reject) {
+                 resolver:(RishResolveBlock)resolve
+                 rejecter:(RishRejectBlock)reject) {
   [DSHSessionWorkspaceCoordinator.sharedCoordinator performAsync:^{
     NSError *error = nil;
     NSDictionary *result = nil;

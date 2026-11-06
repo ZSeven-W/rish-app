@@ -44,7 +44,7 @@ static NSError *DSHPolicyMapRootError(NSError *error) {
   return DSHPolicyError(@"E_AGENT_NATIVE");
 }
 
-// The describe result is a *safe* projection: it is handed to the JavaScript
+// The describe result is a *safe* projection: it is handed to the the UI
 // layer and shown in the UI, so what matters is not what it contains but what
 // it must never contain — a filesystem path, the native descriptor table, tool
 // arguments, or anything that could be mistaken for an authority handle. Its

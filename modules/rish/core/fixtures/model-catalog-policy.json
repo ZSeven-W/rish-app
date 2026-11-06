@@ -1,0 +1,517 @@
+{
+  "description": "Shared DSH model catalog policy; new portable native-host fixture, not a replacement for frozen engine goldens.",
+  "cases": [
+    {
+      "name": "missing preference has no active model choices",
+      "input": {
+        "op": "read",
+        "catalog": null
+      },
+      "expected": {
+        "ok": true,
+        "value": {
+          "schema_version": 1,
+          "models": [],
+          "retired_models": []
+        }
+      }
+    },
+    {
+      "name": "corrupt preference does not reset",
+      "input": {
+        "op": "read",
+        "catalog": {}
+      },
+      "expected": {
+        "ok": false,
+        "error": "E_MODEL_CATALOG_INVALID"
+      }
+    },
+    {
+      "name": "labels are trimmed",
+      "input": {
+        "op": "validate_models",
+        "models": [
+          {
+            "id": "custom/v1:fast",
+            "name": "  模型  ",
+            "supports_images": true
+          }
+        ],
+        "retired": false
+      },
+      "expected": {
+        "ok": true,
+        "value": [
+          {
+            "id": "custom/v1:fast",
+            "name": "模型",
+            "supports_images": true
+          }
+        ]
+      }
+    },
+    {
+      "name": "active choices may be empty before model setup",
+      "input": {
+        "op": "validate_models",
+        "models": [],
+        "retired": false
+      },
+      "expected": {
+        "ok": true,
+        "value": []
+      }
+    },
+    {
+      "name": "retired history may be empty",
+      "input": {
+        "op": "validate_models",
+        "models": [],
+        "retired": true
+      },
+      "expected": {
+        "ok": true,
+        "value": []
+      }
+    },
+    {
+      "name": "capability is a boolean without coercion",
+      "input": {
+        "op": "validate_models",
+        "models": [
+          {
+            "id": "custom",
+            "name": "Custom",
+            "supports_images": 1
+          }
+        ],
+        "retired": false
+      },
+      "expected": {
+        "ok": false,
+        "error": "E_MODEL_CATALOG_INVALID"
+      }
+    },
+    {
+      "name": "another harness identity cannot be taken",
+      "input": {
+        "op": "validate_models",
+        "models": [
+          {
+            "id": "gpt-5.6",
+            "name": "Custom",
+            "supports_images": false
+          }
+        ],
+        "retired": false
+      },
+      "expected": {
+        "ok": false,
+        "error": "E_MODEL_CATALOG_INVALID"
+      }
+    },
+    {
+      "name": "unknown capability is false",
+      "input": {
+        "op": "supports_images",
+        "catalog": null,
+        "model": "not-registered"
+      },
+      "expected": {
+        "ok": true,
+        "value": false
+      }
+    },
+    {
+      "name": "unknown lookup is null",
+      "input": {
+        "op": "lookup",
+        "catalog": null,
+        "model": "not-registered"
+      },
+      "expected": {
+        "ok": true,
+        "value": null
+      }
+    },
+    {
+      "name": "retired custom capability remains known",
+      "input": {
+        "op": "supports_images",
+        "catalog": {
+          "schema_version": 1,
+          "models": [
+            {
+              "id": "new",
+              "name": "New",
+              "supports_images": false
+            }
+          ],
+          "retired_models": [
+            {
+              "id": "old",
+              "name": "Old",
+              "supports_images": true
+            }
+          ]
+        },
+        "model": "old"
+      },
+      "expected": {
+        "ok": true,
+        "value": true
+      }
+    },
+    {
+      "name": "builtin capability survives older catalog omissions",
+      "input": {
+        "op": "supports_images",
+        "catalog": {
+          "schema_version": 1,
+          "models": [
+            {
+              "id": "custom",
+              "name": "Custom",
+              "supports_images": false
+            }
+          ],
+          "retired_models": []
+        },
+        "model": "deepseek-v4-flash"
+      },
+      "expected": {
+        "ok": true,
+        "value": true
+      }
+    },
+    {
+      "name": "malformed catalog cannot fall back even for builtins",
+      "input": {
+        "op": "is_known",
+        "catalog": false,
+        "model": "deepseek-v4-flash"
+      },
+      "expected": {
+        "ok": false,
+        "error": "E_MODEL_CATALOG_INVALID"
+      }
+    },
+    {
+      "name": "save carries defaults into sorted retirement",
+      "input": {
+        "op": "save",
+        "catalog": null,
+        "request": {
+          "schema_version": 1,
+          "models": [
+            {
+              "id": "custom",
+              "name": "Custom",
+              "supports_images": false
+            }
+          ]
+        }
+      },
+      "expected": {
+        "ok": true,
+        "value": {
+          "schema_version": 1,
+          "models": [
+            {
+              "id": "custom",
+              "name": "Custom",
+              "supports_images": false
+            }
+          ],
+          "retired_models": [
+            {
+              "id": "deepseek-v4-flash",
+              "name": "V4 Flash",
+              "supports_images": true
+            },
+            {
+              "id": "deepseek-v4-flash-vision-exp",
+              "name": "Flash Exp",
+              "supports_images": true
+            },
+            {
+              "id": "deepseek-v4-pro",
+              "name": "V4 Pro",
+              "supports_images": false
+            }
+          ]
+        }
+      }
+    },
+    {
+      "name": "schema does not coerce booleans",
+      "input": {
+        "op": "save",
+        "catalog": null,
+        "request": {
+          "schema_version": true,
+          "models": [
+            {
+              "id": "custom",
+              "name": "Custom",
+              "supports_images": false
+            }
+          ]
+        }
+      },
+      "expected": {
+        "ok": false,
+        "error": "E_MODEL_CATALOG_INVALID"
+      }
+    },
+    {
+      "name": "codex discovery maps only registered IDs",
+      "input": {
+        "op": "harness_for_model",
+        "catalog": null,
+        "model": "gpt-future",
+        "discovered_models": [
+          "gpt-future"
+        ]
+      },
+      "expected": {
+        "ok": true,
+        "value": "codex"
+      }
+    },
+    {
+      "name": "builtin provider identity does not depend on damaged DSH metadata",
+      "input": {
+        "op": "harness_for_model",
+        "catalog": {},
+        "model": "gpt-5.6",
+        "discovered_models": []
+      },
+      "expected": {
+        "ok": true,
+        "value": "codex"
+      }
+    },
+    {
+      "name": "discovered model cannot guess provider when catalog is damaged",
+      "input": {
+        "op": "harness_for_model",
+        "catalog": {},
+        "model": "gpt-future",
+        "discovered_models": [
+          "gpt-future"
+        ]
+      },
+      "expected": {
+        "ok": false,
+        "error": "E_MODEL_CATALOG_INVALID"
+      }
+    },
+    {
+      "name": "supported model set merges defaults and discovery with stable ordering",
+      "input": {
+        "op": "supported_models",
+        "catalog": null,
+        "discovered_models": [
+          "gpt-future",
+          "gpt-future"
+        ]
+      },
+      "expected": {
+        "ok": true,
+        "value": [
+          "GLM-5.3",
+          "GLM-5.3-Flash",
+          "claude-fable-5-1",
+          "claude-haiku-4-5-20251001",
+          "claude-opus-5",
+          "claude-sonnet-5",
+          "deepseek-v4-flash",
+          "deepseek-v4-flash-vision-exp",
+          "deepseek-v4-pro",
+          "gpt-5.6",
+          "gpt-5.6-mini",
+          "gpt-5.6-nano",
+          "gpt-future"
+        ]
+      }
+    },
+    {
+      "name": "complete model set cannot omit unknown corrupt catalog history",
+      "input": {
+        "op": "supported_models",
+        "catalog": {},
+        "discovered_models": []
+      },
+      "expected": {
+        "ok": false,
+        "error": "E_MODEL_CATALOG_INVALID"
+      }
+    },
+    {
+      "name": "stored legacy ZWJ label is preserved verbatim",
+      "input": {
+        "op": "read",
+        "catalog": {
+          "schema_version": 1,
+          "models": [
+            {
+              "id": "legacy",
+              "name": "  👩‍💻  ",
+              "supports_images": true
+            }
+          ],
+          "retired_models": []
+        }
+      },
+      "expected": {
+        "ok": true,
+        "value": {
+          "schema_version": 1,
+          "models": [
+            {
+              "id": "legacy",
+              "name": "  👩‍💻  ",
+              "supports_images": true
+            }
+          ],
+          "retired_models": []
+        }
+      }
+    },
+    {
+      "name": "new input still rejects format characters",
+      "input": {
+        "op": "validate_models",
+        "models": [
+          {
+            "id": "new",
+            "name": "👩‍💻",
+            "supports_images": true
+          }
+        ],
+        "retired": false
+      },
+      "expected": {
+        "ok": false,
+        "error": "E_MODEL_CATALOG_INVALID"
+      }
+    },
+    {
+      "name": "stored format labels remain readable after retirement",
+      "input": {
+        "op": "lookup",
+        "catalog": {
+          "schema_version": 1,
+          "models": [
+            {
+              "id": "new",
+              "name": "New",
+              "supports_images": false
+            }
+          ],
+          "retired_models": [
+            {
+              "id": "legacy",
+              "name": "Old​Name",
+              "supports_images": true
+            }
+          ]
+        },
+        "model": "legacy"
+      },
+      "expected": {
+        "ok": true,
+        "value": {
+          "id": "legacy",
+          "name": "Old​Name",
+          "supports_images": true
+        }
+      }
+    },
+    {
+      "name": "stored compatibility still rejects control characters",
+      "input": {
+        "op": "read",
+        "catalog": {
+          "schema_version": 1,
+          "models": [
+            {
+              "id": "legacy",
+              "name": "Old\nName",
+              "supports_images": true
+            }
+          ],
+          "retired_models": []
+        }
+      },
+      "expected": {
+        "ok": false,
+        "error": "E_MODEL_CATALOG_INVALID"
+      }
+    },
+    {
+      "name": "saving a new choice retires legacy labels without rewriting them",
+      "input": {
+        "op": "save",
+        "catalog": {
+          "schema_version": 1,
+          "models": [
+            {
+              "id": "legacy",
+              "name": "👩‍💻",
+              "supports_images": true
+            }
+          ],
+          "retired_models": []
+        },
+        "request": {
+          "schema_version": 1,
+          "models": [
+            {
+              "id": "new",
+              "name": "New",
+              "supports_images": false
+            }
+          ]
+        }
+      },
+      "expected": {
+        "ok": true,
+        "value": {
+          "schema_version": 1,
+          "models": [
+            {
+              "id": "new",
+              "name": "New",
+              "supports_images": false
+            }
+          ],
+          "retired_models": [
+            {
+              "id": "deepseek-v4-flash",
+              "name": "V4 Flash",
+              "supports_images": true
+            },
+            {
+              "id": "deepseek-v4-flash-vision-exp",
+              "name": "Flash Exp",
+              "supports_images": true
+            },
+            {
+              "id": "deepseek-v4-pro",
+              "name": "V4 Pro",
+              "supports_images": false
+            },
+            {
+              "id": "legacy",
+              "name": "👩‍💻",
+              "supports_images": true
+            }
+          ]
+        }
+      }
+    }
+  ]
+}

@@ -62,7 +62,7 @@ sync
     entries['init'] = stat.S_IFREG | 0o755, (split[0] + warm).encode()
     initrd = work / 'cache-build-base.cpio'
     pack_newc(entries, initrd)
-    kernel = ROOT / 'apps/mobile/ios/Rish/GuestAssets/vmlinuz-virt-6.18.35'
+    kernel = ROOT / 'modules/rish/shared/GuestAssets/vmlinuz-virt-6.18.35'
     command = ['qemu-system-x86_64', '-accel', 'tcg,thread=single', '-machine', 'microvm,auto-kernel-cmdline=on',
                '-cpu', 'qemu64', '-m', '1024', '-smp', '1', '-kernel', str(kernel), '-initrd', str(initrd),
                '-append', 'console=ttyS0,115200n8 rdinit=/init panic=-1 oops=panic nokaslr',

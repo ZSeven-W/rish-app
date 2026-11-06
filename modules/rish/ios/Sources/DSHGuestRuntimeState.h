@@ -2,7 +2,7 @@
 
 NS_ASSUME_NONNULL_BEGIN
 
-/// Opaque process-local ownership; never serialized or supplied by JavaScript.
+/// Opaque process-local ownership; never serialized or supplied by the UI.
 @interface DSHGuestVMOwner : NSObject
 - (instancetype)init NS_UNAVAILABLE;
 + (instancetype)new NS_UNAVAILABLE;

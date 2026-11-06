@@ -48,7 +48,7 @@ typedef BOOL (^DSHLocalWorkspaceFaultHook)(NSString *stage);
 
 /// Native-only mutation guard for the exact workspace authority domain. The
 /// guard owns the shared `authority.lock` flock and releases it on dealloc.
-/// It never crosses the React Native bridge and must not be held while calling
+/// It never crosses the app UI bridge and must not be held while calling
 /// APIs that acquire workspace authority internally.
 @interface DSHLocalWorkspaceAuthorityMutationGuard : NSObject
 @end
@@ -59,8 +59,8 @@ FOUNDATION_EXPORT BOOL DSHLocalWorkspaceValidateBindingRevisionAdvance(
     NSNumber *proposedRevision,
     NSError * _Nullable * _Nullable error);
 
-/// Private native authority core. It owns no React bridge and therefore cannot
-/// be used by JavaScript to submit arbitrary registry or authority records.
+/// Private native authority core. It owns no native bridge and therefore cannot
+/// be used by the UI to submit arbitrary registry or authority records.
 /// Later tasks expose only bounded, purpose-specific bridge operations.
 @interface DSHLocalWorkspaceAccess : NSObject
 

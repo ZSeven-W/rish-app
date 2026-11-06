@@ -1,0 +1,16 @@
+Use case: ui-mockup
+Asset type: FINAL Rish responsive workspace SIDEBAR design, refined Codex-inspired AI coding assistant.
+Create a highly polished UI design board with ONE LARGE landscape iPad screen spanning the TOP and THREE iPhone portrait screens evenly spaced across the BOTTOM. Clear discrete captions. This is a practical high-fidelity interface specification. Flat front-on screens, no physical device hardware, neutral board background.
+Product architecture: every conversation is bound to a workspace; the default is “默认工作空间”. Global left navigation is ONLY conversations and settings. Files and Git are conversation-owned tools, NEVER global navigation tabs. No bottom tab bar.
+Style: minimalist Codex-like warm white, charcoal text/primary buttons, very subtle neutral borders, Lucide outline icons, clear Chinese SF-style typography, 12pt controls and 20pt panels. No blue accents or decorative gradients. Same 14–16pt type and 44pt target sizes on tablet and phone.
+TOP iPad LANDSCAPE, 1194×834 logical layout:
+Left ~220pt permanent conversation sidebar: Rish, 新建会话, 最近会话, conversation titles, bottom 设置.
+CENTER ~610pt stays a conversation titled “改进登录体验”, visible user instruction, polished assistant response and compact code block, composer docked at bottom. Center is the principal activity.
+RIGHT ~340pt is a true separate workspace SIDEBAR with its own header “工作区”, expand icon and close X; workspace selector “默认工作空间”, segmented “文件” / “Git” INSIDE this sidebar. Show a tidy file directory listing src, docs, README.md, Cargo.toml; below a compact selected file preview. Sidebar is visibly subordinate to chat and can be collapsed. Do not place Files/Git tabs across the main chat header. A small folder/sidebar toggle at main header right reopens it. No large blank tool pane or giant buttons.
+BOTTOM PHONE1 — Normal conversation:
+Header sidebar icon, title “改进登录体验”, right folder-outline “工作区” button. Small subtle workspace chip under title reading “默认工作空间”. Main full-width chat and bottom composer. NO always-visible Chat/Files/Git navigation strip. Preserve useful conversation space.
+BOTTOM PHONE2 — Workspace opened:
+Same chat dimmed behind a high bottom sheet covering ~80% height. Opaque white panel with top handle, header “工作区”, close X. Workspace selector “默认工作空间”; segmented 文件 / Git, 文件 selected; comfortable file/folder list, small 新建文件 and 新建文件夹 actions. Sheet fills width with 20pt corners; clear near-top placement, scrollable body. Closing returns to exact prior chat/draft.
+BOTTOM PHONE3 — Git in workspace sheet:
+Same bottom sheet and workspace identity, Git selected. Compact main branch summary, 获取/拉取/推送 row, clear staged and unstaged file groups, 暂存全部 and 提交 actions, small origin configuration row. Diff preview opens INSIDE this sheet, not a global navigation route. Use actual-looking but illustrative file labels without fake performance statistics.
+Use exact labels, minimal supporting copy, impeccable spacing, clear functional hierarchy. Captions: “iPad · 右侧工作区”, “iPhone · 对话”, “iPhone · 文件面板”, “iPhone · Git 面板”. No watermark.

@@ -1,5 +1,6 @@
 #import "AgentPreparedAttemptStore.h"
 #import "RishHarnessCatalog.h"
+#import "AssistantTaskExecutor.h"
 
 #import "DSHWorkspaceCanonical.h"
 
@@ -108,6 +109,7 @@ static NSDictionary *DSHPreparedConflict(NSDictionary *request,
 @property(nonatomic, strong, readwrite) DSHAgentToolRegistry *toolRegistry;
 @property(nonatomic, strong, readwrite) DSHSessionSnapshotStore *sessionSnapshotStore;
 @property(nonatomic, strong, readwrite) DSHAgentTranscriptStore *transcriptStore;
+@property(nonatomic, strong, readwrite) DSHAssistantTaskExecutor *assistantTaskExecutor;
 @end
 
 @implementation DSHAgentPreparedAttemptStore
@@ -124,6 +126,7 @@ static NSDictionary *DSHPreparedConflict(NSDictionary *request,
     _sessionSnapshotStore = sessionSnapshotStore;
     _transcriptStore = transcriptStore ?: [[DSHAgentTranscriptStore alloc]
         initWithWAL:wal];
+    _assistantTaskExecutor = [[DSHAssistantTaskExecutor alloc] initWithRootResolver:rootResolver];
   }
   return self;
 }
@@ -191,6 +194,18 @@ static NSDictionary *DSHPreparedConflict(NSDictionary *request,
     if (error != nullptr) *error = nil;
     return DSHPreparedConflict(request, @"E_AGENT_CONFLICT", observed);
   }
+  // Registry v5 is an app-private assistant capability. A request flag or a
+  // forged conversation identifier is insufficient: compare the committed
+  // conversation with the durable Rust AssistantStore before exposure.
+  NSDictionary *assistantContext = nil;
+  if ([request[@"registry_version"] isEqual:@5]) {
+    assistantContext = [self.assistantTaskExecutor assistantContextForConversation:conversation
+        registryVersion:request[@"registry_version"] error:nil];
+    if (assistantContext == nil) {
+      if (error != nullptr) *error = nil;
+      return DSHPreparedConflict(request, @"E_AGENT_CONFLICT", observed);
+    }
+  }
   NSString *workspaceId = request[@"workspace_id"] == NSNull.null
       ? nil : request[@"workspace_id"];
   NSString *projectId = request[@"project_id"] == NSNull.null
@@ -212,7 +227,7 @@ static NSDictionary *DSHPreparedConflict(NSDictionary *request,
   NSDictionary *registry = root == nil
       ? @{ @"schema_version" : @2, @"registry_version" : @2,
            @"toolset_sha256" : self.toolRegistry.toolsetSHA256, @"tools" : @[] }
-      : [self.toolRegistry registryForRoot:root error:&registryError];
+      : [self.toolRegistry registryForRoot:root version:request[@"registry_version"] error:&registryError];
   NSDictionary *policy = root == nil
       ? nil : [self.toolRegistry policyForRoot:root error:&registryError];
   if ((root != nil && (registry == nil || policy == nil)) ||
@@ -278,7 +293,7 @@ static NSDictionary *DSHPreparedConflict(NSDictionary *request,
       [self.wal currentTimestamp], [self.wal currentTimestamp],
     ];
     NSError *reduceError = nil;
-    NSDictionary *outcome = DSHPreparedReduce(@"transaction", @{
+    NSMutableDictionary *facts = [@{
       @"request" : request,
       @"request_sha256" : requestSHA,
       @"root" : DSHPreparedValue(root),
@@ -291,7 +306,9 @@ static NSDictionary *DSHPreparedConflict(NSDictionary *request,
       @"transcripts" : transcripts,
       @"transcript_refs" : transcriptRefs,
       @"timestamps" : timestamps,
-    }, nil, &reduceError);
+    } mutableCopy];
+    if (assistantContext != nil) facts[@"assistant_context"] = assistantContext;
+    NSDictionary *outcome = DSHPreparedReduce(@"transaction", facts, nil, &reduceError);
     if (outcome == nil) {
       if (mutationError != nullptr) *mutationError = reduceError;
       if (reduceError.code == DSHAgentNativeStoreErrorConflict) conflicted = YES;
@@ -306,6 +323,12 @@ static NSDictionary *DSHPreparedConflict(NSDictionary *request,
     if ([kind isEqualToString:@"replay"]) {
       publicResult = outcome[@"result"];
       // A replay publishes the stored result without changing the state.
+      return NO;
+    }
+    // Retiring a model cannot invalidate an already stored operation result.
+    // Only a fresh preparation requires a currently enabled provider model.
+    if (!DSHHarnessModelIsExecutable(request[@"model"])) {
+      DSHSetPreparedError(mutationError, DSHAgentNativeStoreErrorInvalidArgument);
       return NO;
     }
     if (![kind isEqualToString:@"commit"] ||
