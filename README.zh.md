@@ -39,6 +39,8 @@ apps/gpui/scripts/build-desktop.sh --run
 [开发指南](docs/development.md)；共享源码与桥接结构见 [GPUI 指南](apps/gpui/README.md)；
 已实现内容及待验证边界见 [迁移状态](docs/gpui-migration.md)。
 
+下一阶段目标、Mika/Poki 待调研任务及 fini 交接清单见 [Mobile Agent 路线图](ROADMAP.md)。
+
 ## 架构
 
 ```text

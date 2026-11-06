@@ -52,6 +52,8 @@ Android APKs, and tests. The [GPUI guide](apps/gpui/README.md) describes the sha
 source layout and host bridge. The [migration status](docs/gpui-migration.md)
 separates implemented code from validation still required.
 
+Next milestones and the fini handoff are tracked in the [Mobile Agent roadmap](ROADMAP.md).
+
 ## Architecture
 
 ```text

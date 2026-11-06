@@ -13,6 +13,7 @@ follow-up eligibility on top of that same controller. Attachments, complete
 settings and task Live Activity integration remain incomplete. A successful desktop preview or `cargo check` does not establish
 mobile feature parity. See the
 [migration and verification boundary](../../docs/gpui-migration.md).
+Next milestones and the fini handoff are in the [Mobile Agent roadmap](../../ROADMAP.md).
 
 ## Source layout
 
