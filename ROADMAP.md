@@ -1,6 +1,6 @@
 # Rish Mobile Agent Roadmap · fini 交接
 
-更新时间：2026-11-06。代码基线：[`ccd6d4e`](https://github.com/ZSeven-W/rish-app/commit/ccd6d4ee0d1db9c37500c66a62c73a829e390ebb)。
+更新时间：2026-11-07。代码基线：[`ccd6d4e`](https://github.com/ZSeven-W/rish-app/commit/ccd6d4ee0d1db9c37500c66a62c73a829e390ebb)。
 
 本文记录下一阶段目标与验收要求。未勾选项目均为待办，不能据此宣称功能已经可用。
 Mika、Poki 的调研也是待办；本次按用户要求直接记录目标，没有完成它们的技术评估。
@@ -27,6 +27,12 @@ GLES 显式路径通过启动和后台恢复图像验收，
 应用 UID 下，版本与 app-server 帮助命令均通过，生产认证入口仍关闭。普通 debug 与
 release 不包含 CLI；探测结果继续保留任务执行 unavailable，尚未交付安装器或任务适配。
 见 [Codex 离线探测记录](docs/p0-codex-probe-2026-11-06.md)。
+
+第五批推进：Android Codex 开发探测现已完成真实 stdio 协议握手、只读线程查询及正常退出。
+断网 API 33 arm64 模拟器下，两次独立请求均通过并完成临时目录与进程清理；修复了固定
+版本对查询参数的要求，并补齐协议错误、超时、取消与输出限额的回归覆盖。
+这仍是开发能力验证，未启用账号登录、模型调用或任务执行，P0 运行时适配继续待办。
+见 [Codex 协议验证记录](docs/p0-codex-protocol-2026-11-07.md)。
 
 ## 产品目标
 

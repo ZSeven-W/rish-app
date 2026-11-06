@@ -96,9 +96,13 @@ The production auth process factory checks `RISH_OFFICIAL_CLI_ENABLED` before
 availability, vault restoration or process start; bundling probe bytes cannot
 enable it. Normal debug and release remain CLI-disabled.
 
-Only `--version` and `app-server --help` run under the application UID. A successful
-receipt describes those offline command capabilities, while the runtime's task
-execution remains `unavailable`. The actual server initialization and task
-lifecycle described by the [official app-server documentation](https://learn.chatgpt.com/docs/app-server)
-remain a subsequent integration gate. Results, limits and reproduction are in
-[the development probe record](p0-codex-probe-2026-11-06.md).
+The development probe now also launches `app-server --stdio`, performs the
+`initialize` → `initialized` exchange, reads the empty loaded-thread list, and
+closes stdin to verify process shutdown. This uses a new empty home and keeps
+stdout JSONL separate from bounded stderr diagnostics. The receipt describes
+only those offline capabilities; the runtime's task execution remains
+`unavailable`. The task lifecycle from the
+[official app-server documentation](https://learn.chatgpt.com/docs/app-server)
+still requires its own adapter and acceptance. See the
+[initial command probe](p0-codex-probe-2026-11-06.md) and
+[protocol validation record](p0-codex-protocol-2026-11-07.md).

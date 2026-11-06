@@ -3,6 +3,7 @@ package tech.zseven.rish
 import android.content.Intent
 import android.os.Build
 import android.os.Bundle
+import android.os.ParcelFileDescriptor
 import android.os.Process
 import android.os.SystemClock
 import androidx.test.core.app.ApplicationProvider
@@ -24,7 +25,7 @@ import org.junit.runner.RunWith
 import tech.zseven.rish.runtime.AndroidSubscriptionAuthProcessFactory
 import tech.zseven.rish.runtime.CodexOfflineProbeService
 
-/** Proves only the two offline commands, under the installed application's UID. */
+/** Exercises offline commands and two fresh stdio handshakes under the app UID. */
 @RunWith(AndroidJUnit4::class)
 class AndroidCodexOfflineProbeTest {
     private val context = ApplicationProvider.getApplicationContext<android.app.Application>()
@@ -34,12 +35,10 @@ class AndroidCodexOfflineProbeTest {
         assumeTrue("The dedicated Codex probe package is not bundled", BuildConfig.RISH_CODEX_PROBE_BUNDLED)
         assertFalse("The legacy authentication probe must remain disabled", BuildConfig.RISH_OFFICIAL_CLI_ENABLED)
         assertTrue("The pinned Codex package requires arm64-v8a", Build.SUPPORTED_ABIS.contains("arm64-v8a"))
+        assertNoActiveNetwork("before_package_checks")
 
         val requestId = UUID.randomUUID().toString()
-        val probe = Intent(context, CodexOfflineProbeService::class.java)
-            .setAction(CodexOfflineProbeService.ACTION)
-            .putExtra(CodexOfflineProbeService.EXTRA_REQUEST_ID, requestId)
-            .putExtra(CodexOfflineProbeService.EXTRA_ENGINE_ID, "codex")
+        val probe = probeIntent(requestId)
         val service = context.packageManager.resolveService(probe, 0)
         assertNotNull("Codex probe builds must register their internal service", service)
         assertFalse("The offline probe service must not be exported", service!!.serviceInfo.exported)
@@ -77,21 +76,38 @@ class AndroidCodexOfflineProbeTest {
         assertTrue("The package receipt needs a SHA-256", Regex("[0-9a-f]{64}").matches(expectedHash))
         assertEquals("APK packaging must preserve the verified binary bytes", expectedHash, sha256(binary))
 
+        // A completed, reaped process and removed home must precede a second
+        // UUID. Neither request may reuse a live server or previous CLI state.
+        val requestIds = listOf(requestId, UUID.randomUUID().toString())
+        assertEquals(2, requestIds.toSet().size)
+        for ((index, id) in requestIds.withIndex()) {
+            runFreshProbe(id, expectedHash, index + 1)
+        }
+        assertNoActiveNetwork("after_both_probes")
+        assertFalse("Offline handshakes must not enable production authentication", authentication.available("codex"))
+    }
+
+    private fun runFreshProbe(requestId: String, expectedHash: String, iteration: Int) {
+        assertNoActiveNetwork("before_probe_$iteration")
+        val probe = probeIntent(requestId)
         val resultFile = CodexOfflineProbeService.resultFile(context, requestId)
         assertFalse("A fresh request must not consume a stale receipt", resultFile.exists())
+        assertRequestHomeRemoved(requestId)
         try {
             assertNotNull("The offline probe service did not start", context.startService(probe))
-            val deadline = SystemClock.uptimeMillis() + 45_000
+            val deadline = SystemClock.uptimeMillis() + 70_000
             while (!resultFile.isFile && SystemClock.uptimeMillis() < deadline) SystemClock.sleep(50)
-            assertTrue("The app-UID offline probe did not produce a receipt within 45 seconds", resultFile.isFile)
+            assertTrue("The app-UID offline probe did not produce a receipt within 70 seconds", resultFile.isFile)
             val result = JSONObject(resultFile.readText())
             InstrumentationRegistry.getInstrumentation().sendStatus(0, Bundle().apply {
+                putInt("codex_offline_probe_iteration", iteration)
                 putString("codex_offline_probe_receipt", result.toString())
             })
             val evidence = "Offline Codex probe receipt: $result"
             assertEquals(evidence, 1, result.getInt("schema_version"))
             assertEquals(evidence, "codex", result.getString("engine_id"))
             assertEquals(evidence, requestId, result.getString("request_id"))
+            assertEquals(evidence, "offline_app_server_capability", result.getString("probe_kind"))
             assertEquals(evidence, context.applicationInfo.uid, result.getInt("uid"))
             assertEquals(evidence, Process.myUid(), result.getInt("uid"))
             assertTrue(evidence, result.getInt("pid") > 0)
@@ -102,6 +118,7 @@ class AndroidCodexOfflineProbeTest {
             // An incompatibility is a failed enabled-lane test with its real
             // receipt, not an assumption skip or a claim of task readiness.
             assertEquals(evidence, "available", result.getJSONObject("capability").getString("state"))
+            assertEquals(evidence, "offline_app_server_passed", result.getJSONObject("capability").getString("reason_code"))
             val execution = result.getJSONObject("execution")
             assertEquals(evidence, "unavailable", execution.getString("state"))
             assertEquals(evidence, "cli_adapter_unavailable", execution.getString("reason_code"))
@@ -125,6 +142,19 @@ class AndroidCodexOfflineProbeTest {
             assertEquals(evidence, "0.153.4", Regex("\\d+\\.\\d+\\.\\d+")
                 .find(version.getString("output"))?.value)
             assertTrue(evidence, commands.getJSONObject(1).getString("output").contains("app-server"))
+
+            val appServer = result.getJSONObject("app_server")
+            assertEquals(evidence, "available", appServer.getString("state"))
+            assertEquals(evidence, "stdio_handshake_passed", appServer.getString("reason_code"))
+            assertEquals(evidence, true, appServer.get("initialize_acknowledged"))
+            assertEquals(evidence, true, appServer.get("initialized_sent"))
+            assertEquals(evidence, 0, appServer.getInt("loaded_thread_count"))
+            assertTrue(evidence, appServer.getString("user_agent").isNotBlank())
+            assertEquals(evidence, 0, appServer.getInt("exit_code"))
+            assertEquals(evidence, true, appServer.get("process_reaped"))
+            assertTrue(evidence, appServer.getString("stderr").length <= 8192)
+            assertTrue(evidence, appServer.has("stderr_truncated"))
+            assertNoActiveNetwork("after_probe_$iteration")
         } finally {
             // Service destruction requests cancellation asynchronously. Wait
             // until teardown and final publication finish before deleting our
@@ -135,9 +165,39 @@ class AndroidCodexOfflineProbeTest {
                 SystemClock.uptimeMillis() < cleanupDeadline) SystemClock.sleep(50)
             assertFalse("Codex probe worker did not finish cleanup within 8 seconds: $requestId",
                 CodexOfflineProbeService.requestIsActive(requestId))
+            assertRequestHomeRemoved(requestId)
             assertTrue("Could not remove the completed probe receipt: $requestId",
                 !resultFile.exists() || resultFile.delete())
         }
+    }
+
+    private fun probeIntent(requestId: String): Intent =
+        Intent(context, CodexOfflineProbeService::class.java)
+            .setAction(CodexOfflineProbeService.ACTION)
+            .putExtra(CodexOfflineProbeService.EXTRA_REQUEST_ID, requestId)
+            .putExtra(CodexOfflineProbeService.EXTRA_ENGINE_ID, "codex")
+
+    private fun assertNoActiveNetwork(phase: String) {
+        // Read-only shell observation avoids adding a production permission.
+        // Fail closed if this Android version does not expose the expected line.
+        val descriptor = InstrumentationRegistry.getInstrumentation().uiAutomation
+            .executeShellCommand("dumpsys connectivity")
+        val dump = ParcelFileDescriptor.AutoCloseInputStream(descriptor)
+            .bufferedReader().use { it.readText() }
+        assertTrue("Offline probe requires 'Active default network: none' ($phase)",
+            Regex("(?m)^\\s*Active default network:\\s*none\\s*$").containsMatchIn(dump))
+        InstrumentationRegistry.getInstrumentation().sendStatus(0, Bundle().apply {
+            putString("codex_offline_network_assertion", "$phase: Active default network: none")
+        })
+    }
+
+    private fun assertRequestHomeRemoved(requestId: String) {
+        val homes = File(context.cacheDir, "codex-offline-probe-homes")
+        if (!homes.exists()) return
+        val children = homes.listFiles()
+        assertNotNull("Could not inspect the offline probe homes", children)
+        assertFalse("The request left a temporary Codex home behind: $requestId",
+            children!!.any { it.name.startsWith("codex-probe-$requestId-") })
     }
 
     private fun strings(array: JSONArray): List<String> =

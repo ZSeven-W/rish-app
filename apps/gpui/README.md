@@ -258,18 +258,24 @@ adb shell am instrument -w -r \
   tech.zseven.rish.gpui.test/androidx.test.runner.AndroidJUnitRunner
 ```
 
-This internal, nonexported service runs only `codex --version` and
-`codex app-server --help` under the app UID, using a fresh empty credential home,
-bounded output and timeout/cancellation. Its correlated receipt includes the
-actual exit status, UID and binary SHA-256. A failed enabled probe is a test
-failure with a real receipt. `execution` stays `unavailable`; this is not a task
-adapter, server startup, login, or downloadable Android installer. The existing
-authentication process factory remains disabled even when Codex is bundled.
+This internal, nonexported service checks `codex --version` and
+`codex app-server --help`, then launches `codex app-server --stdio` under the app
+UID. With a fresh empty credential home, it sends `initialize`, waits for the
+matching response, sends `initialized`, and checks that `thread/loaded/list`
+returns an empty list. It closes stdin and requires a successful process exit.
+The JSONL protocol and stderr use separate bounded readers, with timeout and
+cancellation. The correlated receipt includes the exit status, UID, binary
+SHA-256 and handshake result. A failed enabled probe is a test failure with a
+real receipt. `execution` stays `unavailable`; the task adapter, login and Android
+downloadable installer remain pending. The existing authentication process
+factory remains disabled even when Codex is bundled. The device lane explicitly
+checks that no network is active and runs two fresh requests to verify cleanup.
 
 Omit `rishCodexProbeDir` for the ordinary debug APK; it contains no CLI or probe
 receipt and disables the service. Release always omits the CLI, receipt and
 service registration, including when the property is supplied. See the
-[Codex probe validation record](../../docs/p0-codex-probe-2026-11-06.md).
+[initial command probe record](../../docs/p0-codex-probe-2026-11-06.md) and
+[app-server protocol record](../../docs/p0-codex-protocol-2026-11-07.md).
 
 On the isolated API 33 phone emulator, use emulator `-gpu host`. The default
 Android startup detects the exact known-corrupt SwiftShader Vulkan adapter and

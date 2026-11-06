@@ -34,34 +34,62 @@ class CodexOfflineProbeTest {
     }
 
     private fun probe(root: File, receipt: JSONObject, runner: CodexProbeCommandRunner,
-                      bundled: Boolean = true, abis: List<String> = listOf("arm64-v8a")) = CodexOfflineProbe(
-        File(root, "native"), File(root, "homes"), { receipt.toString() }, bundled, abis, 10123, 456, runner,
+                      bundled: Boolean = true, abis: List<String> = listOf("arm64-v8a"),
+                      appServerRunner: CodexAppServerProbeRunner = CodexAppServerProbeRunner { _, _, _ -> appServerSuccess() },
+    ) = CodexOfflineProbe(
+        File(root, "native"), File(root, "homes"), { receipt.toString() }, bundled, abis, 10123, 456,
+        runner, appServerRunner,
     )
 
     private fun reason(result: JSONObject) = result.getJSONObject("capability").getString("reason_code")
     private fun success(command: CodexProbeCommand) = CodexProbeCommandResult(0,
         if (command == CodexProbeCommand.VERSION) "codex-cli 0.153.4\n" else "Usage: codex app-server [OPTIONS]\n")
+    private fun appServerSuccess() = JSONObject().put("state", "available")
+        .put("reason_code", "stdio_handshake_passed").put("process_reaped", true)
+        .put("initialize_acknowledged", true).put("initialized_sent", true)
+        .put("loaded_thread_count", 0).put("user_agent", "fixture").put("exit_code", 0)
+    private val noAppServer = CodexAppServerProbeRunner { _, _, _ ->
+        throw AssertionError("app-server must not start")
+    }
 
-    @Test fun successfulProbeOnlyUsesTwoCommandsAndNeverClaimsTaskExecution() = fixture { root, binary, receipt ->
-        val calls = mutableListOf<CodexProbeCommand>()
+    @Test fun successfulProbeRunsCommandsThenAppServerInOneFreshHomeAndNeverClaimsTaskExecution() = fixture { root, binary, receipt ->
+        val calls = mutableListOf<String>()
         val homes = mutableListOf<File>()
         val runner = CodexProbeCommandRunner { executable, command, home, _ ->
             assertEquals(binary, executable)
             assertTrue(home.isDirectory)
             assertFalse(File(home, ".codex/auth.json").exists())
-            calls += command; homes += home
+            calls += command.id; homes += home
             File(home, "generated.txt").writeText("ephemeral")
             success(command)
         }
-        val request = UUID.randomUUID().toString()
-        val result = probe(root, receipt, runner).run(request)
-        assertEquals(listOf(CodexProbeCommand.VERSION, CodexProbeCommand.APP_SERVER_HELP), calls)
-        assertEquals("available", result.getJSONObject("capability").getString("state"))
-        assertEquals("unavailable", result.getJSONObject("execution").getString("state"))
-        assertEquals("cli_adapter_unavailable", result.getJSONObject("execution").getString("reason_code"))
-        assertEquals(request, result.getString("request_id"))
-        assertEquals(10123, result.getInt("uid"))
-        assertEquals(CodexOfflineProbe.sha256(binary), result.getJSONObject("artifact").getString("binary_sha256"))
+        val appServer = CodexAppServerProbeRunner { executable, home, _ ->
+            assertEquals(binary, executable)
+            assertEquals(listOf("version", "app_server_help"), calls.takeLast(2))
+            assertEquals(listOf(home, home), homes.takeLast(2))
+            assertEquals("ephemeral", File(home, "generated.txt").readText())
+            calls += "app_server"; homes += home
+            File(home, "server-generated.txt").writeText("ephemeral server state")
+            appServerSuccess()
+        }
+        val subject = probe(root, receipt, runner, appServerRunner = appServer)
+        repeat(2) {
+            val request = UUID.randomUUID().toString()
+            val result = subject.run(request)
+            assertEquals("available", result.getJSONObject("capability").getString("state"))
+            assertEquals("offline_app_server_passed", reason(result))
+            assertEquals("offline_app_server_capability", result.getString("probe_kind"))
+            assertEquals(appServerSuccess().toString(), result.getJSONObject("app_server").toString())
+            assertEquals(2, result.getJSONArray("commands").length())
+            assertEquals("unavailable", result.getJSONObject("execution").getString("state"))
+            assertEquals("cli_adapter_unavailable", result.getJSONObject("execution").getString("reason_code"))
+            assertEquals(request, result.getString("request_id"))
+            assertEquals(10123, result.getInt("uid"))
+            assertEquals(CodexOfflineProbe.sha256(binary), result.getJSONObject("artifact").getString("binary_sha256"))
+            assertTrue(homes.all { !it.exists() })
+        }
+        assertEquals(List(2) { listOf("version", "app_server_help", "app_server") }.flatten(), calls)
+        assertEquals(2, homes.distinct().size)
         assertTrue(homes.all { !it.exists() })
     }
 
@@ -95,20 +123,36 @@ class CodexOfflineProbeTest {
             File(directory, "temporary").writeText("data")
             CodexProbeCommandResult(exitCode = 159, output = "bad system call")
         }
-        val result = probe(root, receipt, runner).run(UUID.randomUUID().toString())
+        val result = probe(root, receipt, runner, appServerRunner = noAppServer).run(UUID.randomUUID().toString())
         assertEquals("command_nonzero_exit", reason(result))
         assertEquals(159, result.getJSONArray("commands").getJSONObject(0).getInt("exit_code"))
         assertEquals(1, calls)
         assertFalse(home!!.exists())
     }
 
+    @Test fun secondCommandFailureStopsBeforeAppServerAndCleansItsHome() = fixture { root, _, receipt ->
+        val calls = mutableListOf<CodexProbeCommand>()
+        var home: File? = null
+        val runner = CodexProbeCommandRunner { _, command, directory, _ ->
+            calls += command; home = directory
+            if (command == CodexProbeCommand.VERSION) success(command)
+            else CodexProbeCommandResult(exitCode = 7, output = "help failed")
+        }
+        val result = probe(root, receipt, runner, appServerRunner = noAppServer).run(UUID.randomUUID().toString())
+        assertEquals("command_nonzero_exit", reason(result))
+        assertEquals(listOf(CodexProbeCommand.VERSION, CodexProbeCommand.APP_SERVER_HELP), calls)
+        assertEquals(2, result.getJSONArray("commands").length())
+        assertEquals(7, result.getJSONArray("commands").getJSONObject(1).getInt("exit_code"))
+        assertFalse(home!!.exists())
+    }
+
     @Test fun versionMismatchAndUnrecognizedHelpRemainUnavailable() = fixture { root, _, receipt ->
         val wrong = CodexProbeCommandRunner { _, _, _, _ -> CodexProbeCommandResult(0, "codex-cli 0.153.40") }
-        assertEquals("cli_version_mismatch", reason(probe(root, receipt, wrong).run(UUID.randomUUID().toString())))
+        assertEquals("cli_version_mismatch", reason(probe(root, receipt, wrong, appServerRunner = noAppServer).run(UUID.randomUUID().toString())))
         val wrongHelp = CodexProbeCommandRunner { _, command, _, _ ->
             if (command == CodexProbeCommand.VERSION) success(command) else CodexProbeCommandResult(0, "unexpected help")
         }
-        assertEquals("app_server_help_unrecognized", reason(probe(root, receipt, wrongHelp).run(UUID.randomUUID().toString())))
+        assertEquals("app_server_help_unrecognized", reason(probe(root, receipt, wrongHelp, appServerRunner = noAppServer).run(UUID.randomUUID().toString())))
     }
 
     @Test fun cancelledRequestNeverLaunchesAndCancellationBetweenCommandsStops() = fixture { root, _, receipt ->
@@ -116,11 +160,81 @@ class CodexOfflineProbeTest {
         val runner = CodexProbeCommandRunner { _, command, _, cancelled ->
             calls++; cancelled.set(true); success(command)
         }
-        assertEquals("cancelled", reason(probe(root, receipt, runner).run(UUID.randomUUID().toString(), AtomicBoolean(true))))
+        assertEquals("cancelled", reason(probe(root, receipt, runner, appServerRunner = noAppServer).run(UUID.randomUUID().toString(), AtomicBoolean(true))))
         assertEquals(0, calls)
-        assertEquals("cancelled", reason(probe(root, receipt, runner).run(UUID.randomUUID().toString())))
+        assertEquals("cancelled", reason(probe(root, receipt, runner, appServerRunner = noAppServer).run(UUID.randomUUID().toString())))
         assertEquals(1, calls)
         assertEquals(0, File(root, "homes").listFiles()!!.size)
+    }
+
+    @Test fun cancellationAfterHelpStopsBeforeAppServerAndCleansItsHome() = fixture { root, _, receipt ->
+        var home: File? = null
+        val runner = CodexProbeCommandRunner { _, command, directory, cancelled ->
+            home = directory
+            if (command == CodexProbeCommand.APP_SERVER_HELP) cancelled.set(true)
+            success(command)
+        }
+        val result = probe(root, receipt, runner, appServerRunner = noAppServer).run(UUID.randomUUID().toString())
+        assertEquals("cancelled", reason(result))
+        assertEquals(2, result.getJSONArray("commands").length())
+        assertFalse(home!!.exists())
+    }
+
+    @Test fun appServerFailurePreservesCommandEvidenceAndItsReasonAndCleansHome() = fixture { root, _, receipt ->
+        var home: File? = null
+        val runner = CodexProbeCommandRunner { _, command, _, _ -> success(command) }
+        val serverResult = appServerSuccess().put("state", "unavailable")
+            .put("reason_code", "app_server_initialize_failed").put("initialize_acknowledged", false)
+        val appServer = CodexAppServerProbeRunner { _, directory, _ ->
+            home = directory
+            File(directory, "partial-server-state").writeText("ephemeral")
+            serverResult
+        }
+        val result = probe(root, receipt, runner, appServerRunner = appServer).run(UUID.randomUUID().toString())
+        assertEquals("unavailable", result.getJSONObject("capability").getString("state"))
+        assertEquals("app_server_initialize_failed", reason(result))
+        assertEquals(serverResult.toString(), result.getJSONObject("app_server").toString())
+        val commands = result.getJSONArray("commands")
+        assertEquals(2, commands.length())
+        for ((index, command) in CodexProbeCommand.values().withIndex()) {
+            assertEquals(command.id, commands.getJSONObject(index).getString("id"))
+            assertEquals(success(command).output, commands.getJSONObject(index).getString("output"))
+            assertEquals(0, commands.getJSONObject(index).getInt("exit_code"))
+        }
+        assertFalse(home!!.exists())
+    }
+
+    @Test fun successfulHandshakeCannotClaimAvailableUntilItsProcessIsReaped() = fixture { root, _, receipt ->
+        val runner = CodexProbeCommandRunner { _, command, _, _ -> success(command) }
+        for (reaped in listOf(false, "true", JSONObject.NULL)) {
+            var home: File? = null
+            val appServer = CodexAppServerProbeRunner { _, directory, _ ->
+                home = directory
+                appServerSuccess().put("process_reaped", reaped)
+            }
+            val result = probe(root, receipt, runner, appServerRunner = appServer).run(UUID.randomUUID().toString())
+            assertEquals("unavailable", result.getJSONObject("capability").getString("state"))
+            assertEquals("app_server_process_not_reaped", reason(result))
+            assertEquals(reaped, result.getJSONObject("app_server").get("process_reaped"))
+            assertEquals(2, result.getJSONArray("commands").length())
+            assertFalse(home!!.exists())
+        }
+    }
+
+    @Test fun cancellationDuringAppServerRejectsAnOtherwiseSuccessfulReceiptAndCleansHome() = fixture { root, _, receipt ->
+        var home: File? = null
+        val runner = CodexProbeCommandRunner { _, command, _, _ -> success(command) }
+        val appServer = CodexAppServerProbeRunner { _, directory, cancelled ->
+            home = directory
+            cancelled.set(true)
+            appServerSuccess()
+        }
+        val result = probe(root, receipt, runner, appServerRunner = appServer).run(UUID.randomUUID().toString())
+        assertEquals("unavailable", result.getJSONObject("capability").getString("state"))
+        assertEquals("cancelled", reason(result))
+        assertEquals(appServerSuccess().toString(), result.getJSONObject("app_server").toString())
+        assertEquals(2, result.getJSONArray("commands").length())
+        assertFalse(home!!.exists())
     }
 
     @Test fun cleanupNeverFollowsSymlinksOutOfTheFreshHome() = fixture { root, _, receipt ->
@@ -129,7 +243,7 @@ class CodexOfflineProbeTest {
             if (command == CodexProbeCommand.VERSION) Files.createSymbolicLink(File(home, "link").toPath(), outside.toPath())
             success(command)
         }
-        assertEquals("offline_commands_passed", reason(probe(root, receipt, runner).run(UUID.randomUUID().toString())))
+        assertEquals("offline_app_server_passed", reason(probe(root, receipt, runner).run(UUID.randomUUID().toString())))
         assertEquals("keep", outside.readText())
     }
 

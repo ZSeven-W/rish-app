@@ -10,7 +10,7 @@ import java.security.MessageDigest
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
 
-/** This capability probe never starts a server, restores credentials, or runs a task. */
+/** Checks fixed offline commands and a stdio handshake without credentials or tasks. */
 internal class CodexOfflineProbe(
     private val nativeDirectory: File,
     private val workDirectory: File,
@@ -20,6 +20,7 @@ internal class CodexOfflineProbe(
     private val uid: Int,
     private val pid: Int,
     private val commandRunner: CodexProbeCommandRunner = BoundedCodexProbeCommandRunner(),
+    private val appServerRunner: CodexAppServerProbeRunner = BoundedCodexAppServerProbeRunner(),
 ) {
     fun run(requestId: String, cancelled: AtomicBoolean = AtomicBoolean()): JSONObject {
         require(validRequestId(requestId))
@@ -69,8 +70,17 @@ internal class CodexOfflineProbe(
                 }
             }
             if (cancelled.get()) return fail(result, "cancelled")
+            val appServer = appServerRunner.run(executable, home, cancelled)
+            result.put("app_server", appServer)
+            if (cancelled.get()) return fail(result, "cancelled")
+            if (appServer.optString("state") != "available") {
+                return fail(result, appServer.optString("reason_code").ifBlank { "app_server_probe_failed" })
+            }
+            if (appServer.opt("process_reaped") != true) {
+                return fail(result, "app_server_process_not_reaped")
+            }
             result.put("capability", JSONObject().put("state", "available")
-                .put("reason_code", "offline_commands_passed"))
+                .put("reason_code", "offline_app_server_passed"))
             return result
         } catch (_: Exception) {
             return fail(result, if (cancelled.get()) "cancelled" else "probe_io_error")
@@ -116,8 +126,10 @@ internal class CodexOfflineProbe(
 
         fun envelope(requestId: String, uid: Int, pid: Int): JSONObject = JSONObject()
             .put("schema_version", 1).put("engine_id", "codex").put("request_id", requestId)
-            .put("uid", uid).put("pid", pid).put("probe_kind", "offline_command_capability")
+            .put("uid", uid).put("pid", pid).put("probe_kind", "offline_app_server_capability")
             .put("commands", JSONArray())
+            .put("app_server", JSONObject().put("state", "unavailable")
+                .put("reason_code", "not_probed").put("process_reaped", false))
             .put("capability", JSONObject().put("state", "unavailable").put("reason_code", "not_probed"))
             .put("execution", JSONObject().put("state", "unavailable").put("reason_code", "cli_adapter_unavailable"))
 
