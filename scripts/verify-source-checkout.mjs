@@ -15,6 +15,7 @@ export const requiredFiles = [
   'apps/gpui/vendor/gpui-mobile/Cargo.toml',
   'apps/gpui/vendor/gpui-mobile/UPSTREAM.json',
   'apps/gpui/vendor/gpui-mobile/RISH-PATCHES.txt',
+  'apps/gpui/vendor/gpui-mobile/src/android/surface_lifecycle.rs',
   'apps/gpui/vendor/gpui-mobile/LICENSE-APACHE',
   'apps/gpui/vendor/gpui-pre-wgpu/Cargo.toml',
   'apps/gpui/vendor/gpui-pre-wgpu/UPSTREAM.toml',

@@ -233,23 +233,48 @@ Android platform services and native dependencies live under
 Guest or official CLI payloads. Availability is determined by native
 capabilities, not by the presence of a tab or button.
 
-For the isolated API 33 phone emulator, the tested GLES route uses emulator
-`-gpu host -feature -Vulkan` and a process-local `WGPU_BACKEND=gl`. Disabling
-Vulkan adapters alone is insufficient: creating a Vulkan surface can still
-claim the native window before GLES configures it. The default app backend
-selection remains unchanged; SwiftShader Vulkan popup corruption is still open.
+On the isolated API 33 phone emulator, use emulator `-gpu host`. The default
+Android startup detects the exact known-corrupt SwiftShader Vulkan adapter and
+uses GLES only after a surface-free GL device probe passes. Other Vulkan
+adapters and explicit `WGPU_BACKEND` / `ZED_DEVICE_ID` overrides are preserved.
+This is a compatibility workaround; explicitly selecting SwiftShader Vulkan
+still reproduces corruption. A backend choice must precede surface creation:
+Vulkan can claim the native window even if its adapter is never selected.
 After building/installing the app and test APK on a fresh portrait phone in
-light mode, run the pixel and background/resume regression with:
+light mode, run the default-backend pixel and background/resume regression with:
 
 ```sh
-adb shell am instrument -w -r -e backend gl \
+adb shell am instrument -w -r \
   -e class tech.zseven.rish.gpui.ModelPickerRendererTest \
   tech.zseven.rish.gpui.test/androidx.test.runner.AndroidJUnitRunner
 ```
 
-The test sets the override before creating the Activity and restores the prior
-environment afterward. Omitting `-e backend gl` exercises the default backend.
-It never sends a message; screenshots are saved in the target app's cache.
+The test checks four window detach/reattach cycles, readiness, the opaque panel
+and retained title glyphs. Add `-e backend gl` or `-e backend vulkan` to test an
+explicit backend; the prior environment is restored afterward. It never sends
+a message; screenshots are saved in the target app's cache.
+
+On an isolated Pixel XL fixture (1440×2560, 560 dpi), the opt-in
+`ModelDraftAcceptanceTest` uses real touches and native keyboard input to save a
+synthetic manual model, choose it and retain an unsent draft. Run the methods
+separately, with an external process stop between preparation and restoration:
+
+```sh
+adb shell am instrument -w -r -e modelDraftQa true -e backend auto \
+  -e manual 700,1375 -e save 700,2006 \
+  -e class tech.zseven.rish.gpui.ModelDraftAcceptanceTest#prepareModelAndDraft \
+  tech.zseven.rish.gpui.test/androidx.test.runner.AndroidJUnitRunner
+adb shell am force-stop tech.zseven.rish.gpui
+adb shell pidof tech.zseven.rish.gpui # Must be empty before the next invocation.
+adb shell am instrument -w -r -e modelDraftQa true -e backend auto \
+  -e class tech.zseven.rish.gpui.ModelDraftAcceptanceTest#restoreAfterProcessRestart \
+  tech.zseven.rish.gpui.test/androidx.test.runner.AndroidJUnitRunner
+```
+
+The test refuses an existing draft or synthetic model. It reads the native
+catalog/session authority to verify the UI result and checks the new launch ID,
+unchanged persisted digest/generation, selected model and actual native text.
+No credentials, model discovery or sends are involved.
 
 ## Input and persistence
 

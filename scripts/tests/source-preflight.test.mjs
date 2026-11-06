@@ -132,6 +132,12 @@ test('malformed vendored Git provenance is rejected without crashing the audit',
   edit(root, 'apps/gpui/vendor/gpui-mobile/UPSTREAM.json', () => '{');
   assert.ok(auditSource(root).some(error => error.includes('gpui-mobile revision differs from Cargo.toml')));
 });
+test('the Android surface lifecycle policy must be present in source archives', t => {
+  const root = fixture(t);
+  const policy = 'apps/gpui/vendor/gpui-mobile/src/android/surface_lifecycle.rs';
+  fs.unlinkSync(path.join(root, policy));
+  assert.ok(auditSource(root).some(error => error.includes(`${policy}: required source file is missing`)));
+});
 test('a stale mobile backend revision is rejected before Cargo builds', t => {
   const root = fixture(t);
   edit(root, 'apps/gpui/mobile/Cargo.toml', text => text.replace(/rev = "[a-f0-9]{40}"/, `rev = "${'a'.repeat(40)}"`));

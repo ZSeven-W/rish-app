@@ -1,5 +1,7 @@
 // Rish compatibility policy shared by browser WebGL and native OpenGL ES.
 // The renderer's texture transport needs no storage buffers or compute work.
+#[cfg(any(target_os = "android", test))]
+use wgpu::{AdapterInfo, DeviceType};
 use wgpu::{Backend, Backends, Features, Limits, PresentMode};
 
 pub(crate) fn supported_present_mode(
@@ -13,6 +15,45 @@ pub(crate) fn supported_present_mode(
 
 pub(super) fn native_instance_backends() -> Backends {
     (Backends::VULKAN | Backends::GL).with_env()
+}
+
+// This is an observed Android emulator compatibility exception, not a
+// blacklist of software/virtual Vulkan devices or a repair of the driver.
+#[cfg(any(target_os = "android", test))]
+pub(super) fn known_android_vulkan_adapters(adapters: &[AdapterInfo]) -> bool {
+    !adapters.is_empty()
+        && adapters.iter().all(|info| {
+            info.backend == Backend::Vulkan
+                && info.device_type == DeviceType::VirtualGpu
+                && info.vendor == 0x1ae0
+                && info.device == 0xc0de
+                && info.name == "SwiftShader Device (LLVM 10.0.0)"
+        })
+}
+
+#[cfg(any(target_os = "android", test))]
+pub(super) fn android_default_backends(
+    requested: Backends,
+    backend_override: bool,
+    device_override: bool,
+    vulkan_adapters: &[AdapterInfo],
+    gl_device_usable: bool,
+) -> Backends {
+    if !backend_override
+        && !device_override
+        && requested.contains(Backends::VULKAN | Backends::GL)
+        && known_android_vulkan_adapters(vulkan_adapters)
+        && gl_device_usable
+    {
+        requested.difference(Backends::VULKAN)
+    } else {
+        requested
+    }
+}
+
+#[cfg(any(target_os = "android", test))]
+pub(super) fn gl_renderer_limits_supported(available: &Limits) -> bool {
+    required_limits(Backend::Gl, available.clone()).check_limits(available)
 }
 
 pub(super) fn uses_texture_instances(backend: Backend) -> bool {
@@ -37,6 +78,114 @@ pub(super) fn dual_source_blending(backend: Backend, available: Features) -> boo
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn known_swiftshader() -> AdapterInfo {
+        AdapterInfo {
+            name: "SwiftShader Device (LLVM 10.0.0)".into(),
+            vendor: 0x1ae0,
+            device: 0xc0de,
+            device_type: DeviceType::VirtualGpu,
+            device_pci_bus_id: String::new(),
+            driver: String::new(),
+            driver_info: String::new(),
+            backend: Backend::Vulkan,
+            subgroup_min_size: 0,
+            subgroup_max_size: 0,
+            transient_saves_memory: false,
+        }
+    }
+
+    #[test]
+    fn android_uses_gl_only_for_the_observed_vulkan_signature_and_usable_gl() {
+        let defaults = Backends::VULKAN | Backends::GL;
+        let adapters = [known_swiftshader()];
+        assert_eq!(
+            android_default_backends(defaults, false, false, &adapters, true),
+            Backends::GL
+        );
+        // GL compilation or enumeration alone cannot establish device support.
+        assert_eq!(
+            android_default_backends(defaults, false, false, &adapters, false),
+            defaults
+        );
+    }
+
+    #[test]
+    fn android_preserves_empty_mixed_physical_and_unknown_vulkan_adapters() {
+        let defaults = Backends::VULKAN | Backends::GL;
+        let known = known_swiftshader();
+        let mut physical = known.clone();
+        physical.device_type = DeviceType::IntegratedGpu;
+        let mut unknown = known.clone();
+        unknown.name = "SwiftShader Device (LLVM 11.0.0)".into();
+        let mut other_vendor = known.clone();
+        other_vendor.vendor = 0x1234;
+        let mut other_device = known.clone();
+        other_device.device = 0x5678;
+        let mut other_backend = known.clone();
+        other_backend.backend = Backend::Gl;
+        for adapters in [
+            vec![],
+            vec![known, physical.clone()],
+            vec![physical],
+            vec![unknown],
+            vec![other_vendor],
+            vec![other_device],
+            vec![other_backend],
+        ] {
+            assert_eq!(
+                android_default_backends(defaults, false, false, &adapters, true),
+                defaults
+            );
+        }
+    }
+
+    #[test]
+    fn android_never_rewrites_explicit_backend_or_device_selection() {
+        let defaults = Backends::VULKAN | Backends::GL;
+        let adapters = [known_swiftshader()];
+        for (backends, backend_override, device_override) in [
+            (defaults, true, false),
+            (defaults, false, true),
+            (defaults, true, true),
+            (Backends::VULKAN, false, false),
+            (Backends::GL, false, false),
+        ] {
+            assert_eq!(
+                android_default_backends(
+                    backends,
+                    backend_override,
+                    device_override,
+                    &adapters,
+                    true,
+                ),
+                backends
+            );
+        }
+    }
+
+    #[test]
+    fn android_rejects_gl_with_zero_vertex_buffer_limits() {
+        let defaults = Backends::VULKAN | Backends::GL;
+        let adapters = [known_swiftshader()];
+        let available = Limits::downlevel_webgl2_defaults();
+        assert!(gl_renderer_limits_supported(&available));
+        let unusable = Limits {
+            max_vertex_buffers: 0,
+            ..available
+        };
+        assert!(!gl_renderer_limits_supported(&unusable));
+        assert_eq!(
+            android_default_backends(
+                defaults,
+                false,
+                false,
+                &adapters,
+                gl_renderer_limits_supported(&unusable),
+            ),
+            defaults
+        );
+    }
 
     #[test]
     fn fifo_only_surface_rejects_mailbox_on_startup_and_replacement() {

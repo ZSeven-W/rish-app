@@ -45,11 +45,20 @@ class ModelPickerRendererTest {
             initial.recycle()
             tap(x, y)
             Thread.sleep(1_000)
-            repeat(3) { frame ->
-                if (frame == 1) {
+            var initialTitlePixels = 0
+            repeat(5) { frame ->
+                if (frame > 0) {
                     scenario.moveToState(Lifecycle.State.CREATED)
+                    val stoppedDeadline = SystemClock.uptimeMillis() + 5_000
+                    while (GpuiActivity.nativeIsInitialized() && SystemClock.uptimeMillis() < stoppedDeadline) {
+                        Thread.sleep(25)
+                    }
+                    assertTrue("A stopped Activity must not advertise a usable renderer",
+                        !GpuiActivity.nativeIsInitialized())
                     scenario.moveToState(Lifecycle.State.RESUMED)
                     Thread.sleep(1_000)
+                    assertTrue("A resumed Activity must have a configured surface",
+                        GpuiActivity.nativeIsInitialized())
                 }
                 val bitmap = capture("model-picker-open-$frame.png")
                 try {
@@ -68,6 +77,20 @@ class ModelPickerRendererTest {
                     }
                     val ratio = opaque.toDouble() / sampled
                     assertTrue("Opaque model panel fraction $ratio in frame $frame; inspect saved PNG", ratio > 0.98)
+                    // The title also uses the retained glyph atlas. An opaque
+                    // panel alone would miss text disappearing after reattach.
+                    var titlePixels = 0
+                    for (yPixel in bitmap.height * 25 / 100 until bitmap.height * 30 / 100) {
+                        for (xPixel in bitmap.width * 25 / 100 until bitmap.width * 75 / 100) {
+                            val pixel = bitmap.getPixel(xPixel, yPixel)
+                            if (Color.red(pixel) < 96 && Color.green(pixel) < 96 &&
+                                Color.blue(pixel) < 96) titlePixels++
+                        }
+                    }
+                    assertTrue("The model picker title must be visible in frame $frame", titlePixels > 200)
+                    if (frame == 0) initialTitlePixels = titlePixels
+                    else assertTrue("The title glyphs must survive window replacement in frame $frame",
+                        titlePixels in (initialTitlePixels * 9 / 10)..(initialTitlePixels * 11 / 10))
                 } finally {
                     bitmap.recycle()
                 }

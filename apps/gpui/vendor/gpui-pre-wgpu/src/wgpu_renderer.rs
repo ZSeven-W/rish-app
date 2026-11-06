@@ -181,7 +181,9 @@ enum InstanceData {
 struct WgpuResources {
     device: Arc<wgpu::Device>,
     queue: Arc<wgpu::Queue>,
-    surface: wgpu::Surface<'static>,
+    // Detach only the native-window connection; device resources and atlas
+    // remain valid across Android TerminateWindow / InitWindow.
+    surface: Option<wgpu::Surface<'static>>,
     pipelines: WgpuPipelines,
     bind_group_layouts: WgpuBindGroupLayouts,
     atlas_sampler: wgpu::Sampler,
@@ -427,6 +429,9 @@ impl WgpuRenderer {
         };
         // Configure the surface immediately. The adapter selection process already validated
         // that this adapter can successfully configure this surface.
+        #[cfg(not(target_family = "wasm"))]
+        configure_surface_checked(&surface, &context.device, &surface_config)?;
+        #[cfg(target_family = "wasm")]
         surface.configure(&context.device, &surface_config);
 
         let queue = Arc::clone(&context.queue);
@@ -565,7 +570,7 @@ impl WgpuRenderer {
         let resources = WgpuResources {
             device,
             queue,
-            surface,
+            surface: Some(surface),
             pipelines,
             bind_group_layouts,
             atlas_sampler,
@@ -1143,6 +1148,10 @@ impl WgpuRenderer {
             let Some(resources) = self.resources.as_mut() else {
                 return;
             };
+            if resources.surface.is_none() {
+                resources.invalidate_intermediate_textures();
+                return;
+            }
 
             // Wait for any in-flight GPU work to complete before destroying textures
             if let Err(e) = resources.device.poll(wgpu::PollType::Wait {
@@ -1162,6 +1171,8 @@ impl WgpuRenderer {
 
             resources
                 .surface
+                .as_ref()
+                .expect("surface checked above")
                 .configure(&resources.device, &surface_config);
 
             // Invalidate intermediate textures - they will be lazily recreated
@@ -1219,9 +1230,9 @@ impl WgpuRenderer {
             let Some(resources) = self.resources.as_mut() else {
                 return;
             };
-            resources
-                .surface
-                .configure(&resources.device, &surface_config);
+            if let Some(surface) = resources.surface.as_ref() {
+                surface.configure(&resources.device, &surface_config);
+            }
             resources.pipelines = Self::create_pipelines(
                 &resources.device,
                 &resources.bind_group_layouts,
@@ -1279,7 +1290,7 @@ impl WgpuRenderer {
         // Android background/rotation transitions).  Attempting to acquire
         // a texture from an unconfigured surface can block indefinitely on
         // some drivers (Adreno).
-        if !self.surface_configured {
+        if !self.has_surface() {
             return false;
         }
 
@@ -1309,7 +1320,13 @@ impl WgpuRenderer {
 
         self.atlas.before_frame();
 
-        let frame = match self.resources().surface.get_current_texture() {
+        let frame = match self
+            .resources()
+            .surface
+            .as_ref()
+            .expect("surface checked above")
+            .get_current_texture()
+        {
             wgpu::CurrentSurfaceTexture::Success(frame) => frame,
             wgpu::CurrentSurfaceTexture::Suboptimal(frame) => {
                 // Textures must be destroyed before the surface can be reconfigured.
@@ -1318,6 +1335,8 @@ impl WgpuRenderer {
                 let resources = self.resources_mut();
                 resources
                     .surface
+                    .as_ref()
+                    .expect("surface checked above")
                     .configure(&resources.device, &surface_config);
                 return false;
             }
@@ -1326,6 +1345,8 @@ impl WgpuRenderer {
                 let resources = self.resources_mut();
                 resources
                     .surface
+                    .as_ref()
+                    .expect("surface checked above")
                     .configure(&resources.device, &surface_config);
                 return false;
             }
@@ -1970,7 +1991,7 @@ impl WgpuRenderer {
         Ok(())
     }
 
-    /// Mark the surface as unconfigured so rendering is skipped until a new
+    /// Release the surface so rendering is skipped until a new
     /// surface is provided via [`replace_surface`](Self::replace_surface).
     ///
     /// This does **not** drop the renderer — the device, queue, atlas, and
@@ -1979,10 +2000,20 @@ impl WgpuRenderer {
     /// surface later without losing cached atlas textures.
     pub fn unconfigure_surface(&mut self) {
         self.surface_configured = false;
-        // Drop intermediate textures since they reference the old surface size.
         if let Some(res) = self.resources.as_mut() {
+            // A flag alone leaves the EGL/Vulkan native-window connection
+            // alive. Drop it before NativeActivity acknowledges destruction.
+            res.surface.take();
             res.invalidate_intermediate_textures();
         }
+    }
+
+    pub fn has_surface(&self) -> bool {
+        self.surface_configured
+            && self
+                .resources
+                .as_ref()
+                .is_some_and(|resources| resources.surface.is_some())
     }
 
     /// Replace the wgpu surface with a new one (e.g. after Android destroys
@@ -2000,6 +2031,9 @@ impl WgpuRenderer {
         config: WgpuSurfaceConfig,
         instance: &wgpu::Instance,
     ) -> anyhow::Result<()> {
+        // Never configure a second connection while the old native surface is
+        // still attached. On failure remain detached for the caller's retry.
+        self.unconfigure_surface();
         let window_handle = window
             .window_handle()
             .map_err(|e| anyhow::anyhow!("Failed to get window handle: {e}"))?;
@@ -2022,8 +2056,8 @@ impl WgpuRenderer {
             "Replacement surface reports no supported presentation modes"
         );
 
-        let width = (config.size.width.0 as u32).max(1);
-        let height = (config.size.height.0 as u32).max(1);
+        let width = (config.size.width.0 as u32).clamp(1, self.max_texture_size);
+        let height = (config.size.height.0 as u32).clamp(1, self.max_texture_size);
 
         let alpha_mode = if config.transparent {
             self.transparent_alpha_mode
@@ -2031,10 +2065,11 @@ impl WgpuRenderer {
             self.opaque_alpha_mode
         };
 
-        self.surface_config.width = width;
-        self.surface_config.height = height;
-        self.surface_config.alpha_mode = alpha_mode;
-        self.surface_config.present_mode = supported_present_mode(
+        let mut surface_config = self.surface_config.clone();
+        surface_config.width = width;
+        surface_config.height = height;
+        surface_config.alpha_mode = alpha_mode;
+        surface_config.present_mode = supported_present_mode(
             config
                 .preferred_present_mode
                 .or(Some(self.surface_config.present_mode)),
@@ -2045,14 +2080,15 @@ impl WgpuRenderer {
             let res = self
                 .resources
                 .as_mut()
-                .expect("GPU resources not available");
-            surface.configure(&res.device, &self.surface_config);
-            res.surface = surface;
+                .context("GPU resources not available")?;
+            configure_surface_checked(&surface, &res.device, &surface_config)?;
+            res.surface = Some(surface);
 
             // Invalidate intermediate textures — they'll be recreated lazily.
             res.invalidate_intermediate_textures();
         }
 
+        self.surface_config = surface_config;
         self.surface_configured = true;
 
         Ok(())
@@ -2061,6 +2097,7 @@ impl WgpuRenderer {
     pub fn destroy(&mut self) {
         // Release surface-bound GPU resources eagerly so the underlying native
         // window can be destroyed before the renderer itself is dropped.
+        self.surface_configured = false;
         self.resources.take();
     }
 
@@ -2151,6 +2188,27 @@ impl WgpuRenderer {
         log::info!("GPU recovery complete");
         Ok(())
     }
+}
+
+// Surface::configure returns (), reporting failures through the device's
+// error scopes instead. Do not publish a ready surface on a rejected configure.
+#[cfg(not(target_family = "wasm"))]
+fn configure_surface_checked(
+    surface: &wgpu::Surface<'_>,
+    device: &wgpu::Device,
+    config: &wgpu::SurfaceConfiguration,
+) -> anyhow::Result<()> {
+    let out_of_memory = device.push_error_scope(wgpu::ErrorFilter::OutOfMemory);
+    let internal = device.push_error_scope(wgpu::ErrorFilter::Internal);
+    let validation = device.push_error_scope(wgpu::ErrorFilter::Validation);
+    surface.configure(device, config);
+    let validation = gpui::block_on(validation.pop());
+    let internal = gpui::block_on(internal.pop());
+    let out_of_memory = gpui::block_on(out_of_memory.pop());
+    if let Some(error) = validation.or(internal).or(out_of_memory) {
+        anyhow::bail!("surface configuration failed: {error}");
+    }
+    Ok(())
 }
 
 fn instance_range(range: Range<usize>) -> Range<u32> {

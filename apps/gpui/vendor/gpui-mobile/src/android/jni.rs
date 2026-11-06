@@ -48,11 +48,18 @@ use std::{
     time::Duration,
 };
 
-/// Whether the deferred init-window callback has already been invoked.
-///
-/// Reset to `false` on `TerminateWindow` so that when the surface is
-/// recreated on resume the init callbacks run again.
-static INIT_WINDOW_DONE: AtomicBool = AtomicBool::new(false);
+#[path = "surface_lifecycle.rs"]
+mod surface_lifecycle;
+use surface_lifecycle::SurfaceLifecycle;
+
+thread_local! {
+    // Lifecycle events and all draw callbacks run on the native render thread.
+    static SURFACE_LIFECYCLE: RefCell<SurfaceLifecycle> = RefCell::default();
+}
+
+fn surface_ready() -> bool {
+    SURFACE_LIFECYCLE.with(|state| state.borrow().is_ready())
+}
 
 /// Whether the GPUI native library has completed initialization.
 ///
@@ -63,22 +70,12 @@ pub static NATIVE_INITIALIZED: AtomicBool = AtomicBool::new(false);
 
 /// Deferred lifecycle flags.
 ///
-/// We must NOT call `win.set_active()` or `platform.did_enter_background()`
-/// inside `handle_main_event` (which runs within `poll_events`).
-/// The android-activity crate's Java-side callbacks block on a condvar
-/// waiting for the native thread to finish processing the command.
-/// If our handler tries to acquire the window `state` lock (a
-/// `parking_lot::Mutex`), and a background thread is holding it (e.g.
-/// during a render pass), we deadlock: native waits on the lock,
-/// the lock holder waits for native rendering to complete, but native
-/// is stuck.
-///
-/// Instead, the handlers set these flags and the main loop body
-/// processes them AFTER `poll_events` returns.
+/// android-activity holds its inner guard while calling `handle_main_event`.
+/// Work that calls AndroidApp or Java, or invokes GPUI callbacks, stays outside
+/// that guard. TerminateWindow is the exception: its narrow GPU/window detach
+/// path makes no such calls and must finish before Android receives the ACK.
 static PAUSE_PENDING: AtomicBool = AtomicBool::new(false);
 static RESUME_PENDING: AtomicBool = AtomicBool::new(false);
-static TERM_WINDOW_PENDING: AtomicBool = AtomicBool::new(false);
-static INIT_WINDOW_PENDING: AtomicBool = AtomicBool::new(false);
 static WINDOW_RESIZED_PENDING: AtomicBool = AtomicBool::new(false);
 static CONFIG_CHANGED_PENDING: AtomicBool = AtomicBool::new(false);
 // Child input windows transfer focus without pausing the Activity. Keep the
@@ -536,10 +533,10 @@ pub fn run_event_loop(app: &AndroidApp) {
     // prevents the system's FocusEvent from being consumed, triggering an
     // ANR after 10 seconds.
     //
-    // Instead we check each loop iteration: if a primary window exists and
+    // Instead we check each loop iteration: if a configured surface exists and
     // the callback is still pending, invoke it *after* poll_events has
     // returned so focus/input events have already been drained.
-    INIT_WINDOW_DONE.store(false, Ordering::Relaxed);
+    SURFACE_LIFECYCLE.with(|state| state.borrow_mut().terminate());
     let mut iteration: u64 = 0;
     let mut last_heartbeat = std::time::Instant::now();
     let mut app_is_active = false;
@@ -553,7 +550,7 @@ pub fn run_event_loop(app: &AndroidApp) {
             log::info!(
                 "run_event_loop: heartbeat — iteration={}, init_done={}, active={}",
                 iteration,
-                INIT_WINDOW_DONE.load(Ordering::Relaxed),
+                surface_ready(),
                 app_is_active,
             );
             last_heartbeat = now;
@@ -599,23 +596,13 @@ pub fn run_event_loop(app: &AndroidApp) {
             });
         };
 
-        // 1. TerminateWindow — unconfigure surface, release native window
-        if TERM_WINDOW_PENDING.swap(false, Ordering::Relaxed) {
-            log::info!("deferred: TerminateWindow (iter={})", iteration);
-            INIT_WINDOW_DONE.store(false, Ordering::Relaxed);
-            *LAST_CHROME_STYLE.lock().unwrap() = None;
-            if let Some(platform) = platform() {
-                if let Some(win) = platform.primary_window() {
-                    win.term_window();
-                }
-            }
-            // Drain immediately — Java thread may be blocked on InitWindow condvar.
-            drain_events(app);
-        }
-
-        // 2. InitWindow — replace surface on existing renderer, or create new
-        if INIT_WINDOW_PENDING.swap(false, Ordering::Relaxed) {
+        // InitWindow stays outside poll_events: it reads AndroidApp and can
+        // compile GPU resources. Failed attempts retry with a bounded delay;
+        // TerminateWindow cancels that retry synchronously before its ACK.
+        if SURFACE_LIFECYCLE.with(|state| state.borrow_mut().begin_init(std::time::Instant::now()))
+        {
             log::info!("deferred: InitWindow (iter={})", iteration);
+            let mut initialized = false;
             if let Some(platform) = platform() {
                 if let Some(native_window) = app.native_window() {
                     let width = native_window.width();
@@ -634,24 +621,23 @@ pub fn run_event_loop(app: &AndroidApp) {
                         match existing.init_window(native_window, gpu_ctx) {
                             Ok(()) => {
                                 log::info!("InitWindow: reinitialised existing window");
+                                initialized = existing.has_surface();
+                                // Trigger GPUI resize only after a successful
+                                // attachment, outside the AndroidApp guard.
+                                existing.handle_resize();
+                                let cr = app.content_rect();
+                                existing.update_safe_area_from_content_rect(
+                                    cr.left, cr.top, cr.right, cr.bottom,
+                                );
                             }
                             Err(e) => {
                                 log::error!("failed to reinit window surface: {e:#}");
                             }
                         }
-
-                        // Trigger GPUI resize so layout adapts to new dimensions.
-                        existing.handle_resize();
-
-                        let cr = app.content_rect();
-                        existing.update_safe_area_from_content_rect(
-                            cr.left, cr.top, cr.right, cr.bottom,
-                        );
-
-                        INIT_WINDOW_DONE.store(true, Ordering::Relaxed);
                     } else {
                         match platform.open_window(native_window, scale_factor, false) {
                             Ok(win) => {
+                                initialized = win.has_surface();
                                 log::info!(
                                     "window opened — id={:#x} scale={:.1}",
                                     win.id(),
@@ -670,6 +656,11 @@ pub fn run_event_loop(app: &AndroidApp) {
                     }
                 }
             }
+            SURFACE_LIFECYCLE.with(|state| {
+                state
+                    .borrow_mut()
+                    .finish_init(initialized, std::time::Instant::now())
+            });
             FOCUS_CHANGED_PENDING.store(true, Ordering::Release);
             // Drain — Java thread may have queued ConfigChanged/WindowResized.
             drain_events(app);
@@ -760,9 +751,12 @@ pub fn run_event_loop(app: &AndroidApp) {
         process_input_events(app);
 
         // Deferred initialisation callbacks (runs once).
-        if !INIT_WINDOW_DONE.load(Ordering::Relaxed) {
+        if surface_ready() && !NATIVE_INITIALIZED.load(Ordering::Acquire) {
             if let Some(platform) = platform() {
-                if platform.primary_window().is_some() {
+                if platform
+                    .primary_window()
+                    .is_some_and(|win| win.has_surface())
+                {
                     if let Some(finish_cb) = platform.take_finish_launching_callback() {
                         log::info!("invoking finish_launching callback (iter={})", iteration);
                         finish_cb();
@@ -774,23 +768,24 @@ pub fn run_event_loop(app: &AndroidApp) {
                         init_cb(win);
                     }
 
-                    INIT_WINDOW_DONE.store(true, Ordering::Relaxed);
                     // Readiness must not precede the first rendered frame.
                     // Callers may immediately pause/close the Activity once ready.
                     // Render first frame immediately.
                     platform.flush_main_thread_tasks();
                     if let Some(win) = platform.primary_window() {
                         win.request_frame();
+                        if win.has_presented_frame() {
+                            NATIVE_INITIALIZED.store(true, Ordering::Release);
+                            log::info!("NATIVE_INITIALIZED = true");
+                        }
                     }
-                    NATIVE_INITIALIZED.store(true, Ordering::Release);
-                    log::info!("NATIVE_INITIALIZED = true");
                 }
             }
         }
 
         // ── Render ──
         if let Some(platform) = platform() {
-            if INIT_WINDOW_DONE.load(Ordering::Relaxed) && app_is_active {
+            if surface_ready() && app_is_active {
                 platform.flush_main_thread_tasks();
                 if let Some(win) = platform.primary_window() {
                     win.request_frame();
@@ -869,14 +864,24 @@ fn handle_main_event(_app: &AndroidApp, event: MainEvent<'_>) {
     match event {
         MainEvent::InitWindow { .. } => {
             log::info!("MainEvent::InitWindow");
-            // Defer to after poll_events to avoid deadlock with state lock.
-            INIT_WINDOW_PENDING.store(true, Ordering::Relaxed);
+            NATIVE_INITIALIZED.store(false, Ordering::Release);
+            // AndroidApp access and GPU initialization must run after its
+            // poll_events guard is released.
+            SURFACE_LIFECYCLE.with(|state| state.borrow_mut().request_init());
         }
 
         MainEvent::TerminateWindow { .. } => {
             log::info!("MainEvent::TerminateWindow");
-            // Defer to after poll_events to avoid deadlock with state lock.
-            TERM_WINDOW_PENDING.store(true, Ordering::Relaxed);
+            SURFACE_LIFECYCLE.with(|state| state.borrow_mut().terminate());
+            NATIVE_INITIALIZED.store(false, Ordering::Release);
+            // android-activity ACKs window destruction when this callback
+            // returns. Drop the GPU surface before that ACK and before our
+            // NativeWindow reference. This render-thread-only path does not
+            // call AndroidApp, Java, or application callbacks.
+            if let Some(window) = platform().and_then(|platform| platform.primary_window()) {
+                window.term_window();
+            }
+            *LAST_CHROME_STYLE.lock().unwrap() = None;
         }
 
         MainEvent::WindowResized { .. } => {
@@ -1046,12 +1051,9 @@ pub fn init_platform(app: &AndroidApp) -> Arc<AndroidPlatform> {
     let previous_app = ANDROID_APP.lock().unwrap().replace(app.clone());
     drop(previous_app);
     for flag in [
-        &INIT_WINDOW_DONE,
         &NATIVE_INITIALIZED,
         &PAUSE_PENDING,
         &RESUME_PENDING,
-        &TERM_WINDOW_PENDING,
-        &INIT_WINDOW_PENDING,
         &WINDOW_RESIZED_PENDING,
         &CONFIG_CHANGED_PENDING,
         &ACTIVITY_RESUMED,
@@ -1062,6 +1064,7 @@ pub fn init_platform(app: &AndroidApp) -> Arc<AndroidPlatform> {
     ] {
         flag.store(false, Ordering::Release);
     }
+    SURFACE_LIFECYCLE.with(|state| state.borrow_mut().terminate());
     *LAST_CHROME_STYLE.lock().unwrap() = None;
     let platform = Arc::new(AndroidPlatform::new(false));
     PLATFORM.with(|slot| {

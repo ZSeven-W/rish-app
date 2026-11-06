@@ -86,7 +86,23 @@ Pure policy tests cover the Fifo-only startup/resume case and a change in
 surface capabilities. Actual background/resume and pixel verification must
 still be run on the resulting APK; this policy test is not lifecycle evidence.
 
-2026-11-06 emulator evidence
+Native surface ownership
+unconfigure_surface now drops the actual wgpu Surface, releasing its native
+EGL/Vulkan connection, while keeping the device, queue, atlas and pipelines.
+An unavailable surface is represented separately from a retained renderer.
+Draw and resize skip detached surfaces; transparency changes retain their
+configuration without reconnecting a destroyed window. Replacement drops any
+previous surface before creating the next, and publishes readiness only after
+Surface::configure's device error scopes confirm success. Failed attempts stay
+detached for the Android event loop's bounded retry. The Android caller releases
+the surface before its NativeWindow reference and before the destruction ACK.
+
+This ownership fix is separate from backend selection or shader transport.
+The historical GLES acceptance below predates it. The rebuilt APK subsequently
+passed four same-Activity stop/resume cycles, readiness and panel/title pixel
+checks. It does not establish a fix for SwiftShader Vulkan itself.
+
+2026-11-06 first GLES emulator evidence (historical)
 The new ModelPickerRendererTest injects a real tap and checks that an empty
 model panel is opaque in three captured frames, including after an Activity
 CREATED -> RESUMED transition. On Pixel XL API 33 / arm64 with host GLES and
@@ -96,6 +112,22 @@ Mailbox unsupported on a Fifo-only surface. Before the GL path fixes, creation
 failed on compute limits and then on the native-window connection.
 
 The same popup test fails on the emulator's SwiftShader Vulkan path. This
-remains a separate, unresolved rendering defect; no automatic backend switch
-or physical-device compatibility claim is made. Run the test with the explicit
-backend argument described in apps/gpui/README.md.
+remains a separate rendering defect. See the newer compatibility handling below;
+no physical-device compatibility claim is made.
+
+Known Android SwiftShader compatibility
+Before creating any surface, default Android startup checks for an exclusively
+known Vulkan adapter set: SwiftShader Device (LLVM 10.0.0), VirtualGpu, vendor
+0x1ae0, device 0xc0de. Only if a GL adapter meets renderer limits, supports the
+instance texture format and successfully creates a device is the old probe
+instance dropped and a GL-only instance created. Empty, mixed, physical or
+unknown Vulkan sets retain the existing backend mask; explicit WGPU_BACKEND
+and ZED_DEVICE_ID overrides are never rewritten. Unusable GL also retains the
+original mask. Adapter ranking, shader math and dependency pins are unchanged.
+
+The original storage transport and a temporary Vulkan texture-transport A/B
+both showed corruption; the diagnostic override was removed. On the final APK,
+default host-GPU emulator startup selects GL and passes four detach/reattach
+cycles with panel, title glyph and readiness assertions. Explicit Vulkan still
+fails the pixel test. This is a narrow compatibility workaround, not a claimed
+Vulkan driver fix. Full evidence is in docs/p0-android-2026-11-06.md.

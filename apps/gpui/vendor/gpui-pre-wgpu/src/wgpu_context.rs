@@ -283,15 +283,103 @@ impl WgpuContext {
         // OpSource debug metadata. Preserve validation and every other flag.
         #[cfg(target_os = "android")]
         let flags = flags.difference(wgpu::InstanceFlags::DEBUG);
-        wgpu::Instance::new(wgpu::InstanceDescriptor {
-            // Apply WGPU_BACKEND before surface creation: Android Vulkan can
-            // acquire the native window even when its adapter is not selected.
-            backends: backend_policy::native_instance_backends(),
-            flags,
-            backend_options: wgpu::BackendOptions::default(),
-            memory_budget_thresholds: wgpu::MemoryBudgetThresholds::default(),
-            display: Some(display),
-        })
+        let display: Arc<dyn wgpu::wgt::WgpuHasDisplayHandle> = display.into();
+        let create_instance = |backends| {
+            wgpu::Instance::new(wgpu::InstanceDescriptor {
+                // Apply WGPU_BACKEND before surface creation: Android Vulkan can
+                // acquire the native window even when its adapter is not selected.
+                backends,
+                flags,
+                backend_options: wgpu::BackendOptions::default(),
+                memory_budget_thresholds: wgpu::MemoryBudgetThresholds::default(),
+                display: Some(Box::new(Arc::clone(&display))),
+            })
+        };
+        let backends = backend_policy::native_instance_backends();
+        let instance = create_instance(backends);
+        #[cfg(target_os = "android")]
+        {
+            let backend_override = std::env::var_os("WGPU_BACKEND").is_some();
+            let device_override = std::env::var_os("ZED_DEVICE_ID").is_some();
+            let required_backends = wgpu::Backends::VULKAN | wgpu::Backends::GL;
+            if !backend_override
+                && !device_override
+                && backends.contains(required_backends)
+                && wgpu::Instance::enabled_backend_features().contains(required_backends)
+            {
+                // No native-window surface exists yet. Adapter enumeration and
+                // the GL device probe cannot let Vulkan acquire that window.
+                let vulkan_adapters: Vec<_> =
+                    gpui::block_on(instance.enumerate_adapters(wgpu::Backends::VULKAN))
+                        .iter()
+                        .map(wgpu::Adapter::get_info)
+                        .collect();
+                if backend_policy::known_android_vulkan_adapters(&vulkan_adapters) {
+                    let gl_device_usable = gpui::block_on(Self::probe_android_gl(&instance));
+                    let compatible_backends = backend_policy::android_default_backends(
+                        backends,
+                        backend_override,
+                        device_override,
+                        &vulkan_adapters,
+                        gl_device_usable,
+                    );
+                    if compatible_backends != backends {
+                        // A backend mask cannot be changed after creation. Drop
+                        // the surface-free probe before making the GL instance.
+                        drop(instance);
+                        log::warn!(
+                            "Android compatibility: avoiding known rendering corruption on \
+                             SwiftShader Device (LLVM 10.0.0) Vulkan (0x1ae0:0xc0de); \
+                             using GL after its device probe passed"
+                        );
+                        return create_instance(compatible_backends);
+                    }
+                    log::warn!(
+                        "Android compatibility: known SwiftShader Vulkan rendering corruption, \
+                         but no usable GL device; retaining the requested backends"
+                    );
+                }
+            }
+        }
+        instance
+    }
+
+    #[cfg(target_os = "android")]
+    async fn probe_android_gl(instance: &wgpu::Instance) -> bool {
+        for adapter in instance.enumerate_adapters(wgpu::Backends::GL).await {
+            let info = adapter.get_info();
+            if !backend_policy::gl_renderer_limits_supported(&adapter.limits()) {
+                log::warn!(
+                    "Android GL compatibility probe rejected {:?}: renderer limits unsupported",
+                    info.name
+                );
+                continue;
+            }
+            let instance_usages =
+                wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST;
+            if !adapter
+                .get_texture_format_features(TextureFormat::Rgba32Uint)
+                .allowed_usages
+                .contains(instance_usages)
+            {
+                log::warn!(
+                    "Android GL compatibility probe rejected {:?}: instance texture unsupported",
+                    info.name
+                );
+                continue;
+            }
+            // Reuse the real device contract, including required features,
+            // limits and color-atlas format selection. Surface presentation is
+            // still validated by normal renderer startup, not by this probe.
+            match Self::create_device(&adapter).await {
+                Ok(_) => return true,
+                Err(error) => log::warn!(
+                    "Android GL compatibility probe rejected {:?}: {error:#}",
+                    info.name
+                ),
+            }
+        }
+        false
     }
 
     pub fn check_compatible_with_surface(&self, surface: &wgpu::Surface<'_>) -> anyhow::Result<()> {

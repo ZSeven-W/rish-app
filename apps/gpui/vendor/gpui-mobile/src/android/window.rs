@@ -287,8 +287,12 @@ struct WindowState {
     /// Created once and reused across window re-creations.
     gpu_context: GpuContext,
 
-    /// The wgpu renderer from `gpui_wgpu`.  `None` while the surface is unavailable.
+    /// The renderer survives surface detachment so cached atlas IDs stay valid.
+    /// Its surface is absent between term_window and a successful init_window.
     renderer: Option<WgpuRenderer>,
+    /// Reset for each surface attachment; only its own presented frame can
+    /// satisfy native startup/resume readiness.
+    presented_frame: bool,
 
     /// Cached display geometry.
     width: i32,
@@ -400,6 +404,7 @@ impl AndroidWindow {
             native_window: Some(native_window),
             gpu_context,
             renderer: Some(renderer),
+            presented_frame: false,
             width,
             height,
             scale_factor,
@@ -432,6 +437,7 @@ impl AndroidWindow {
             native_window: None,
             gpu_context: Rc::new(RefCell::new(None)),
             renderer: None,
+            presented_frame: false,
             width,
             height,
             scale_factor,
@@ -468,6 +474,16 @@ impl AndroidWindow {
 
         let mut state = self.state.lock();
         let transparent = state.transparent;
+        state.presented_frame = false;
+        state.is_active = false;
+        self.active
+            .store(false, std::sync::atomic::Ordering::Relaxed);
+        // Even a repeated InitWindow must release the old GPU connection before
+        // releasing its NativeWindow and configuring the replacement.
+        if let Some(renderer) = state.renderer.as_mut() {
+            renderer.unconfigure_surface();
+        }
+        state.native_window = None;
 
         // If a renderer already exists (kept alive across term_window), just
         // replace its surface.  This preserves the atlas and all cached
@@ -528,17 +544,19 @@ impl AndroidWindow {
     /// Called when `APP_CMD_TERM_WINDOW` fires and the surface is about to be
     /// destroyed.
     ///
-    /// Drops the renderer (and therefore the wgpu surface) but keeps the window
-    /// struct alive so callbacks are preserved.
+    /// Drops the wgpu surface before the native window, retaining the renderer,
+    /// atlas and logical window callbacks. Called synchronously before the
+    /// NativeActivity destruction ACK on the native render thread.
     pub fn term_window(&self) {
         let mut state = self.state.lock();
+        state.presented_frame = false;
 
-        // Unconfigure the surface so the renderer stops trying to present,
-        // but keep the renderer alive so the atlas (with all cached
+        // Release the actual surface, not just its draw flag. Keep the renderer
+        // alive so the atlas (with all cached
         // texture IDs) survives across the background/foreground cycle.
         if let Some(ref mut renderer) = state.renderer {
             renderer.unconfigure_surface();
-            log::info!("AndroidWindow::term_window — surface unconfigured (renderer kept alive)");
+            log::info!("AndroidWindow::term_window — surface released (renderer kept alive)");
         }
 
         // Release our reference on the native window.
@@ -682,10 +700,13 @@ impl AndroidWindow {
             }
         };
 
-        renderer.draw(scene);
+        let presented = renderer.draw(scene);
 
         // Put the renderer back.
         let mut state = self.state.lock();
+        // Draw and lifecycle callbacks share the native render thread, so a
+        // detach/replacement cannot interleave while the renderer is taken.
+        state.presented_frame |= presented;
         state.renderer = Some(renderer);
     }
 
@@ -942,7 +963,22 @@ impl AndroidWindow {
 
     /// Whether the window currently has an active wgpu surface.
     pub fn has_surface(&self) -> bool {
-        self.state.lock().renderer.is_some()
+        let state = self.state.lock();
+        state.native_window.is_some()
+            && state
+                .renderer
+                .as_ref()
+                .is_some_and(WgpuRenderer::has_surface)
+    }
+
+    pub fn has_presented_frame(&self) -> bool {
+        let state = self.state.lock();
+        state.presented_frame
+            && state.native_window.is_some()
+            && state
+                .renderer
+                .as_ref()
+                .is_some_and(WgpuRenderer::has_surface)
     }
 
     /// Returns the sprite atlas from the renderer, if available.
@@ -2256,6 +2292,11 @@ mod tests {
     #[test]
     fn request_frame_callback_fires() {
         let w = AndroidWindow::headless(1080, 1920, 2.0);
+        w.request_frame();
+        assert!(
+            !w.has_presented_frame(),
+            "no callback is not a presentation"
+        );
         let count = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
         let c2 = count.clone();
 
@@ -2267,6 +2308,10 @@ mod tests {
         w.request_frame();
 
         assert_eq!(count.load(std::sync::atomic::Ordering::Relaxed), 2);
+        assert!(
+            !w.has_presented_frame(),
+            "a callback that never draws must not publish readiness"
+        );
     }
 
     #[test]

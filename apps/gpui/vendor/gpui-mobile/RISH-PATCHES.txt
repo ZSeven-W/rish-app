@@ -15,8 +15,9 @@ Android NativeActivity recreation:
 - Keep the existing NativeActivity event/ACK protocol. No thread unsafe Send
   additions, skipped lifecycle acknowledgements, or process restart workaround.
 
-Only src/android/jni.rs is changed from this pinned upstream snapshot.
-The iOS backend and every other upstream source file are unchanged.
+Changed upstream files: src/android/jni.rs and src/android/window.rs.
+Added local helper: src/android/surface_lifecycle.rs.
+The iOS backend and other upstream source files are unchanged.
 
 Bounded native input panel focus:
 - Separate real Activity lifecycle from primary/embedded window focus. A child
@@ -24,3 +25,21 @@ Bounded native input panel focus:
 - A short transfer flag bridges the focus change. Actual panel focus loss clears
   it, and Activity Pause always overrides every focus bit.
 - JNI copies only atomic focus state; no Activity lifecycle/ACK is synthesized.
+
+Android surface teardown and recreation:
+- TerminateWindow synchronously stops use of and detaches the old renderer
+  surface before returning the callback's native-window destruction ACK. The
+  device, queue, atlas and pipelines remain available for the next window.
+- InitWindow and resize work remain deferred; the synchronous teardown path
+  does not call AndroidApp accessors or wait for Java/UI work.
+- Failed surface initialization does not publish readiness. The local lifecycle
+  helper permits retry after 250 ms, cancels stale init/retry work on termination,
+  and resets the old backoff when a new InitWindow arrives.
+- Each attachment resets its first-presented-frame state. The JNI readiness
+  flag is published only after renderer.draw actually reaches presentation;
+  an empty scene, absent callback or deferred/failed frame cannot mark it ready.
+- The helper's three policy regressions pass. The rebuilt Android APK passes
+  four same-Activity CREATED -> RESUMED cycles with readiness=false when detached,
+  successful-first-present readiness and panel/title pixel assertions on the
+  default host-GPU emulator path. Physical-device recovery and Vulkan rendering
+  itself remain unverified or unresolved; see docs/p0-android-2026-11-06.md.
