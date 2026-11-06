@@ -8,7 +8,9 @@
       "tarball": "https://registry.npmjs.org/@openai/codex/-/codex-0.153.4-linux-arm64.tgz",
       "integrity": "sha512-QKdjYLYV4hXIuUQDP3P6F4NXuWFoKo9WUoV4nAREIx55kiUyi8UsYdsVobkeXir5n/maEQgYMCKLHVma4rNPiw==",
       "binary": "package/vendor/aarch64-unknown-linux-musl/bin/codex",
-      "output": "libcodex.so"
+      "output": "libcodex.so",
+      "requires_musl_loader": false,
+      "binary_sha256": "4d76e542c222ea8c75861d8c4ade60a1a332a63255ce1c60bdaebf7c2a2869e6"
     },
     "claude-code": {
       "name": "@anthropic-ai/claude-code-linux-arm64-musl",
@@ -16,7 +18,8 @@
       "tarball": "https://registry.npmjs.org/@anthropic-ai/claude-code-linux-arm64-musl/-/claude-code-linux-arm64-musl-2.1.263.tgz",
       "integrity": "sha512-RxeDl9uWmj7FtghdtRImpWsGEEe8l05VoS9wt5vJAFVZFP6ZmyanS7b+1+STXW6F6QsEbVqbKF5R/HPz3dzW4g==",
       "binary": "package/claude",
-      "output": "libclaude_code.so"
+      "output": "libclaude_code.so",
+      "requires_musl_loader": true
     }
   },
   "musl_loader": {

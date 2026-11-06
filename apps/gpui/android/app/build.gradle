@@ -42,6 +42,8 @@ android {
         testInstrumentationRunner "androidx.test.runner.AndroidJUnitRunner"
         ndk { abiFilters.addAll(abis) }
         buildConfigField "boolean", "RISH_OFFICIAL_CLI_ENABLED", "false"
+        buildConfigField "boolean", "RISH_CODEX_PROBE_BUNDLED", "false"
+        manifestPlaceholders["rishCodexProbeEnabled"] = "false"
         buildConfigField "boolean", "RISH_GUEST_RUNTIME_BUNDLED", guestEnabled.toString()
         buildConfigField "String", "RISH_BUILD_COMMIT", '"gpui-local"'
         if (coreEnabled || gitEnabled || guestEnabled) {
@@ -89,6 +91,8 @@ android {
     }
     packaging { jniLibs { useLegacyPackaging = true; keepDebugSymbols += ["**/librish_gpui.so"] } }
 }
+
+apply from: "codex-probe.gradle"
 
 // Never emit an apparently usable APK without its renderer or session reducer.
 tasks.configureEach { task ->

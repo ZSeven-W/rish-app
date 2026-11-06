@@ -22,6 +22,12 @@ GLES 显式路径通过启动和后台恢复图像验收，
 显式选择该 Vulkan 驱动仍会复现条纹，实机与其他驱动仍待覆盖。
 见 [Android P0 验证记录](docs/p0-android-2026-11-06.md)。
 
+第四批推进：增加显式开启的 Android Codex 离线探测开发包，固定归档和二进制校验值，
+按引擎选择准备依赖；静态 Codex 无需 musl loader。在断网 API 33 arm64 模拟器的真实
+应用 UID 下，版本与 app-server 帮助命令均通过，生产认证入口仍关闭。普通 debug 与
+release 不包含 CLI；探测结果继续保留任务执行 unavailable，尚未交付安装器或任务适配。
+见 [Codex 离线探测记录](docs/p0-codex-probe-2026-11-06.md)。
+
 ## 产品目标
 
 让 Rish 成为真正运行在手机上的个人 Mobile Agent：用户通过对话提出目标，

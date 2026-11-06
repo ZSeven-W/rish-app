@@ -360,8 +360,7 @@ internal class AndroidSubscriptionAuthManager(
     }
 
     private fun unavailable(spec: Spec): JSONObject? {
-        if (!processFactory.available(spec.id)) return envelopeUnavailable(spec, "cli_not_packaged")
-        return null
+        return processFactory.unavailableReason(spec.id)?.let { envelopeUnavailable(spec, it) }
     }
 
     private fun envelopeUnavailable(spec: Spec, reason: String) = JSONObject()

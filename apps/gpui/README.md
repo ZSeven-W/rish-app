@@ -233,6 +233,44 @@ Android platform services and native dependencies live under
 Guest or official CLI payloads. Availability is determined by native
 capabilities, not by the presence of a tab or button.
 
+A separate development-only Codex offline capability probe can package the
+pinned static ARM64 binary. Prepare only that engine outside the checkout:
+
+```sh
+python3 tools/prepare-official-clis.py --engine codex --output ../output/codex-probe-jni
+cd apps/gpui/android
+./gradlew --no-daemon assembleDebug assembleDebugAndroidTest \
+  -PrishCodexProbeDir="$(cd ../../../../output/codex-probe-jni && pwd)"
+```
+
+The preparation script verifies the archive and binary hashes, publishes an
+atomic directory, and caches downloads beside the output. `--engine` is required
+and repeatable; selecting Codex does not download another engine or musl loader.
+Do not put this directory in `src/main/jniLibs`. The Gradle input validator rejects
+extra engines/files, symlinks, incorrect architecture and any changed hash.
+
+Install both debug APKs on an isolated arm64 Android fixture, disable its
+network, then run:
+
+```sh
+adb shell am instrument -w -r \
+  -e class tech.zseven.rish.AndroidCodexOfflineProbeTest \
+  tech.zseven.rish.gpui.test/androidx.test.runner.AndroidJUnitRunner
+```
+
+This internal, nonexported service runs only `codex --version` and
+`codex app-server --help` under the app UID, using a fresh empty credential home,
+bounded output and timeout/cancellation. Its correlated receipt includes the
+actual exit status, UID and binary SHA-256. A failed enabled probe is a test
+failure with a real receipt. `execution` stays `unavailable`; this is not a task
+adapter, server startup, login, or downloadable Android installer. The existing
+authentication process factory remains disabled even when Codex is bundled.
+
+Omit `rishCodexProbeDir` for the ordinary debug APK; it contains no CLI or probe
+receipt and disables the service. Release always omits the CLI, receipt and
+service registration, including when the property is supplied. See the
+[Codex probe validation record](../../docs/p0-codex-probe-2026-11-06.md).
+
 On the isolated API 33 phone emulator, use emulator `-gpu host`. The default
 Android startup detects the exact known-corrupt SwiftShader Vulkan adapter and
 uses GLES only after a surface-free GL device probe passes. Other Vulkan

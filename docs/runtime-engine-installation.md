@@ -10,7 +10,7 @@ are Pi policy hooks.
 | Product | iOS | Android | Next acceptance gate |
 | --- | --- | --- | --- |
 | Claude Code | Versioned Linux x64 musl download; existing guest session supports bounded text completion | No optional download installer; native CLI packaging disabled | Adapt actual guest execution to shared task, tool, approval, cancellation and recovery contracts |
-| Codex | Versioned Linux x64 musl download; existing account/chat transport uses host HTTPS | No optional download installer; native CLI packaging disabled | Build and probe a real CLI execution adapter; host HTTPS is not proof of CLI execution |
+| Codex | Versioned Linux x64 musl download; existing account/chat transport uses host HTTPS | No optional download installer; ordinary/release packaging disabled; explicit debug-only offline probe | Build and probe a real CLI execution adapter; host HTTPS is not proof of CLI execution |
 | DSH | No install descriptor; guest Node is a candidate dependency | No installer or Android native addon package | Reproducible dependency closure and actual guest execution probe |
 | zcode | No verified compatible CLI distribution descriptor | No installer or Android distribution | Produce and verify a compatible CLI package before exposing a download |
 
@@ -86,3 +86,19 @@ Evaluate a packaged matching-ABI runtime or a verified guest path, then test
 under the actual app UID. A desktop, ADB or Termux result does not satisfy that
 gate. Keep Android installation explicitly unavailable until the complete
 install/probe/cancel/recovery path is implemented.
+
+## Codex-only Android development probe
+
+The opt-in debug package accepts only the pinned static ARM64 Codex executable
+and a verified receipt from `tools/prepare-official-clis.py --engine codex`.
+It does not include Claude Code, a musl loader, credentials, or an auth flow.
+The production auth process factory checks `RISH_OFFICIAL_CLI_ENABLED` before
+availability, vault restoration or process start; bundling probe bytes cannot
+enable it. Normal debug and release remain CLI-disabled.
+
+Only `--version` and `app-server --help` run under the application UID. A successful
+receipt describes those offline command capabilities, while the runtime's task
+execution remains `unavailable`. The actual server initialization and task
+lifecycle described by the [official app-server documentation](https://learn.chatgpt.com/docs/app-server)
+remain a subsequent integration gate. Results, limits and reproduction are in
+[the development probe record](p0-codex-probe-2026-11-06.md).

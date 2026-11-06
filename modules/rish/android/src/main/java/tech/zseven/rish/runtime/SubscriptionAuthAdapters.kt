@@ -1,6 +1,7 @@
 package tech.zseven.rish.runtime
 
 import android.content.Context
+import tech.zseven.rish.BuildConfig
 import java.io.File
 
 internal interface SubscriptionAuthVault {
@@ -11,6 +12,7 @@ internal interface SubscriptionAuthVault {
 
 internal interface SubscriptionAuthProcessFactory {
     fun available(harnessId: String): Boolean
+    fun unavailableReason(harnessId: String): String? = if (available(harnessId)) null else "cli_not_packaged"
     fun start(harnessId: String, args: List<String>, home: File): Process
 }
 
@@ -18,12 +20,19 @@ internal interface SubscriptionAuthProcessFactory {
 internal class AndroidSubscriptionAuthProcessFactory(context: Context) : SubscriptionAuthProcessFactory {
     private val app = context.applicationContext
 
-    override fun available(harnessId: String): Boolean = executable(harnessId)?.let {
-        if (!it.canExecute()) it.setExecutable(true, true)
-        true
-    } ?: false
+    // An optional offline probe package is not authorization to run account
+    // commands. Check the auth capability before touching executable metadata.
+    override fun available(harnessId: String): Boolean = BuildConfig.RISH_OFFICIAL_CLI_ENABLED &&
+        executable(harnessId)?.canExecute() == true
+
+    override fun unavailableReason(harnessId: String): String? = when {
+        !BuildConfig.RISH_OFFICIAL_CLI_ENABLED -> "cli_auth_disabled"
+        !available(harnessId) -> "cli_not_packaged"
+        else -> null
+    }
 
     override fun start(harnessId: String, args: List<String>, home: File): Process {
+        check(BuildConfig.RISH_OFFICIAL_CLI_ENABLED) { "E_CLI_AUTH_DISABLED" }
         val executable = requireNotNull(executable(harnessId))
         val command = if (harnessId == "claude-code") {
             val loader = File(requireNotNull(executable.parentFile), "libmusl_loader.so")

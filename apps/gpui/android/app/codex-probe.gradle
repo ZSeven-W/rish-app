@@ -1,0 +1,158 @@
+import groovy.json.JsonOutput
+import groovy.json.JsonSlurper
+import java.nio.file.Files
+import java.nio.file.LinkOption
+import java.nio.file.Path
+import java.security.MessageDigest
+
+// Pure, read-only validation: do not stage executables into the source checkout.
+class CodexProbeInputs {
+    static final Set<String> LIBRARIES = ["libcodex.so"] as Set
+
+    private static void require(boolean condition, String message) {
+        if (!condition) throw new IllegalArgumentException("rishCodexProbeDir: ${message}")
+    }
+
+    private static void noSymlinks(Path path) {
+        for (Path current = path.toAbsolutePath(); current != null; current = current.parent) {
+            require(!Files.isSymbolicLink(current), "symbolic links are not accepted: ${current}")
+        }
+    }
+
+    private static void exactDirectory(Path path, Set<String> names) {
+        noSymlinks(path)
+        require(Files.isDirectory(path, LinkOption.NOFOLLOW_LINKS), "missing directory: ${path}")
+        Set<String> actual = [] as Set
+        Files.newDirectoryStream(path).withCloseable { entries ->
+            entries.each { entry ->
+                noSymlinks(entry)
+                actual.add(entry.fileName.toString())
+            }
+        }
+        require(actual == names, "unexpected directory entries in ${path}; expected ${names.sort()}")
+    }
+
+    private static void regularFile(Path path) {
+        noSymlinks(path)
+        require(Files.isRegularFile(path, LinkOption.NOFOLLOW_LINKS) && Files.isReadable(path),
+            "expected a readable regular file: ${path}")
+    }
+
+    private static String sha256(Path path) {
+        MessageDigest digest = MessageDigest.getInstance("SHA-256")
+        Files.newInputStream(path).withCloseable { input ->
+            byte[] buffer = new byte[1024 * 1024]
+            int count
+            while ((count = input.read(buffer)) != -1) digest.update(buffer, 0, count)
+        }
+        return digest.digest().encodeHex().toString()
+    }
+
+    private static void verifiedElf(Path path, Object expectedHash) {
+        regularFile(path)
+        require(expectedHash instanceof String && expectedHash ==~ /[0-9a-f]{64}/,
+            "canonical SHA-256 is missing or invalid for ${path.fileName}")
+        byte[] header = Files.newInputStream(path).withCloseable { it.readNBytes(20) }
+        require(header.length == 20 && header[0] == 0x7f && header[1] == 0x45 &&
+            header[2] == 0x4c && header[3] == 0x46 && header[4] == 2 && header[5] == 1 &&
+            (header[18] & 0xff) == 183 && header[19] == 0,
+            "expected an ELF64 little-endian AArch64 binary: ${path.fileName}")
+        require(sha256(path) == expectedHash, "SHA-256 mismatch for ${path.fileName}")
+    }
+
+    static Map validate(File directory, File repository, File canonicalManifest, List<String> abis) {
+        require(abis == ["arm64-v8a"], "the probe requires exactly the arm64-v8a ABI")
+        noSymlinks(directory.toPath().toAbsolutePath())
+        Path root = directory.toPath().toAbsolutePath().normalize()
+        noSymlinks(root)
+        root = root.toRealPath()
+        require(!root.startsWith(repository.toPath().toRealPath()), "prepared inputs must be outside the repository")
+        exactDirectory(root, ["manifest.json", "arm64-v8a"] as Set)
+        exactDirectory(root.resolve("arm64-v8a"), LIBRARIES)
+        Path receiptPath = root.resolve("manifest.json")
+        regularFile(receiptPath)
+        require(Files.size(receiptPath) <= 1024 * 1024, "manifest is too large")
+        def receipt = new JsonSlurper().parse(receiptPath.toFile())
+        def canonical = new JsonSlurper().parse(canonicalManifest)
+        require(receipt instanceof Map && receipt.keySet() ==
+            (["schema_version", "target", "selected_engines", "packages"] as Set),
+            "unexpected manifest fields")
+        require(receipt.schema_version == 1 && receipt.target == "linux-arm64-musl" &&
+            canonical.schema_version == 1 && canonical.target == "linux-arm64-musl", "unsupported manifest schema or target")
+        require(receipt.selected_engines == ["codex"] && receipt.packages instanceof Map &&
+            receipt.packages.keySet() == (["codex"] as Set), "only the Codex engine is accepted")
+        require(canonical.packages?.codex instanceof Map && receipt.packages.codex == canonical.packages.codex,
+            "Codex metadata does not match the canonical manifest")
+        require(canonical.packages.codex.requires_musl_loader == false,
+            "the offline Codex probe requires the pinned static binary")
+        require(canonical.packages.codex.output == "libcodex.so", "unexpected canonical output name")
+        verifiedElf(root.resolve("arm64-v8a/libcodex.so"), canonical.packages.codex.binary_sha256)
+        return receipt
+    }
+}
+
+// Keep all variant wiring below the validator so its rejection cases can be
+// exercised without starting Gradle or an Android build.
+def probeProperty = providers.gradleProperty("rishCodexProbeDir")
+def probeEnabled = probeProperty.isPresent()
+def repository = file("../../../..")
+def canonicalManifest = new File(repository, "tools/official-cli-manifest.json")
+def prepared = probeEnabled ? file(probeProperty.get()) : null
+def probeAbis = providers.gradleProperty("rishArchitectures").getOrElse("arm64-v8a")
+    .split(",").collect { it.trim() }
+def validateProbe = {
+    try {
+        return CodexProbeInputs.validate(prepared, repository, canonicalManifest, probeAbis)
+    } catch (Exception error) {
+        throw new GradleException("Invalid Codex probe inputs: ${error.message}", error)
+    }
+}
+
+// Old JNI staging must not bypass the explicit, verified debug input directory.
+def reservedLibraries = CodexProbeInputs.LIBRARIES + ["libmusl_loader.so", "libclaude_code.so"]
+android.sourceSets.each { sourceSet ->
+    sourceSet.jniLibs.srcDirs.each { sourceRoot ->
+        def unexpected = fileTree(sourceRoot).matching {
+            reservedLibraries.each { name -> include "**/${name}" }
+        }.files
+        if (!unexpected.empty) {
+            throw new GradleException("Official CLI binaries must not be staged in ${sourceRoot}; use rishCodexProbeDir outside the repository")
+        }
+    }
+}
+if (probeEnabled) validateProbe()
+
+android.buildTypes.debug {
+    buildConfigField "boolean", "RISH_CODEX_PROBE_BUNDLED", probeEnabled.toString()
+    manifestPlaceholders["rishCodexProbeEnabled"] = probeEnabled.toString()
+}
+android.packaging.jniLibs.keepDebugSymbols.add("**/libcodex.so")
+androidComponents.onVariants(androidComponents.selector().all()) { variant ->
+    variant.packaging.jniLibs.excludes.addAll(["**/libclaude_code.so", "**/libmusl_loader.so"])
+    if (variant.buildType != "debug" || !probeEnabled) {
+        variant.packaging.jniLibs.excludes.add("**/libcodex.so")
+    }
+}
+
+if (probeEnabled) {
+    def assetDirectory = layout.buildDirectory.dir("generated/codexOfflineProbe/debug/assets")
+    def generateManifest = tasks.register("generateCodexOfflineProbeManifest") {
+        inputs.dir(prepared)
+        inputs.files(canonicalManifest, new File(prepared, "manifest.json"),
+            new File(prepared, "arm64-v8a/libcodex.so"))
+        outputs.file(assetDirectory.map { it.file("codex-offline-probe-manifest.json") })
+        doLast {
+            Map receipt = validateProbe()
+            File destination = assetDirectory.get().file("codex-offline-probe-manifest.json").asFile
+            destination.parentFile.mkdirs()
+            destination.setText(JsonOutput.prettyPrint(JsonOutput.toJson(receipt)) + "\n", "UTF-8")
+        }
+    }
+    // Register neither directory when disabled: stale generated files cannot
+    // leak into a later default build, and release never consumes either root.
+    android.sourceSets.debug.jniLibs.srcDir(prepared)
+    android.sourceSets.debug.assets.srcDir(assetDirectory)
+    tasks.configureEach { task ->
+        if (task.name in ["mergeDebugAssets", "mergeDebugJniLibFolders"]) task.dependsOn(generateManifest)
+    }
+}

@@ -31,6 +31,7 @@ class AndroidSubscriptionAuthTest {
                 assertEquals("none", result.getString("auth_method"))
                 assertFalse(result.getJSONObject("runtime").getBoolean("available"))
                 assertTrue(result.has("error_code"))
+                assertEquals("cli_auth_disabled", result.getString("error_code"))
             }
         } finally {
             manager.shutdown()
