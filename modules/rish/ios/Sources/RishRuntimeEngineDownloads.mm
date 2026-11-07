@@ -396,13 +396,16 @@ static NSString *RishEngineSHA256(NSURL *url) {
 // and a bounded public receipt while the authority journal is unreadable, then
 // validate the attempt after unlock (also after a process restart).
 - (BOOL)deferDownload:(NSURL *)location task:(NSURLSessionTask *)task {
-  NSArray *identity = [self identityForTask:task];
+  NSArray<NSString *> *identity = [self identityForTask:task];
   NSHTTPURLResponse *response = [task.response isKindOfClass:NSHTTPURLResponse.class] ? (NSHTTPURLResponse *)task.response : nil;
   if (!identity || response.statusCode != 200 || ![self verifyURL:location descriptor:self.artifactDescriptors[identity[0]]] ||
       ![self ensureDirectory]) return NO;
-  NSString *name = [@".engine-deferred-" stringByAppendingString:NSUUID.UUID.UUIDString];
+  NSString *name = [@".engine-deferred-" stringByAppendingString:identity[1].uppercaseString];
   NSURL *bytes = [self.directory URLByAppendingPathComponent:[name stringByAppendingString:@".bin"]];
   NSURL *receipt = [self.directory URLByAppendingPathComponent:[name stringByAppendingString:@".json"]];
+  struct stat metadata;
+  if (lstat(bytes.fileSystemRepresentation, &metadata) == 0 || errno != ENOENT ||
+      lstat(receipt.fileSystemRepresentation, &metadata) == 0 || errno != ENOENT) return NO;
   if (![NSFileManager.defaultManager moveItemAtURL:location toURL:bytes error:nil]) return NO;
   NSDictionary *record = @{@"engine": identity[0], @"attempt": identity[1], @"digest": identity[2], @"status": @(response.statusCode)};
   NSData *data = [NSJSONSerialization dataWithJSONObject:record options:0 error:nil];

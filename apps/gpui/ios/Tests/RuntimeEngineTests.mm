@@ -177,6 +177,11 @@ static void LifecycleChecks(NSURL *root, NSDictionary *descriptor) {
   NSURL *whileLocked = TempFile(root, good);
   [locked URLSession:NSURLSession.sharedSession downloadTask:current didFinishDownloadingToURL:whileLocked];
   Check(![NSFileManager.defaultManager fileExistsAtPath:whileLocked.path], @"Blocked completion leaves no dependency on system temporary URL");
+  NSURL *duplicateWhileLocked = TempFile(root, good);
+  [locked URLSession:NSURLSession.sharedSession downloadTask:current didFinishDownloadingToURL:duplicateWhileLocked];
+  Check(![NSFileManager.defaultManager fileExistsAtPath:duplicateWhileLocked.path] &&
+      [NSFileManager.defaultManager contentsOfDirectoryAtPath:cache.path error:nil].count == 3,
+      @"Duplicate completions retain one deferred file and receipt for an attempt");
   current.fixtureState = NSURLSessionTaskStateCompleted;
   locked = load();
   [locked beginRestoringTasks];
