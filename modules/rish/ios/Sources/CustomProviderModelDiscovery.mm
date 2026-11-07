@@ -148,6 +148,7 @@ static id DiscoveryPolicy(NSString *op, NSDictionary *fields, NSString **errorCo
 }
 - (void)fetchPageAfter:(NSString *)cursor {
   if (![self current]) { [self finish:nil error:@"E_PROVIDER_CONFIGURATION_CHANGED"]; return; }
+  if (self.totalBytes >= DiscoveryTotalBytes) { [self finish:nil error:@"E_PROVIDER_MODEL_DISCOVERY_LIMIT"]; return; }
   NSURLComponents *url = [self.endpoint copy];
   // The only pagination input used is a validated model id. A server-provided
   // URL, host, path or header can never redirect this authenticated request.
@@ -180,7 +181,8 @@ static id DiscoveryPolicy(NSString *op, NSDictionary *fields, NSString **errorCo
   NSString *error = nil;
   if (status == 401 || status == 403) error = @"E_PROVIDER_MODEL_DISCOVERY_AUTH";
   else if (status < 200 || status >= 300) error = @"E_PROVIDER_MODEL_DISCOVERY_HTTP";
-  else if (response.expectedContentLength > (int64_t)DiscoveryPageBytes) error = @"E_PROVIDER_MODEL_DISCOVERY_LIMIT";
+  else if (response.expectedContentLength > (int64_t)MIN(DiscoveryPageBytes, DiscoveryTotalBytes - self.totalBytes))
+    error = @"E_PROVIDER_MODEL_DISCOVERY_LIMIT";
   if (error) { completionHandler(NSURLSessionResponseCancel); [self finish:nil error:error]; }
   else completionHandler(NSURLSessionResponseAllow);
 }

@@ -334,6 +334,16 @@ static void RefusalCases(LoopbackServer *server, NSDictionary *configuration) {
   LoopbackReply *oversize = [[LoopbackReply alloc] init]; oversize.rawBody = [NSMutableData dataWithLength:1024 * 1024 + 1];
   [server enqueue:oversize]; run = NewDiscovery(configuration, @"synthetic-oversize"); [run.service start];
   Complete(run, @"E_PROVIDER_MODEL_DISCOVERY_LIMIT");
+  // Each HTTP body fits the page budget. The fifth exceeds the shared byte budget.
+  NSString *padding = [@"" stringByPaddingToLength:900 * 1024 withString:@"x" startingAtIndex:0];
+  before = server.captured.count;
+  for (NSUInteger index = 0; index < 5; index++) {
+    NSMutableDictionary *padded = [Page(@[[NSString stringWithFormat:@"byte-budget-%lu", (unsigned long)index]], YES) mutableCopy];
+    padded[@"ignored"] = padding;
+    Reply(server, padded);
+  }
+  run = NewDiscovery(configuration, @"synthetic-total-budget"); [run.service start]; Complete(run, @"E_PROVIDER_MODEL_DISCOVERY_LIMIT");
+  Check(server.captured.count == before + 5, @"A page advertised above the remaining aggregate budget cannot publish candidates");
   before = server.captured.count;
   run = NewDiscovery(configuration, nil); [run.service start]; Complete(run, @"E_PROVIDER_MODEL_DISCOVERY_CREDENTIAL");
   Check(server.captured.count == before, @"Missing profile credentials fail before any request");
