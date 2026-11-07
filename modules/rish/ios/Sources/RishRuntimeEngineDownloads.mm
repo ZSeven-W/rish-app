@@ -397,15 +397,14 @@ static NSString *RishEngineSHA256(NSURL *url) {
 // validate the attempt after unlock (also after a process restart).
 - (BOOL)deferDownload:(NSURL *)location task:(NSURLSessionTask *)task {
   NSArray *identity = [self identityForTask:task];
-  if (!identity || ![self ensureDirectory]) return NO;
+  NSHTTPURLResponse *response = [task.response isKindOfClass:NSHTTPURLResponse.class] ? (NSHTTPURLResponse *)task.response : nil;
+  if (!identity || response.statusCode != 200 || ![self verifyURL:location descriptor:self.artifactDescriptors[identity[0]]] ||
+      ![self ensureDirectory]) return NO;
   NSString *name = [@".engine-deferred-" stringByAppendingString:NSUUID.UUID.UUIDString];
   NSURL *bytes = [self.directory URLByAppendingPathComponent:[name stringByAppendingString:@".bin"]];
   NSURL *receipt = [self.directory URLByAppendingPathComponent:[name stringByAppendingString:@".json"]];
-  struct stat metadata;
-  if (lstat(location.fileSystemRepresentation, &metadata) != 0 || !S_ISREG(metadata.st_mode) ||
-      ![NSFileManager.defaultManager moveItemAtURL:location toURL:bytes error:nil]) return NO;
-  NSInteger status = [task.response isKindOfClass:NSHTTPURLResponse.class] ? ((NSHTTPURLResponse *)task.response).statusCode : 0;
-  NSDictionary *record = @{@"engine": identity[0], @"attempt": identity[1], @"digest": identity[2], @"status": @(status)};
+  if (![NSFileManager.defaultManager moveItemAtURL:location toURL:bytes error:nil]) return NO;
+  NSDictionary *record = @{@"engine": identity[0], @"attempt": identity[1], @"digest": identity[2], @"status": @(response.statusCode)};
   NSData *data = [NSJSONSerialization dataWithJSONObject:record options:0 error:nil];
   if (![NSFileManager.defaultManager setAttributes:@{NSFileProtectionKey: NSFileProtectionCompleteUntilFirstUserAuthentication}
       ofItemAtPath:bytes.path error:nil] ||

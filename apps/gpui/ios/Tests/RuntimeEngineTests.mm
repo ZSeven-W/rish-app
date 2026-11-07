@@ -169,6 +169,11 @@ static void LifecycleChecks(NSURL *root, NSDictionary *descriptor) {
       @"Unreadable journal defers restoration without cancelling system-owned work");
   [locked installEngine:@"codex"];
   Check(started == before, @"Unreadable journal cannot launch a conflicting attempt");
+  NSURL *oversizedWhileLocked = TempFile(root, [@"oversized" dataUsingEncoding:NSUTF8StringEncoding]);
+  [locked URLSession:NSURLSession.sharedSession downloadTask:current didFinishDownloadingToURL:oversizedWhileLocked];
+  Check(![NSFileManager.defaultManager fileExistsAtPath:oversizedWhileLocked.path] &&
+      [[NSFileManager.defaultManager contentsOfDirectoryAtPath:cache.path error:nil] isEqual:@[journal.lastPathComponent]],
+      @"An oversized completion is discarded without allocating deferred storage while locked");
   NSURL *whileLocked = TempFile(root, good);
   [locked URLSession:NSURLSession.sharedSession downloadTask:current didFinishDownloadingToURL:whileLocked];
   Check(![NSFileManager.defaultManager fileExistsAtPath:whileLocked.path], @"Blocked completion leaves no dependency on system temporary URL");
