@@ -140,6 +140,17 @@ class AndroidCodexRoundTest {
         }
     }
 
+    @Test fun terminalErrorCannotSettleEvenIfTheServerReportsCompleted() {
+        val server = Server { process ->
+            process.ack()
+            process.answer(terminalError = JSONObject().put("message", "fixture error"))
+        }
+        withRound(server) { service, request, wal ->
+            assertEquals("ambiguous", service.completeRound(request).getString("status"))
+            assertTrue(row(wal).isNull("completion_receipt"))
+        }
+    }
+
     @Test fun toolItemCannotSettleAsATextAnswer() {
         val server = Server { process ->
             process.ack()
@@ -411,10 +422,12 @@ class AndroidCodexRoundTest {
         fun ack() = response(3, turn("inProgress"))
         fun delta(text: String, turn: String = "test-turn") = event("item/agentMessage/delta",
             JSONObject().put("turnId", turn).put("itemId", "message").put("delta", text))
-        fun answer() {
+        fun answer(terminalError: JSONObject? = null) {
             event("item/completed", JSONObject().put("turnId", "test-turn").put("item", JSONObject()
                 .put("id", "message").put("type", "agentMessage").put("phase", "final_answer").put("text", "Authoritative answer")))
-            event("turn/completed", turn("completed"))
+            val terminal = turn("completed")
+            terminal.getJSONObject("turn").put("error", terminalError)
+            event("turn/completed", terminal)
         }
         fun disconnect() {
             output.close()

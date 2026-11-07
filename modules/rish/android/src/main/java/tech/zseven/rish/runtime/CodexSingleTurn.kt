@@ -37,7 +37,7 @@ internal class CodexSingleTurn(
 
     fun bind(result: JSONObject, body: String) {
         val turn = result.optJSONObject("turn") ?: invalid()
-        if (turn.opt("status") != "inProgress") invalid()
+        if (turn.opt("status") != "inProgress" || !turn.isNull("error")) invalid()
         turnId = identifier(turn.opt("id"))
         requestBody = body
     }
@@ -55,7 +55,8 @@ internal class CodexSingleTurn(
         when (method) {
             "turn/started" -> if (terminal) invalid()
             "turn/completed" -> {
-                if (terminal || params.getJSONObject("turn").opt("status") != "completed") invalid()
+                val turn = params.getJSONObject("turn")
+                if (terminal || turn.opt("status") != "completed" || !turn.isNull("error")) invalid()
                 terminal = true
                 if (answer().isNullOrBlank()) invalid()
             }
