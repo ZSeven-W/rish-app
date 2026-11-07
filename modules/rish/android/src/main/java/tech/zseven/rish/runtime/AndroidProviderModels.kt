@@ -44,8 +44,10 @@ internal class AndroidProviderModels(
         configurations.providerModels.save(request)
     }
 
-    fun discover(request: JSONObject): JSONObject =
-        AndroidProviderModelDiscovery(configurations, transport, credentials).discoverBuiltin(request, persistedGuard)
+    fun prepareDiscovery(request: JSONObject): AndroidProviderModelDiscovery.Prepared =
+        AndroidProviderModelDiscovery(configurations, transport, credentials).prepareBuiltin(request, persistedGuard)
+
+    fun discover(request: JSONObject): JSONObject = prepareDiscovery(request).execute()
 
     fun cancelDiscovery(request: JSONObject): JSONObject {
         exact(request, setOf("schema_version", "harness_id", "operation_id"))

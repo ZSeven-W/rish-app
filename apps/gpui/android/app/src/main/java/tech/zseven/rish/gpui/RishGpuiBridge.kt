@@ -101,6 +101,20 @@ object RishGpuiBridge {
             }
             val runtime = AndroidRuntimeState.get(context)
             runtime.roundPreview = { publish("agentRoundPreview", it) }
+            if (module == "LocalRuntime" && method in setOf("discoverProviderModels", "discoverCustomProviderModels")) {
+                // Register the operation before it waits for an I/O worker.
+                // Cancel can then find it even before its first network call.
+                val request = args.getJSONObject(0)
+                val prepared = if (method == "discoverProviderModels") runtime.providerModels.prepareDiscovery(request)
+                    else runtime.customProviders.prepareDiscovery(request)
+                try {
+                    runtime.io.execute { settle(id) { prepared.execute() } }
+                } catch (failure: Exception) {
+                    prepared.discard()
+                    throw failure
+                }
+                return
+            }
             if (HarnessAuthorizationRoutes.handles(module, method)) {
                 val request = HarnessAuthorizationRoutes.request(args)
                 val owner = screen.get()

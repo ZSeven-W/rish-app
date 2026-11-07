@@ -16,8 +16,10 @@ internal class AndroidCustomProviders(
     )
     private val registry get() = configurations.custom
     fun list(): JSONObject = transport.withProviderLock { registry.read() }
-    fun discover(request: JSONObject): JSONObject =
-        AndroidProviderModelDiscovery(configurations, transport, credentials).discover(request)
+    fun prepareDiscovery(request: JSONObject): AndroidProviderModelDiscovery.Prepared =
+        AndroidProviderModelDiscovery(configurations, transport, credentials).prepare(request)
+
+    fun discover(request: JSONObject): JSONObject = prepareDiscovery(request).execute()
 
     fun cancelDiscovery(request: JSONObject): JSONObject {
         if (request.opt("schema_version") != 1 || request.keys().asSequence().toSet() != setOf("schema_version", "id", "operation_id") ||

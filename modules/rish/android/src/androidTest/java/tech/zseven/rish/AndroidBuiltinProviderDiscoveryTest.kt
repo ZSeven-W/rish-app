@@ -203,6 +203,25 @@ class AndroidBuiltinProviderDiscoveryTest {
         }
     }
 
+    @Test fun queuedDiscoveryCanBeCancelledBeforeItAcquiresCredentialsOrStartsHttp() = Fixture().use { f ->
+        Server(emptyList()).use { server ->
+            f.setup(server, "codex", "responses", "bearer")
+            f.keys.clear(f.configs.effectiveAccount("OPENAI_API_KEY"))
+            val request = f.request("codex")
+            val operation = request.getString("operation_id")
+            val prepared = f.service.prepareDiscovery(request)
+            assertEquals(1, f.transport.activeRequestCount())
+            assertEquals("idle", f.service.cancelDiscovery(f.cancel("codex", uuid())).getString("status"))
+            assertEquals("cancelled", f.service.cancelDiscovery(f.cancel("codex", operation)).getString("status"))
+            assertEquals("E_PROVIDER_MODEL_DISCOVERY_CANCELLED", assertThrows(RuntimeFailure::class.java) {
+                prepared.execute()
+            }.code)
+            assertEquals(0, f.transport.activeRequestCount())
+            assertEquals("idle", f.service.cancelDiscovery(f.cancel("codex", operation)).getString("status"))
+            assertTrue(server.requests.isEmpty())
+        }
+    }
+
     @Test fun matchingCancellationStopsOnlyItsOwnOperationAndDoesNotSaveModels() = Fixture().use { f ->
         val release = CountDownLatch(1)
         Server(listOf(Reply(page("cancelled-model"), release = release))).use { server ->

@@ -30,6 +30,15 @@ internal class AndroidProviderModelDiscovery(
     private class Captured(val id: String, val operationId: String, val configuration: JSONObject, val account: String?, val secret: String?,
         val endpoint: HttpUrl, val reservation: AndroidModelTransport.Discovery, val builtin: Boolean = false,
         val catalog: JSONObject? = null)
+
+    class Prepared internal constructor(
+        private val executeCaptured: () -> JSONObject,
+        private val release: () -> Unit,
+    ) {
+        fun execute(): JSONObject = try { executeCaptured() } finally { discard() }
+        fun discard() = release()
+    }
+
     private fun fail(code: String): Nothing = throw RuntimeFailure(code)
     private fun policy(request: JSONObject): Any = try { AndroidProviderConfiguration.policy(request) }
         catch (failure: IllegalArgumentException) {
@@ -46,44 +55,57 @@ internal class AndroidProviderModelDiscovery(
             catch (failure: RuntimeFailure) { throw failure }
             catch (_: Exception) { fail("E_PROVIDER_MODEL_DISCOVERY_CREDENTIAL") }
     }
-    private fun capture(request: JSONObject): Captured = transport.withProviderLock {
+    fun prepare(request: JSONObject): Prepared {
         if (request.opt("schema_version") != 1 || request.keys().asSequence().toSet() !=
             setOf("schema_version", "id", "operation_id", "expected_profile") || !RuntimeJson.uuid(request.optString("id")) ||
             !RuntimeJson.uuid(request.optString("operation_id")) || request.opt("expected_profile") !is JSONObject) fail("E_PROVIDER_MODEL_DISCOVERY_INVALID")
         val id = request.getString("id")
         val operation = request.getString("operation_id")
-        val config = try { configurations.custom.provider(id).getJSONObject("configuration") }
-            catch (_: Exception) { fail("E_PROVIDER_CONFIGURATION_CHANGED") }
-        if (!AndroidJson.equal(config, request.getJSONObject("expected_profile"))) fail("E_PROVIDER_CONFIGURATION_CHANGED")
-        val url = config.getString("endpoint_url").toHttpUrlOrNull() ?: fail("E_PROVIDER_MODEL_DISCOVERY_UNSUPPORTED")
-        val path = policy(JSONObject().put("op", "models_endpoint_path").put("path", url.encodedPath)
-            .put("protocol", config.getString("protocol"))) as String
-        val endpoint = url.newBuilder().encodedPath(path).query(null).fragment(null).build()
-        val account = account(config)
-        val secret = secret(account)
-        Captured(id, operation, config, account, secret, endpoint, transport.reserveDiscovery(id, operation))
+        val reservation = transport.reserveDiscovery(id, operation)
+        return prepared(reservation) {
+            val config = try { configurations.custom.provider(id).getJSONObject("configuration") }
+                catch (_: Exception) { fail("E_PROVIDER_CONFIGURATION_CHANGED") }
+            capture(request, id, config, reservation)
+        }
     }
-    private fun captureBuiltin(request: JSONObject, persistedGuard: () -> Unit): Captured = transport.whenIdle {
+
+    fun prepareBuiltin(request: JSONObject, persistedGuard: () -> Unit): Prepared {
         if (request.opt("schema_version") != 1 || request.keys().asSequence().toSet() !=
             setOf("schema_version", "harness_id", "operation_id", "expected_profile") ||
             request.opt("harness_id") !is String || request.getString("harness_id") !in AndroidProviderModelCatalog.harnesses ||
             !RuntimeJson.uuid(request.optString("operation_id")) || request.opt("expected_profile") !is JSONObject)
             fail("E_PROVIDER_MODEL_DISCOVERY_INVALID")
-        persistedGuard()
         val harness = request.getString("harness_id")
-        val config = configurations.read(harness)
+        val operation = request.getString("operation_id")
+        val reservation = transport.whenIdle { transport.reserveDiscovery("builtin:$harness", operation) }
+        return prepared(reservation) {
+            persistedGuard()
+            capture(request, harness, configurations.read(harness), reservation, configurations.providerModels.read())
+        }
+    }
+
+    private fun prepared(reservation: AndroidModelTransport.Discovery, capture: () -> Captured): Prepared =
+        Prepared(
+            { execute(transport.withDiscovery(reservation, capture)) },
+            { transport.releaseDiscovery(reservation) },
+        )
+
+    private fun capture(
+        request: JSONObject,
+        id: String,
+        config: JSONObject,
+        reservation: AndroidModelTransport.Discovery,
+        catalog: JSONObject? = null,
+    ): Captured {
         if (!AndroidJson.equal(config, request.getJSONObject("expected_profile"))) fail("E_PROVIDER_CONFIGURATION_CHANGED")
         val url = config.getString("endpoint_url").toHttpUrlOrNull() ?: fail("E_PROVIDER_MODEL_DISCOVERY_UNSUPPORTED")
         val path = policy(JSONObject().put("op", "models_endpoint_path").put("path", url.encodedPath)
             .put("protocol", config.getString("protocol"))) as String
         val endpoint = url.newBuilder().encodedPath(path).query(null).fragment(null).build()
-        val catalog = configurations.providerModels.read()
         val account = account(config)
         // Explicit API provider discovery reads only the encrypted API-key
         // account. Subscription/CLI credentials are never borrowed here.
-        val secret = secret(account)
-        Captured(harness, request.getString("operation_id"), config, account, secret, endpoint,
-            transport.reserveDiscovery("builtin:$harness", request.getString("operation_id")), true, catalog)
+        return Captured(id, reservation.operationId, config, account, secret(account), endpoint, reservation, catalog != null, catalog)
     }
     private fun verify(captured: Captured) {
         val current = try { if (captured.builtin) configurations.read(captured.id)
@@ -118,11 +140,6 @@ internal class AndroidProviderModelDiscovery(
             bytes.toByteArray()
         }
     }
-    fun discover(request: JSONObject): JSONObject = execute(capture(request))
-
-    fun discoverBuiltin(request: JSONObject, persistedGuard: () -> Unit): JSONObject =
-        execute(captureBuiltin(request, persistedGuard))
-
     private fun execute(captured: Captured): JSONObject {
         val deadline = android.os.SystemClock.elapsedRealtime() + DEADLINE_MS
         val models = LinkedHashMap<String, JSONObject>()
@@ -195,6 +212,6 @@ internal class AndroidProviderModelDiscovery(
             transport.withDiscovery(captured.reservation) { verify(captured) }
             fail(if (failure is java.net.SocketTimeoutException || failure is java.io.InterruptedIOException)
                 "E_PROVIDER_MODEL_DISCOVERY_TIMEOUT" else "E_PROVIDER_MODEL_DISCOVERY_TRANSPORT")
-        } finally { transport.releaseDiscovery(captured.reservation) }
+        }
     }
 }
