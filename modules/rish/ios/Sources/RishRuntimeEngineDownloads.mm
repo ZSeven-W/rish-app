@@ -380,7 +380,8 @@ static NSString *RishEngineSHA256(NSURL *url) {
   @synchronized (self) {
     if (isfinite(fraction) && [self isCurrentEngine:engineID attempt:attempt]) {
       NSMutableDictionary *state = [self.states[engineID] mutableCopy];
-      state[@"progress"] = @((NSUInteger)floor(MIN(100., MAX(0., fraction * 100.))));
+      NSUInteger progress = (NSUInteger)floor(MIN(100., MAX(0., fraction * 100.)));
+      state[@"progress"] = @(MAX([state[@"progress"] unsignedIntegerValue], progress));
       self.states[engineID] = state;
     }
   }
@@ -500,7 +501,7 @@ static NSString *RishEngineSHA256(NSURL *url) {
       [task cancel];
       return;
     }
-    if (expected > 0) [self recordProgress:(double)total / expected forEngine:identity[0] attempt:identity[1]];
+    if (limit > 0 && total >= 0) [self recordProgress:(double)total / limit forEngine:identity[0] attempt:identity[1]];
   }
 }
 @end

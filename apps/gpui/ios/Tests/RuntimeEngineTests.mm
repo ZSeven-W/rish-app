@@ -155,7 +155,11 @@ static void LifecycleChecks(NSURL *root, NSDictionary *descriptor) {
   Check(started == before && current.resumes == 1 && wrongURL.cancellations == 1,
       @"Restore reattaches the exact task and does not duplicate it");
   [downloads URLSession:NSURLSession.sharedSession downloadTask:current didWriteData:1 totalBytesWritten:1 totalBytesExpectedToWrite:2];
-  Check([[downloads installationForEngine:@"codex"][@"progress"] isEqual:@50], @"Restored task progress reaches the current attempt");
+  Check([[downloads installationForEngine:@"codex"][@"progress"] isEqual:@33], @"Progress uses the pinned artifact length");
+  [downloads URLSession:NSURLSession.sharedSession downloadTask:current didWriteData:1 totalBytesWritten:2 totalBytesExpectedToWrite:-1];
+  [downloads URLSession:NSURLSession.sharedSession downloadTask:current didWriteData:0 totalBytesWritten:1 totalBytesExpectedToWrite:3];
+  Check([[downloads installationForEngine:@"codex"][@"progress"] isEqual:@66],
+      @"Unknown HTTP length still advances progress and late callbacks do not roll it back");
   NSURL *journal = [cache URLByAppendingPathComponent:@".engine-download-state.json"];
   Check(chmod(journal.fileSystemRepresentation, 0000) == 0, @"Fixture blocks journal reads");
   RishRuntimeEngineDownloads *locked = load();
