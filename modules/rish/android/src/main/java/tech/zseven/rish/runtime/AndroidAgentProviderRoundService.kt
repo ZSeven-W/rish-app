@@ -305,32 +305,36 @@ internal class AndroidAgentProviderRoundService(
         // The owner the request went out under, which is what a refusal the
         // transport hears is evidence about.
         var dispatchOwner: JSONObject? = null
-        if (prepared != null) {
-            try {
-                val claimed = rowFor(wal.snapshot(), locator) ?: throw Refused(PERSISTENCE)
-                dispatchOwner = claimed.optJSONObject("owner")
+        // Prepare the optional preview before committing the dispatch marker.
+        val preview = if (prepared == null) null else previewSink(request, locator)
+        val shouldExecute = if (prepared == null) false else try {
+            val claimed = rowFor(wal.snapshot(), locator) ?: throw Refused(PERSISTENCE)
+            val stopping = setOf("cancel_requested", "cancelled")
+            val marked = if (codexRounds != null && claimed.optString("state") in stopping) null else {
                 val dispatchCas = decide(
                     JSONObject().put("op", "round_cas").put("row", claimed),
                 ).optJSONObject("cas") ?: throw Refused(CONFLICT)
-                rounds.markDispatched(dispatchCas) ?: throw Refused(CONFLICT)
-            } catch (failure: Throwable) {
-                // The request holds a transport slot that only a run gives
-                // back. Leaving it there would refuse the next round as busy
-                // over a request nobody ever sent.
-                prepared.discard()
-                throw failure
+                rounds.markDispatched(dispatchCas)
             }
+            if (marked != null) {
+                dispatchOwner = claimed.optJSONObject("owner")
+                true
+            } else {
+                // Cancel can win between reading the claim and writing the
+                // marker. Preserve the proof that the process was never started.
+                if (codexRounds == null || rowFor(wal.snapshot(), locator)?.optString("state") !in stopping)
+                    throw Refused(CONFLICT)
+                prepared.discard()
+                false
+            }
+        } catch (failure: Throwable) {
+            prepared.discard()
+            throw failure
         }
 
         var refusalStatus: Int? = null
-        // The preview ends once the answer is recorded, not when the stream
-        // does: an answer that arrives and then cannot be recorded has to be
-        // able to say so.
-        var preview: ((JSONObject) -> Unit)? = null
-        val reply = if (prepared == null) null else try {
-            // Correlation first: a preview event that cannot be tied to the
-            // round it belongs to is not display material, it is noise.
-            preview = previewSink(request, locator)
+        // The preview ends once the answer is recorded, not when the stream does.
+        val reply = if (!shouldExecute || prepared == null) null else try {
             try {
                 prepared.execute(preview)
             } catch (failure: Exception) {

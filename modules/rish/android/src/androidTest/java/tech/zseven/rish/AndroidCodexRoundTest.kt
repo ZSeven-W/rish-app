@@ -93,6 +93,22 @@ class AndroidCodexRoundTest {
         }
     }
 
+    @Test fun cancellingBeforeDispatchKeepsTheRoundProvablyUnsent() {
+        val server = Server { error("Codex must not start") }
+        lateinit var cancel: () -> Unit
+        withRound(server, subscribe = { cancel() }) { service, request, wal ->
+            cancel = {
+                service.cancelRound(selector(request, row(wal)).put("cancel_token", uuid()))
+                assertEquals("cancel_requested", row(wal).getString("state"))
+            }
+            val result = service.completeRound(request)
+            assertEquals(result.toString(), "cancelled", result.getString("status"))
+            assertEquals("E_AGENT_CANCELLED", row(wal).getString("failure_code"))
+            assertTrue(row(wal).isNull("completion_receipt"))
+            assertTrue(server.methods.isEmpty())
+        }
+    }
+
     @Test fun cancellationWinsAgainstAQueuedTerminalReply() {
         val previewed = CountDownLatch(1)
         val releasePreview = CountDownLatch(1)
@@ -187,12 +203,13 @@ class AndroidCodexRoundTest {
     private fun withRound(
         server: Server,
         preview: ((JSONObject) -> Unit)? = null,
+        subscribe: () -> Unit = {},
         body: (AndroidAgentProviderRoundService, JSONObject, AndroidAgentWal) -> Unit,
     ) {
         try {
             withRound(File("fixture-codex"), BoundedCodexAppServerProbeRunner(
                 timeoutMs = 8_000, startProcess = { _, _, _ -> server },
-            ), preview, body)
+            ), preview, subscribe, body)
         } finally { server.destroy() }
     }
 
@@ -200,6 +217,7 @@ class AndroidCodexRoundTest {
         executable: File,
         server: BoundedCodexAppServerProbeRunner,
         preview: ((JSONObject) -> Unit)?,
+        subscribe: () -> Unit = {},
         body: (AndroidAgentProviderRoundService, JSONObject, AndroidAgentWal) -> Unit,
     ) {
         assertTrue("rish agent core must be staged", RishAgentCoreNative.available)
@@ -265,7 +283,7 @@ class AndroidCodexRoundTest {
             val service = AndroidAgentProviderRoundService(
                 sessions, prepared, AndroidAgentRoundJournal(wal, tasks), roots, AndroidAgentToolRegistry,
                 http, wal, AndroidAgentOperations(wal), tasks, AndroidAgentTranscriptStore(wal),
-                codexRounds = cli, previewPublisher = { preview },
+                codexRounds = cli, previewPublisher = { subscribe(); preview },
             )
             body(service, request, wal)
             assertEquals(0, http.sentRequestCount)
