@@ -358,6 +358,22 @@ class AndroidCustomProviderDiscoveryTest {
         assertEquals(status, result.getString("status"))
     }
 
+    @Test fun terminalDiscoveryAndCancellationShareOneReservationOrdering() = Fixture().use { fixture ->
+        val cancelled = UUID.randomUUID().toString()
+        val reservation = fixture.transport.reserveDiscovery(fixture.id, cancelled)
+        assertEquals("cancelled", fixture.transport.cancelDiscovery(fixture.id, cancelled))
+        refused("E_PROVIDER_MODEL_DISCOVERY_CANCELLED") {
+            fixture.transport.finishDiscovery(reservation) { fail("A cancelled result cannot be published") }
+        }
+        assertEquals("idle", fixture.transport.cancelDiscovery(fixture.id, cancelled))
+
+        val completed = UUID.randomUUID().toString()
+        val next = fixture.transport.reserveDiscovery(fixture.id, completed)
+        assertEquals("result", fixture.transport.finishDiscovery(next) { "result" })
+        assertEquals("idle", fixture.transport.cancelDiscovery(fixture.id, completed))
+        assertEquals(0, fixture.transport.activeRequestCount())
+    }
+
     @Test fun cancellationOnlyAffectsTheExactProviderAndOperationPair() = Fixture().use { fixture ->
         val release = CountDownLatch(1)
         Loopback(listOf(Reply(page(listOf("cancelled-result")), release = release))).use { server ->

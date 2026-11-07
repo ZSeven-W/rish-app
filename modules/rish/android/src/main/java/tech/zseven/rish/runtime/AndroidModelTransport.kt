@@ -38,6 +38,11 @@ internal class AndroidModelTransport(
         if (reservation !in discoveries || reservation.revision != revision) fail("E_PROVIDER_CONFIGURATION_CHANGED")
         body()
     }
+    internal fun <T> finishDiscovery(reservation: Discovery, body: () -> T): T = synchronized(lock) {
+        // Cancellation and publication have one ordering point. Once the
+        // result owns it, there is no longer an operation to cancel.
+        try { withDiscovery(reservation, body) } finally { releaseDiscovery(reservation) }
+    }
     internal fun cancelDiscovery(providerId: String, operationId: String): String = synchronized(lock) {
         val reservation = discoveries.firstOrNull { it.providerId == providerId && it.operationId == operationId }
             ?: return@synchronized "idle"

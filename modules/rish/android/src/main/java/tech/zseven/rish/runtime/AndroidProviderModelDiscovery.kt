@@ -86,7 +86,21 @@ internal class AndroidProviderModelDiscovery(
 
     private fun prepared(reservation: AndroidModelTransport.Discovery, capture: () -> Captured): Prepared =
         Prepared(
-            { execute(transport.withDiscovery(reservation, capture)) },
+            {
+                var captured: Captured? = null
+                val result = try {
+                    val input = transport.withDiscovery(reservation, capture)
+                    captured = input
+                    Result.success(execute(input))
+                } catch (failure: Exception) {
+                    Result.failure(failure)
+                }
+                transport.finishDiscovery(reservation) {
+                    // A refusal also belongs to the captured profile.
+                    captured?.let(::verify)
+                    result.getOrThrow()
+                }
+            },
             { transport.releaseDiscovery(reservation) },
         )
 
@@ -202,14 +216,9 @@ internal class AndroidProviderModelDiscovery(
                 cursor = parsed.getString("last_id")
                 if (!cursors.add(cursor!!)) fail("E_PROVIDER_MODEL_DISCOVERY_INVALID")
             }
-            return transport.withDiscovery(captured.reservation) {
-                verify(captured)
-                JSONObject().put("schema_version", 1).put(if (captured.builtin) "harness_id" else "id", captured.id).put("operation_id", captured.operationId)
-                    .put("models", JSONArray(models.values.toList())).put("truncated", truncated)
-            }
+            return JSONObject().put("schema_version", 1).put(if (captured.builtin) "harness_id" else "id", captured.id).put("operation_id", captured.operationId)
+                .put("models", JSONArray(models.values.toList())).put("truncated", truncated)
         } catch (failure: Exception) {
-            // Even an HTTP or parser refusal belongs to the captured profile.
-            transport.withDiscovery(captured.reservation) { verify(captured) }
             if (failure is RuntimeFailure) throw failure
             fail(if (failure is java.net.SocketTimeoutException || failure is java.io.InterruptedIOException)
                 "E_PROVIDER_MODEL_DISCOVERY_TIMEOUT" else "E_PROVIDER_MODEL_DISCOVERY_TRANSPORT")
