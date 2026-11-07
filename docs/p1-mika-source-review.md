@@ -1,0 +1,12 @@
+# P1 · Mika Android 源码调研
+
+本轮固定提交 [f3bbbdf9](https://github.com/wangzan101/mika/tree/f3bbbdf92caeb4259d55922e12f61f6da11469fd)。结论来自源码与仓库测试，Rish 本轮未安装或运行 Mika。模型调用按用户选择的供应方走，局域网自建服务也属于独立推理端点。手机端负责工具循环、上下文和任务交互，推理位置取决于端点。见 [模型设置](https://github.com/wangzan101/mika/blob/f3bbbdf92caeb4259d55922e12f61f6da11469fd/docs/models.en.md) 与 [AgentLoop.kt](https://github.com/wangzan101/mika/blob/f3bbbdf92caeb4259d55922e12f61f6da11469fd/core/src/main/kotlin/com/wangzan101/mika/core/agent/AgentLoop.kt)。
+
+| 路径 | 源码实现与运行前提 |
+| --- | --- |
+| 界面观察 | Android 系统绑定 `MikaAccessibilityService`。服务处理窗口事件、手势和系统截图回调，`ScreenReader` 生成控件树与定位信息，`NodeIds` 区分当前与历史快照。功能随系统版本、服务授权及目标窗口可见性变化。[服务](https://github.com/wangzan101/mika/blob/f3bbbdf92caeb4259d55922e12f61f6da11469fd/app/src/main/java/com/wangzan101/mika/cap/phone/a11y/ScreenAccessibility.kt) · [快照](https://github.com/wangzan101/mika/blob/f3bbbdf92caeb4259d55922e12f61f6da11469fd/app/src/main/java/com/wangzan101/mika/cap/phone/a11y/NodeIds.kt) |
+| 助手与配对 | `PhoneServices` 在应用进程持有连接和恢复状态。助手经 adbd 启动，运行在 shell 身份并通过 Binder 回接。手机可自行做无线调试配对。电脑 USB 是另一条启动路径，有 `su` 的设备可显式授权 Root。三条路径都带各自的权限前提。[PhoneServices.kt](https://github.com/wangzan101/mika/blob/f3bbbdf92caeb4259d55922e12f61f6da11469fd/app/src/main/java/com/wangzan101/mika/cap/phone/PhoneServices.kt) · [设置流程](https://github.com/wangzan101/mika/blob/f3bbbdf92caeb4259d55922e12f61f6da11469fd/docs/setup-guide.en.md) |
+| 工作区命令 | `AndroidSandbox` 调度独立子进程，区分网络开关、工作区映射、超时与取消。运行时包含有补丁的 PRoot、loader 和 Alpine 用户空间。与 Codex Linux 沙箱是两套实现，命令能启动这一项无法证明隔离等价。[AndroidSandbox.kt](https://github.com/wangzan101/mika/blob/f3bbbdf92caeb4259d55922e12f61f6da11469fd/app/src/main/java/com/wangzan101/mika/cap/sandbox/AndroidSandbox.kt) · [组件清单](https://github.com/wangzan101/mika/blob/f3bbbdf92caeb4259d55922e12f61f6da11469fd/licenses/THIRD_PARTY_NOTICES.md) |
+| 任务交互 | `AgentLoop` 每轮执行第一个工具调用，写操作由 gate 等待必要条件，等待状态与审批反馈返回任务层。快照和动作验证属于工具层；交接、确认和恢复属于任务层。[AgentLoop.kt](https://github.com/wangzan101/mika/blob/f3bbbdf92caeb4259d55922e12f61f6da11469fd/core/src/main/kotlin/com/wangzan101/mika/core/agent/AgentLoop.kt) |
+
+参考做法是观察快照绑定、权限失效即挂起和写入前确认。Rish 的 Android 实验先验证应用自身权限与系统 API 的最小闭环。ADB、Root、自动修改安全设置和移植 PRoot 分别涉及不同权限或分发成本，暂不纳入实验。仓库根为 Apache-2.0，第三方 PRoot 5.4.0 为 GPL-2.0-or-later，链接进 PRoot 的 talloc 和 Alpine 软件包有各自条款。若将来引入二进制，需要以实际交付清单重新核对。见 [LICENSE](https://github.com/wangzan101/mika/blob/f3bbbdf92caeb4259d55922e12f61f6da11469fd/LICENSE) 与 [第三方声明](https://github.com/wangzan101/mika/blob/f3bbbdf92caeb4259d55922e12f61f6da11469fd/licenses/THIRD_PARTY_NOTICES.md)。
