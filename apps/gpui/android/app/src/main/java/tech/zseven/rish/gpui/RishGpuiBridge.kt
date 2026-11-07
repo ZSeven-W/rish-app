@@ -194,7 +194,10 @@ object RishGpuiBridge {
                 }
                 return
             }
-            val isCancellation = method in setOf("cancelCustomProviderModelDiscovery", "cancelCompletion", "cancel_agent_attempt", "cancelPushV2", "cancelWorkspaceCloneV2")
+            val isCancellation = method in setOf(
+                "cancelProviderModelDiscovery", "cancelCustomProviderModelDiscovery", "cancelCompletion",
+                "cancel_agent_attempt", "cancelPushV2", "cancelWorkspaceCloneV2",
+            )
             val executor = if (isCancellation) cancellation else runtime.io
             executor.execute { settle(id) { route(runtime, module, method, args) } }
         } catch (failure: Throwable) { reject(id, failure) }
