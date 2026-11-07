@@ -165,6 +165,25 @@ class AndroidCodexRoundTest {
         }
     }
 
+    @Test fun threadPolicyMismatchPreventsSubmittingTheUserPrompt() {
+        val readOnly = JSONObject().put("type", "readOnly")
+        val policies = listOf(
+            "on-request" to readOnly,
+            "never" to JSONObject().put("type", "workspaceWrite"),
+            "never" to JSONObject().put("type", "readOnly").put("networkAccess", true),
+        )
+        for ((approval, sandbox) in policies) {
+            val server = Server { error("The prompt must not reach turn/start") }
+            server.approval = approval
+            server.sandbox = sandbox
+            withRound(server) { service, request, wal ->
+                assertEquals("ambiguous", service.completeRound(request).getString("status"))
+                assertTrue(row(wal).isNull("completion_receipt"))
+                assertEquals(listOf("initialize", "initialized", "thread/start"), server.methods)
+            }
+        }
+    }
+
     @Test fun toolItemCannotSettleAsATextAnswer() {
         val server = Server { process ->
             process.ack()
@@ -398,6 +417,8 @@ class AndroidCodexRoundTest {
     private fun uuid() = UUID.randomUUID().toString()
 
     private class Server(private val onTurn: (Server) -> Unit) : Process() {
+        var approval = "never"
+        var sandbox = JSONObject().put("type", "readOnly").put("networkAccess", false)
         val methods = mutableListOf<String>()
         private val ended = CountDownLatch(1)
         private val stdout = PipedInputStream(16 * 1024)
@@ -415,6 +436,7 @@ class AndroidCodexRoundTest {
                         val params = message.getJSONObject("params")
                         check(params.getString("sandbox") == "read-only" && params.getString("approvalPolicy") == "never")
                         response(2, JSONObject().put("model", MODEL)
+                            .put("approvalPolicy", approval).put("sandbox", sandbox)
                             .put("thread", JSONObject().put("id", "test-thread").put("ephemeral", true)))
                     }
                     "turn/start" -> {

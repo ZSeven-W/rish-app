@@ -29,7 +29,11 @@ internal class CodexSingleTurn(
 
     fun turnStart(result: JSONObject): JSONObject {
         val thread = result.optJSONObject("thread") ?: invalid()
-        if (thread.opt("ephemeral") != true || result.opt("model") != model) invalid()
+        val sandbox = result.optJSONObject("sandbox") ?: invalid()
+        if (thread.opt("ephemeral") != true || result.opt("model") != model ||
+            result.opt("approvalPolicy") != "never" || sandbox.opt("type") != "readOnly" ||
+            sandbox.has("networkAccess") && sandbox.opt("networkAccess") != false
+        ) invalid()
         val id = identifier(thread.opt("id"))
         threadId = id
         return JSONObject().put("threadId", id).put("input", JSONArray()
