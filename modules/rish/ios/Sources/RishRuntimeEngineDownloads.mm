@@ -491,7 +491,16 @@ static NSString *RishEngineSHA256(NSURL *url) {
 - (void)URLSession:(NSURLSession *)session downloadTask:(NSURLSessionDownloadTask *)task
     didWriteData:(int64_t)bytesWritten totalBytesWritten:(int64_t)total
     totalBytesExpectedToWrite:(int64_t)expected {
-  NSArray *identity = [self callbackIdentityForTask:task bindIfRestoring:YES];
-  if (expected > 0 && identity) [self recordProgress:(double)total / expected forEngine:identity[0] attempt:identity[1]];
+  @synchronized (self) {
+    NSArray *identity = [self callbackIdentityForTask:task bindIfRestoring:YES];
+    if (!identity) return;
+    int64_t limit = [self.artifactDescriptors[identity[0]][@"size"] longLongValue];
+    if (expected > limit || total > limit) {
+      [self setTerminal:@"failed" error:@"download_integrity_failed" engine:identity[0]];
+      [task cancel];
+      return;
+    }
+    if (expected > 0) [self recordProgress:(double)total / expected forEngine:identity[0] attempt:identity[1]];
+  }
 }
 @end

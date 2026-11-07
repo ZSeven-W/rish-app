@@ -77,6 +77,25 @@ static NSDictionary *Cancel(ShellRuntimeEnginesModule *module, id request, NSStr
   Check(expectedError ? [failure isEqual:expectedError] : result != nil, @"Cancel has the expected disposition");
   return result;
 }
+static void TransferBudgetChecks(NSURL *root, NSDictionary *descriptor) {
+  for (NSArray<NSNumber *> *budget in @[@[@1, @4], @[@4, @(-1)]]) {
+    NSURL *directory = [root URLByAppendingPathComponent:NSUUID.UUID.UUIDString];
+    RishRuntimeEngineDownloads *downloads = [[RishRuntimeEngineDownloads alloc] initWithDirectory:directory
+        descriptors:@{@"codex": descriptor} starter:^(NSString *engine, NSURL *url) {}];
+    [downloads installEngine:@"codex"];
+    FixtureDownloadTask *task = Task(downloads, descriptor);
+    [downloads beginRestoringTasks]; [downloads restoreTasks:@[task]];
+    [downloads URLSession:NSURLSession.sharedSession downloadTask:task didWriteData:1
+        totalBytesWritten:budget[0].longLongValue totalBytesExpectedToWrite:budget[1].longLongValue];
+    Check(task.cancellations == 1 && [[downloads installationForEngine:@"codex"][@"error"] isEqual:@"download_integrity_failed"],
+        @"A transfer exceeding the pinned size stops without waiting for all bytes");
+    NSURL *late = TempFile(root, [@"abc" dataUsingEncoding:NSUTF8StringEncoding]);
+    [downloads URLSession:NSURLSession.sharedSession downloadTask:task didFinishDownloadingToURL:late];
+    Check(![NSFileManager.defaultManager fileExistsAtPath:late.path] && ![downloads verifiedArtifactForEngine:@"codex"],
+        @"A rejected oversized transfer cannot install using a late success callback");
+  }
+}
+
 static void LifecycleChecks(NSURL *root, NSDictionary *descriptor) {
   NSURL *cache = [root URLByAppendingPathComponent:@"lifecycle"];
   NSDictionary *descriptors = @{@"codex": descriptor};
@@ -349,6 +368,7 @@ int main(int argc, const char *argv[]) {
           @"Real HTTP success, tampering, truncation and error status reach integrity gate");
     }
     [http finishTasksAndInvalidate];
+    TransferBudgetChecks(root, descriptor);
     LifecycleChecks(root, descriptor);
     [NSFileManager.defaultManager removeItemAtURL:root error:nil];
     printf("PASS: %lu runtime engine and download integrity checks\n", (unsigned long)checks);
