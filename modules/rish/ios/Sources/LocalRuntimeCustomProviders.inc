@@ -1,9 +1,5 @@
 // Included inside LocalRuntimeModule's implementation. This bridge carries
 // only provider metadata; secret values enter through the native secure alert.
-static BOOL DSHCustomProviderRequest(id value, NSArray<NSString *> *keys) {
-  if (![value isKindOfClass:NSDictionary.class] || ![value[@"schema_version"] isEqual:@1]) return NO;
-  return [[NSSet setWithArray:[value allKeys]] isEqual:[NSSet setWithArray:keys]];
-}
 static NSDictionary *DSHCustomCredentialStatus(NSDictionary *request, NSString *status) {
   return @{@"schema_version":@1, @"id":request[@"id"], @"status":status};
 }
@@ -28,7 +24,7 @@ RISH_NATIVE_METHOD(listCustomProviders, listCustomProvidersWithResolver:(RishRes
   }];
 }
 RISH_NATIVE_METHOD(saveCustomProvider, saveCustomProvider:(NSDictionary *)request resolver:(RishResolveBlock)resolve rejecter:(RishRejectBlock)reject) {
-  if (!DSHCustomProviderRequest(request, @[@"schema_version", @"expected_revision", @"provider"])) {
+  if (!DSHProviderModelsRequest(request, @[@"schema_version", @"expected_revision", @"provider"])) {
     reject(@"E_CUSTOM_PROVIDER_REGISTRY_INVALID", @"E_CUSTOM_PROVIDER_REGISTRY_INVALID", nil); return;
   }
   [DSHSessionWorkspaceCoordinator.sharedCoordinator performAsync:^{
@@ -44,7 +40,7 @@ RISH_NATIVE_METHOD(saveCustomProvider, saveCustomProvider:(NSDictionary *)reques
   }];
 }
 RISH_NATIVE_METHOD(removeCustomProvider, removeCustomProvider:(NSDictionary *)request resolver:(RishResolveBlock)resolve rejecter:(RishRejectBlock)reject) {
-  if (!DSHCustomProviderRequest(request, @[@"schema_version", @"expected_revision", @"id"])) {
+  if (!DSHProviderModelsRequest(request, @[@"schema_version", @"expected_revision", @"id"])) {
     reject(@"E_CUSTOM_PROVIDER_REGISTRY_INVALID", @"E_CUSTOM_PROVIDER_REGISTRY_INVALID", nil); return;
   }
   [DSHSessionWorkspaceCoordinator.sharedCoordinator performAsync:^{
@@ -60,7 +56,7 @@ RISH_NATIVE_METHOD(removeCustomProvider, removeCustomProvider:(NSDictionary *)re
   }];
 }
 RISH_NATIVE_METHOD(customProviderCredentialStatus, customProviderCredentialStatus:(NSDictionary *)request resolver:(RishResolveBlock)resolve rejecter:(RishRejectBlock)reject) {
-  if (!DSHCustomProviderRequest(request, @[@"schema_version", @"id"])) {
+  if (!DSHProviderModelsRequest(request, @[@"schema_version", @"id"])) {
     reject(@"E_CUSTOM_PROVIDER_REGISTRY_INVALID", @"E_CUSTOM_PROVIDER_REGISTRY_INVALID", nil); return;
   }
   [DSHSessionWorkspaceCoordinator.sharedCoordinator performAsync:^{
@@ -74,7 +70,7 @@ RISH_NATIVE_METHOD(customProviderCredentialStatus, customProviderCredentialStatu
   }];
 }
 RISH_NATIVE_METHOD(presentCustomProviderCredentialPrompt, presentCustomProviderCredentialPrompt:(NSDictionary *)request resolver:(RishResolveBlock)resolve rejecter:(RishRejectBlock)reject) {
-  if (!DSHCustomProviderRequest(request, @[@"schema_version", @"id", @"expected_profile", @"locale"])) {
+  if (!DSHProviderModelsRequest(request, @[@"schema_version", @"id", @"expected_profile", @"locale"])) {
     reject(@"E_CUSTOM_PROVIDER_REGISTRY_INVALID", @"E_CUSTOM_PROVIDER_REGISTRY_INVALID", nil); return;
   }
   [DSHSessionWorkspaceCoordinator.sharedCoordinator performAsync:^{
@@ -87,7 +83,7 @@ RISH_NATIVE_METHOD(presentCustomProviderCredentialPrompt, presentCustomProviderC
   }];
 }
 RISH_NATIVE_METHOD(clearCustomProviderCredential, clearCustomProviderCredential:(NSDictionary *)request resolver:(RishResolveBlock)resolve rejecter:(RishRejectBlock)reject) {
-  if (!DSHCustomProviderRequest(request, @[@"schema_version", @"id", @"expected_profile"])) {
+  if (!DSHProviderModelsRequest(request, @[@"schema_version", @"id", @"expected_profile"])) {
     reject(@"E_CUSTOM_PROVIDER_REGISTRY_INVALID", @"E_CUSTOM_PROVIDER_REGISTRY_INVALID", nil); return;
   }
   [DSHSessionWorkspaceCoordinator.sharedCoordinator performAsync:^{
@@ -103,8 +99,9 @@ RISH_NATIVE_METHOD(clearCustomProviderCredential, clearCustomProviderCredential:
 }
 
 RISH_NATIVE_METHOD(discoverCustomProviderModels, discoverCustomProviderModels:(NSDictionary *)request resolver:(RishResolveBlock)resolve rejecter:(RishRejectBlock)reject) {
-  if (!DSHCustomProviderRequest(request, @[@"schema_version", @"id", @"operation_id", @"expected_profile"]) ||
-      !DSHCustomProviderDiscoveryIsOperationId(request[@"operation_id"])) {
+  if (!DSHProviderModelsRequest(request, @[@"schema_version", @"id", @"operation_id", @"expected_profile"]) ||
+      !DSHCustomProviderDiscoveryIsOperationId(request[@"id"]) || !DSHCustomProviderDiscoveryIsOperationId(request[@"operation_id"]) ||
+      ![request[@"expected_profile"] isKindOfClass:NSDictionary.class]) {
     reject(@"E_CUSTOM_PROVIDER_REGISTRY_INVALID", @"E_CUSTOM_PROVIDER_REGISTRY_INVALID", nil); return;
   }
   [DSHSessionWorkspaceCoordinator.sharedCoordinator performAsync:^{
@@ -163,7 +160,7 @@ RISH_NATIVE_METHOD(discoverCustomProviderModels, discoverCustomProviderModels:(N
   }];
 }
 RISH_NATIVE_METHOD(cancelCustomProviderModelDiscovery, cancelCustomProviderModelDiscovery:(NSDictionary *)request resolver:(RishResolveBlock)resolve rejecter:(RishRejectBlock)reject) {
-  if (!DSHCustomProviderRequest(request, @[@"schema_version", @"id", @"operation_id"]) ||
+  if (!DSHProviderModelsRequest(request, @[@"schema_version", @"id", @"operation_id"]) ||
       !DSHCustomProviderDiscoveryIsOperationId(request[@"id"]) || !DSHCustomProviderDiscoveryIsOperationId(request[@"operation_id"])) {
     reject(@"E_CUSTOM_PROVIDER_REGISTRY_INVALID", @"E_CUSTOM_PROVIDER_REGISTRY_INVALID", nil); return;
   }

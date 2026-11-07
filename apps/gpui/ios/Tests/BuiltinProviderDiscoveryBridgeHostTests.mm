@@ -203,6 +203,12 @@ static void BoundaryBridgeCases(LocalRuntimeModule *runtime, LoopbackServer *ser
   BridgeCall *missing = Invoke(runtime,@"fetch",FetchRequest(@"codex",profile)); Settled(missing,@"E_PROVIDER_MODEL_DISCOVERY_CREDENTIAL");
   Check(server.captured.count == hits && subscriptionCredentialReads == 0, @"Missing API key refuses before HTTP even when subscription credentials exist");
   syntheticVault[account] = secret;
+  NSMutableDictionary *invalid = [FetchRequest(@"codex",profile) mutableCopy];
+  invalid[@"schema_version"] = @YES;
+  Settled(Invoke(runtime,@"fetch",invalid),@"E_PROVIDER_MODEL_DISCOVERY_INVALID");
+  invalid[@"schema_version"] = @1; invalid[@"expected_profile"] = NSNull.null;
+  Settled(Invoke(runtime,@"fetch",invalid),@"E_PROVIDER_MODEL_DISCOVERY_INVALID");
+  Check(server.captured.count == hits, @"Malformed discovery requests fail before any connection");
   runtime.blocked = YES;
   BridgeCall *busy = Invoke(runtime,@"fetch",FetchRequest(@"codex",profile)); Settled(busy,@"E_COMPLETION_BUSY");
   NSDictionary *registry = DSHProviderModelCatalog();

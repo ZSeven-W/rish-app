@@ -5,8 +5,10 @@ static BOOL DSHBuiltinModelHarness(id harness) {
     [@[@"dsh", @"claude-code", @"codex", @"glm"] containsObject:harness];
 }
 static BOOL DSHProviderModelsRequest(id value, NSArray<NSString *> *keys) {
-  return [value isKindOfClass:NSDictionary.class] && [value[@"schema_version"] isEqual:@1] &&
-    [[NSSet setWithArray:[value allKeys]] isEqual:[NSSet setWithArray:keys]];
+  if (![value isKindOfClass:NSDictionary.class]) return NO;
+  id version = value[@"schema_version"];
+  return [version isKindOfClass:NSNumber.class] && CFGetTypeID((__bridge CFTypeRef)version) != CFBooleanGetTypeID() &&
+    [version isEqual:@1] && [[NSSet setWithArray:[value allKeys]] isEqual:[NSSet setWithArray:keys]];
 }
 - (NSString *)apiModelDiscoveryCredentialForSlot:(NSString *)slot expectedAccount:(NSString *)account {
   // credentialForAccount: may return a Codex or ZCode subscription token.
@@ -43,7 +45,8 @@ RISH_NATIVE_METHOD(saveProviderModels, saveProviderModels:(NSDictionary *)reques
 }
 RISH_NATIVE_METHOD(discoverProviderModels, discoverProviderModels:(NSDictionary *)request resolver:(RishResolveBlock)resolve rejecter:(RishRejectBlock)reject) {
   if (!DSHProviderModelsRequest(request, @[@"schema_version", @"harness_id", @"operation_id", @"expected_profile"]) ||
-      !DSHBuiltinModelHarness(request[@"harness_id"]) || !DSHCustomProviderDiscoveryIsOperationId(request[@"operation_id"])) {
+      !DSHBuiltinModelHarness(request[@"harness_id"]) || !DSHCustomProviderDiscoveryIsOperationId(request[@"operation_id"]) ||
+      ![request[@"expected_profile"] isKindOfClass:NSDictionary.class]) {
     reject(@"E_PROVIDER_MODEL_DISCOVERY_INVALID", @"E_PROVIDER_MODEL_DISCOVERY_INVALID", nil); return;
   }
   [DSHSessionWorkspaceCoordinator.sharedCoordinator performAsync:^{
