@@ -226,6 +226,15 @@ static void LifecycleChecks(NSURL *root, NSDictionary *descriptor) {
   [downloads handleBackgroundEventsWithCompletion:^{ backgroundFinished++; }];
   [NSRunLoop.currentRunLoop runUntilDate:[NSDate dateWithTimeIntervalSinceNow:0.02]];
   Check(backgroundFinished == 2, @"Early event drain cannot lose host completion");
+  // Simulate a process exit after publishing the bytes but before saving terminal state.
+  [NSFileManager.defaultManager removeItemAtURL:artifact error:nil];
+  [downloads installEngine:@"codex"];
+  FixtureDownloadTask *alreadyPublished = Task(downloads, descriptor);
+  Check([good writeToURL:artifact atomically:YES], @"Verified bytes survive the interrupted journal write");
+  downloads = load();
+  [downloads beginRestoringTasks]; [downloads restoreTasks:@[alreadyPublished]];
+  Check(alreadyPublished.cancellations == 1 && alreadyPublished.resumes == 0 &&
+      [downloads verifiedArtifactForEngine:@"codex"] != nil, @"Restoration keeps verified bytes and cancels redundant transfers");
   // Lost system transfers become retryable after relaunch; errors persist.
   [NSFileManager.defaultManager removeItemAtURL:artifact error:nil];
   [downloads installEngine:@"codex"];

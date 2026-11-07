@@ -249,6 +249,12 @@ static NSString *RishEngineSHA256(NSURL *url) {
     if (!self.restoring) return;
     if (self.stateReadBlocked) { self.deferredTasks = [tasks copy]; return; }
     self.deferredTasks = nil;
+    // The file rename can commit before the attempt journal is saved. Reuse
+    // verified bytes rather than resuming a duplicate system download.
+    for (NSString *engine in self.artifactDescriptors) {
+      if ([self.states[engine][@"state"] isEqual:@"installing"] && [self verifiedArtifactForEngine:engine])
+        [self setTerminal:@"finished" error:nil engine:engine];
+    }
     [self publishDeferredDownloads];
     for (NSURLSessionTask *task in tasks) {
       NSArray *identity = [self identityForTask:task];
