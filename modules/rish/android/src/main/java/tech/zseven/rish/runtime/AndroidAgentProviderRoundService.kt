@@ -986,7 +986,7 @@ internal class AndroidAgentProviderRoundService(
         request: JSONObject,
         locator: JSONObject,
     ): ((JSONObject) -> Unit)? {
-        val publish = previewPublisher() ?: return null
+        val publish = try { previewPublisher() } catch (_: Exception) { null } ?: return null
         val correlation = JSONObject()
             .put("schema_version", 1)
             .put("task_id", request.opt("task_id"))
@@ -999,7 +999,9 @@ internal class AndroidAgentProviderRoundService(
         // The display refuses a sequence that starts at zero: the first event
         // a round ever sends is seq 1.
         var seq = 1
-        return { event ->
+        var watching = true
+        return preview@{ event ->
+            if (!watching) return@preview
             val payload = JSONObject(correlation.toString())
             for (key in event.keys()) payload.put(key, event.get(key))
             if (!payload.has("kind")) payload.put("kind", "delta")
@@ -1008,7 +1010,12 @@ internal class AndroidAgentProviderRoundService(
             }
             payload.put("seq", seq)
             seq += 1
-            publish(payload)
+            try {
+                publish(payload)
+            } catch (_: Exception) {
+                // Losing the display subscriber must not change the journal.
+                watching = false
+            }
         }
     }
 

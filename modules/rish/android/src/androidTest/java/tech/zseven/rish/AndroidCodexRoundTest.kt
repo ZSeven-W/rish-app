@@ -58,6 +58,25 @@ class AndroidCodexRoundTest {
         }
     }
 
+    @Test fun previewSubscriberFailureDoesNotAbortOrReplaceTheNativeAnswer() {
+        val server = Server { process ->
+            process.ack()
+            process.delta("preview")
+            process.answer()
+        }
+        var calls = 0
+        withRound(server, {
+            calls++
+            throw IllegalStateException("disconnected preview subscriber")
+        }) { service, request, wal ->
+            val result = service.completeRound(request)
+            assertEquals("completed", result.getString("status"))
+            assertEquals("Authoritative answer", result.getJSONObject("outcome").getString("text"))
+            assertEquals("completed", row(wal).getString("state"))
+            assertEquals(1, calls)
+        }
+    }
+
     @Test fun disconnectAfterPreviewLeavesAnAmbiguousRoundWithoutReplay() {
         val server = Server { process ->
             process.ack()
