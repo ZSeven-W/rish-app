@@ -182,6 +182,11 @@ static void LifecycleChecks(NSURL *root, NSDictionary *descriptor) {
   Check(![NSFileManager.defaultManager fileExistsAtPath:duplicateWhileLocked.path] &&
       [NSFileManager.defaultManager contentsOfDirectoryAtPath:cache.path error:nil].count == 3,
       @"Duplicate completions retain one deferred file and receipt for an attempt");
+  NSURL *orphan = [cache URLByAppendingPathComponent:
+      [NSString stringWithFormat:@".engine-deferred-%@.bin", NSUUID.UUID.UUIDString]];
+  NSURL *unrelated = [cache URLByAppendingPathComponent:@".engine-deferred-unrelated.bin"];
+  Check([good writeToURL:orphan atomically:YES] && [good writeToURL:unrelated atomically:YES],
+      @"Create orphan and unrelated fixture files");
   current.fixtureState = NSURLSessionTaskStateCompleted;
   locked = load();
   [locked beginRestoringTasks];
@@ -192,6 +197,8 @@ static void LifecycleChecks(NSURL *root, NSDictionary *descriptor) {
       @"Protected data availability reconciles deferred system tasks");
   Check([locked verifiedArtifactForEngine:@"codex"] != nil,
       @"Completion during journal lock survives restart and is published after unlock");
+  Check(![NSFileManager.defaultManager fileExistsAtPath:orphan.path] &&
+      [[NSData dataWithContentsOfURL:unrelated] isEqual:good], @"Reconciliation frees only recognized orphan bytes");
   [NSFileManager.defaultManager removeItemAtURL:[locked verifiedArtifactForEngine:@"codex"] error:nil];
   downloads = locked;
   [downloads installEngine:@"codex"];

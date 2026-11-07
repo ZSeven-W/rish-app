@@ -419,18 +419,26 @@ static NSString *RishEngineSHA256(NSURL *url) {
 - (void)publishDeferredDownloads {
   struct stat directory;
   if (lstat(self.directory.fileSystemRepresentation, &directory) != 0 || !S_ISDIR(directory.st_mode)) return;
-  for (NSURL *receipt in [NSFileManager.defaultManager contentsOfDirectoryAtURL:self.directory
+  for (NSURL *file in [NSFileManager.defaultManager contentsOfDirectoryAtURL:self.directory
       includingPropertiesForKeys:nil options:0 error:nil]) {
-    NSString *name = receipt.lastPathComponent;
-    if (![name hasPrefix:@".engine-deferred-"] || ![name hasSuffix:@".json"]) continue;
+    NSString *name = file.lastPathComponent;
+    if (![name hasPrefix:@".engine-deferred-"]) continue;
     NSString *identifier = [[name stringByDeletingPathExtension] substringFromIndex:@".engine-deferred-".length];
     struct stat metadata;
     if (![[NSUUID alloc] initWithUUIDString:identifier] ||
-        lstat(receipt.fileSystemRepresentation, &metadata) != 0 || !S_ISREG(metadata.st_mode) || metadata.st_size > 4096) continue;
-    NSData *data = [NSData dataWithContentsOfURL:receipt];
+        lstat(file.fileSystemRepresentation, &metadata) != 0 || !S_ISREG(metadata.st_mode)) continue;
+    NSURL *base = [file URLByDeletingPathExtension];
+    if ([file.pathExtension isEqual:@"bin"]) {
+      // The process can stop after moving the bytes but before writing the receipt.
+      NSURL *receipt = [base URLByAppendingPathExtension:@"json"];
+      if (lstat(receipt.fileSystemRepresentation, &metadata) != 0 && errno == ENOENT) [self discardTemporary:file];
+      continue;
+    }
+    if (![file.pathExtension isEqual:@"json"] || metadata.st_size > 4096) continue;
+    NSData *data = [NSData dataWithContentsOfURL:file];
     if (!data) continue;
     id record = [NSJSONSerialization JSONObjectWithData:data options:0 error:nil];
-    NSURL *bytes = [[receipt URLByDeletingPathExtension] URLByAppendingPathExtension:@"bin"];
+    NSURL *bytes = [base URLByAppendingPathExtension:@"bin"];
     if ([record isKindOfClass:NSDictionary.class] && [record[@"engine"] isKindOfClass:NSString.class] &&
         [record[@"attempt"] isKindOfClass:NSString.class] && [record[@"status"] isKindOfClass:NSNumber.class] &&
         [record[@"digest"] isEqual:self.artifactDescriptors[record[@"engine"]][@"sha256"]]) {
@@ -440,7 +448,7 @@ static NSString *RishEngineSHA256(NSURL *url) {
       [self finishDownloadForEngine:record[@"engine"] attempt:record[@"attempt"] file:bytes response:response];
     }
     [self discardTemporary:bytes];
-    unlink(receipt.fileSystemRepresentation);
+    unlink(file.fileSystemRepresentation);
   }
 }
 - (NSArray<NSString *> *)callbackIdentityForTask:(NSURLSessionTask *)task bindIfRestoring:(BOOL)bind {
