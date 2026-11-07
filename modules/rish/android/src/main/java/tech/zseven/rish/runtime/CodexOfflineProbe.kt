@@ -149,7 +149,7 @@ internal class CodexOfflineProbe(
             return digest.digest().joinToString("") { "%02x".format(it.toInt() and 0xff) }
         }
 
-        private fun removeTree(file: File) {
+        internal fun removeTree(file: File) {
             if (Files.isDirectory(file.toPath(), LinkOption.NOFOLLOW_LINKS)) {
                 file.listFiles()?.forEach(::removeTree)
             }

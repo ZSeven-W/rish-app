@@ -42,8 +42,14 @@ internal class AndroidAgentProviderRoundService(
     private val transcripts: AndroidAgentTranscriptStore,
     private val snapshots: AndroidProjectContextSnapshots? = null,
     private val assistantTools: AndroidAssistantTaskExecutor? = null,
+    private val codexRounds: AndroidCodexRoundTransport? = null,
+    private val previewPublisher: () -> ((JSONObject) -> Unit)? = { AndroidRuntimeState.current()?.roundPreview },
 ) {
     class Refused(val code: String) : Exception(code)
+    private class PreparedCall(
+        val execute: (((JSONObject) -> Unit)?) -> JSONObject,
+        val discard: () -> Unit,
+    )
 
     private fun decide(envelope: JSONObject): JSONObject {
         if (!RishAgentCoreNative.available) throw Refused(NATIVE)
@@ -197,7 +203,7 @@ internal class AndroidAgentProviderRoundService(
         // invents anything a tool can be asked to do.
         val registry = authority.getJSONObject("registry")
         val declared = JSONArray()
-        val names = registry.optJSONArray("tools") ?: JSONArray()
+        val names = if (codexRounds == null) registry.optJSONArray("tools") ?: JSONArray() else JSONArray()
         for (index in 0 until names.length()) {
             val name = names.optJSONObject(index)?.optString("name")
                 ?: names.optString(index).takeIf { it.isNotEmpty() }
@@ -262,23 +268,30 @@ internal class AndroidAgentProviderRoundService(
         // call must leave a round that may have happened.
         var providerError: String? = null
         val prepared = try {
-            val envelope = JSONObject()
-                .put("schema_version", 2)
-                .put("harness_id", request.optString("harness_id"))
-                .put("model", request.optString("model"))
-                .put("round_id", request.optString("round_id"))
-                // The transport calls it `turn_id`; an agent request calls the
-                // same identity `task_id`, and asking for a key the request
-                // does not have yields "" -- which is not a UUID.
-                .put("turn_id", request.optString("task_id"))
-                .put("attempt_id", request.optString("attempt_id"))
-                .put("round_index", request.optInt("round_index"))
-                .put("thinking_mode", request.optString("thinking_mode", "off"))
-                .put("visible_history", visibleHistory(conversation, authority))
-                .put("round_transcript", body)
-                .put("project_context", if (systemMessages.length() == 0) JSONObject.NULL else systemMessages)
-                .put("tools", declared)
-            transport.prepare(envelope.toString()).also { transport.validate(it, requireCredential = true) }
+            val history = visibleHistory(conversation, authority)
+            if (codexRounds != null) {
+                val round = codexRounds.prepare(request, history, body, systemMessages)
+                PreparedCall({ sink -> codexRounds.execute(round, sink) }, { codexRounds.discard(round) })
+            } else {
+                val envelope = JSONObject()
+                    .put("schema_version", 2)
+                    .put("harness_id", request.optString("harness_id"))
+                    .put("model", request.optString("model"))
+                    .put("round_id", request.optString("round_id"))
+                    // The transport calls it `turn_id`; an agent request calls the
+                    // same identity `task_id`, and asking for a key the request
+                    // does not have yields "" -- which is not a UUID.
+                    .put("turn_id", request.optString("task_id"))
+                    .put("attempt_id", request.optString("attempt_id"))
+                    .put("round_index", request.optInt("round_index"))
+                    .put("thinking_mode", request.optString("thinking_mode", "off"))
+                    .put("visible_history", history)
+                    .put("round_transcript", body)
+                    .put("project_context", if (systemMessages.length() == 0) JSONObject.NULL else systemMessages)
+                    .put("tools", declared)
+                val round = transport.prepare(envelope.toString()).also { transport.validate(it, requireCredential = true) }
+                PreparedCall({ sink -> transport.execute(round, sink) }, { transport.discard(round) })
+            }
         } catch (failure: Exception) {
             // What the transport said is what decides the round's failure
             // code, so its own vocabulary is kept rather than discarded.
@@ -304,7 +317,7 @@ internal class AndroidAgentProviderRoundService(
                 // The request holds a transport slot that only a run gives
                 // back. Leaving it there would refuse the next round as busy
                 // over a request nobody ever sent.
-                transport.discard(prepared)
+                prepared.discard()
                 throw failure
             }
         }
@@ -319,7 +332,7 @@ internal class AndroidAgentProviderRoundService(
             // round it belongs to is not display material, it is noise.
             preview = previewSink(request, locator)
             try {
-                transport.execute(prepared, preview)
+                prepared.execute(preview)
             } catch (failure: Exception) {
                 val end = JSONObject().put("kind", "end").put("status", "failed")
                     .put("failure_code", (failure as? RuntimeFailure)?.code ?: "E_COMPLETION_NATIVE")
@@ -338,7 +351,15 @@ internal class AndroidAgentProviderRoundService(
             null
         }
 
-        val status = if (reply == null) "failed_retryable" else "completed"
+        val dispatched = rowFor(wal.snapshot(), locator) ?: throw Refused(CONFLICT)
+        // The shared HTTP journal can retain an answer received during a
+        // cancel. This single-turn backend discards it once stop won the CAS.
+        val answer = reply?.takeIf { codexRounds == null || dispatched.optString("state") == "in_flight" }
+        if (reply != null && answer == null) {
+            preview?.invoke(JSONObject().put("kind", "end").put("status", "failed")
+                .put("failure_code", "E_COMPLETION_CANCELLED"))
+        }
+        val status = if (answer == null) "failed_retryable" else "completed"
         // A completed round carries no failure code. A failed one carries the
         // code the *core* derives from what the provider said -- the mapping
         // from a transport error to an agent failure is a rule, not a lookup
@@ -349,13 +370,12 @@ internal class AndroidAgentProviderRoundService(
                 .put("digest_mismatch", false),
         ).optString("code", "")
 
-        val dispatched = rowFor(wal.snapshot(), locator) ?: throw Refused(CONFLICT)
         val completeCas = decide(
             JSONObject().put("op", "round_cas").put("row", dispatched),
         ).optJSONObject("cas") ?: throw Refused(CONFLICT)
-        if (reply != null) {
+        if (answer != null) {
             try {
-                return settle(request, locator, completeCas, reply, root ?: JSONObject(), authority, contextReceipt)
+                return settle(request, locator, completeCas, answer, root ?: JSONObject(), authority, contextReceipt)
                     .also { preview?.invoke(JSONObject().put("kind", "end").put("status", "validated")) }
             } catch (failure: Exception) {
                 // The answer came whole; what failed is recording it.
@@ -924,8 +944,14 @@ internal class AndroidAgentProviderRoundService(
         // The provider call is keyed by the round id it was prepared under.
         // Stopping it is what makes cancelling immediate rather than a note
         // the next reply overwrites.
-        transport.cancel(request.optString("round_id"))
-        val cancelled = rounds.cancel(cas)?.optJSONObject("row") ?: row
+        val roundId = request.optString("round_id")
+        val outcome = if (codexRounds != null) {
+            rounds.cancel(cas).also { if (it != null) codexRounds.cancel(roundId) }
+        } else {
+            transport.cancel(roundId)
+            rounds.cancel(cas)
+        }
+        val cancelled = outcome?.optJSONObject("row") ?: row
         val state = cancelled.optString("state")
         val failure = decide(
             JSONObject().put("op", "round_failure_code").put("kind", "cancelled")
@@ -960,7 +986,7 @@ internal class AndroidAgentProviderRoundService(
         request: JSONObject,
         locator: JSONObject,
     ): ((JSONObject) -> Unit)? {
-        val publish = AndroidRuntimeState.current()?.roundPreview ?: return null
+        val publish = previewPublisher() ?: return null
         val correlation = JSONObject()
             .put("schema_version", 1)
             .put("task_id", request.opt("task_id"))

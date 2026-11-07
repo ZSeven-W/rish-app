@@ -17,6 +17,12 @@ import java.util.UUID
 class AndroidAgentCredentialPreflightTest {
     private val context = InstrumentationRegistry.getInstrumentation().targetContext
     private fun uuid() = UUID.randomUUID().toString()
+    private fun configuration(namespace: String): AndroidProviderConfiguration =
+        AndroidProviderConfiguration(context, "$namespace.providers") { JSONObject.NULL }.also { configuration ->
+            configuration.providerModels.save(JSONObject().put("schema_version", 1).put("expected_revision", 0)
+                .put("harness_id", "dsh").put("models", JSONArray().put(JSONObject()
+                    .put("id", AgentSessionFixture.MODEL).put("name", AgentSessionFixture.MODEL).put("supports_images", false))))
+        }
     private fun cas(ids: AgentSessionFixture.Ids, snapshot: JSONObject, revision: Int) = JSONObject()
         .put("schema_version", 1).put("conversation_id", ids.conversation).put("task_id", ids.task)
         .put("attempt_id", ids.attempt).put("expected_controller_generation", revision)
@@ -38,7 +44,9 @@ class AndroidAgentCredentialPreflightTest {
         val namespace = "credential-preflight-${uuid()}"
         val home = File(context.noBackupFilesDir, namespace).apply { mkdirs() }
         val sessions = AndroidSessionStore(context, "$namespace.db")
+        val previousRegistry = AndroidProviderConfiguration.registry
         try {
+            val configuration = configuration(namespace)
             val wal = AndroidAgentWal(File(home, "wal").apply { mkdirs() })
             val workspaces = AndroidWorkspaceRegistry(File(home, "workspaces").apply { mkdirs() })
             val workspace = workspaces.create("Preflight").getString("workspace_id")
@@ -72,7 +80,6 @@ class AndroidAgentCredentialPreflightTest {
                 .put("visible_history_sha256", digest())
             var snapshot = persist(sessions, session, first)
             val credentials = AndroidCredentialStore(context, namespace)
-            val configuration = AndroidProviderConfiguration(context, "$namespace.providers")
             val transport = AndroidModelTransport(credentials, configuration)
             val tasks = AndroidLiveTasks()
             val operations = AndroidAgentOperations(wal)
@@ -120,11 +127,13 @@ class AndroidAgentCredentialPreflightTest {
             assertEquals(0, wal.snapshot().getJSONArray("ledger").length())
             assertEquals(0, transport.sentRequestCount)
         } finally {
+            AndroidProviderConfiguration.registry = previousRegistry
             sessions.close()
             context.deleteDatabase("$namespace.db")
             home.deleteRecursively()
             context.getSharedPreferences(namespace, 0).edit().clear().commit()
             context.getSharedPreferences("$namespace.providers", 0).edit().clear().commit()
+            context.getSharedPreferences("$namespace.providers.models", 0).edit().clear().commit()
         }
     }
 
@@ -132,7 +141,8 @@ class AndroidAgentCredentialPreflightTest {
         assumeTrue(RishAgentCoreNative.available)
         AndroidDshModelCatalog.initialize(context)
         val namespace = "credential-readiness-${uuid()}"
-        val transport = AndroidModelTransport(AndroidCredentialStore(context, namespace), AndroidProviderConfiguration(context, "$namespace.providers"))
+        val previousRegistry = AndroidProviderConfiguration.registry
+        val transport = AndroidModelTransport(AndroidCredentialStore(context, namespace), configuration(namespace))
         val requestId = uuid()
         val envelope = JSONObject().put("schema_version", 2).put("harness_id", "dsh").put("model", AgentSessionFixture.MODEL)
             .put("round_id", requestId).put("turn_id", uuid()).put("attempt_id", uuid()).put("round_index", 0)
@@ -150,9 +160,11 @@ class AndroidAgentCredentialPreflightTest {
             catch (failure: RuntimeFailure) { assertEquals("E_COMPLETION_CREDENTIAL_CHANGED", failure.code) }
             assertEquals(0, transport.sentRequestCount)
         } finally {
+            AndroidProviderConfiguration.registry = previousRegistry
             transport.clear("DEEPSEEK_API_KEY")
             context.getSharedPreferences(namespace, 0).edit().clear().commit()
             context.getSharedPreferences("$namespace.providers", 0).edit().clear().commit()
+            context.getSharedPreferences("$namespace.providers.models", 0).edit().clear().commit()
         }
     }
 }

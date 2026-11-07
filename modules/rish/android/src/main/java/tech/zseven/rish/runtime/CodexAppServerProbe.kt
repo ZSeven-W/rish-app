@@ -31,9 +31,13 @@ internal class BoundedCodexAppServerProbeRunner(
         require(timeoutMs > 0 && teardownTimeoutMs > 0)
     }
 
-    private class Refused(val code: String) : Exception()
+    override fun run(executable: File, home: File, cancelled: AtomicBoolean): JSONObject =
+        exchange(executable, home, cancelled, null)
 
-    override fun run(executable: File, home: File, cancelled: AtomicBoolean): JSONObject {
+    internal fun runTurn(executable: File, home: File, cancelled: AtomicBoolean, turn: CodexSingleTurn): JSONObject =
+        exchange(executable, home, cancelled, turn)
+
+    private fun exchange(executable: File, home: File, cancelled: AtomicBoolean, turn: CodexSingleTurn?): JSONObject {
         val started = System.nanoTime()
         val deadline = started + TimeUnit.MILLISECONDS.toNanos(timeoutMs)
         // Reserve teardown inside the total budget rather than adding an
@@ -43,10 +47,11 @@ internal class BoundedCodexAppServerProbeRunner(
         val stopReaders = AtomicBoolean()
         val stdoutEnded = AtomicBoolean()
         val failure = AtomicReference<String?>(null)
-        val frames = ArrayBlockingQueue<String>(MAX_QUEUED_FRAMES)
+        val frames = ArrayBlockingQueue<String>(if (turn == null) MAX_QUEUED_FRAMES else MAX_TURN_QUEUED_FRAMES)
         val stderrBytes = ByteArrayOutputStream()
         val stderrTruncated = AtomicBoolean()
         val readers = mutableListOf<Thread>()
+        var writer: Thread? = null
         var process: Process? = null
         var initializeAcknowledged = false
         var initializedSent = false
@@ -62,9 +67,9 @@ internal class BoundedCodexAppServerProbeRunner(
         var protocolError: JSONObject? = null
 
         fun checkOperation(timeoutReason: String = "protocol_timeout") {
-            if (cancelled.get() || Thread.currentThread().isInterrupted) throw Refused("cancelled")
-            failure.get()?.let { throw Refused(it) }
-            if (System.nanoTime() >= operationDeadline) throw Refused(timeoutReason)
+            if (cancelled.get() || Thread.currentThread().isInterrupted) throw CodexProtocolRefused("cancelled")
+            failure.get()?.let { throw CodexProtocolRefused(it) }
+            if (System.nanoTime() >= operationDeadline) throw CodexProtocolRefused(timeoutReason)
         }
 
         fun parseFrame(frame: String): JSONObject {
@@ -84,7 +89,7 @@ internal class BoundedCodexAppServerProbeRunner(
             return true
         }
 
-        fun awaitResponse(id: Int): JSONObject {
+        fun receive(): JSONObject {
             while (true) {
                 checkOperation()
                 val frame = frames.poll(20, TimeUnit.MILLISECONDS)
@@ -94,14 +99,19 @@ internal class BoundedCodexAppServerProbeRunner(
                         // ended=true. Recheck after observing that terminal
                         // flag so a failure during poll is not relabeled EOF.
                         checkOperation()
-                        throw Refused("unexpected_eof")
+                        throw CodexProtocolRefused("unexpected_eof")
                     }
                     continue
                 }
-                val message = parseFrame(frame)
+                return parseFrame(frame)
+            }
+        }
+
+        fun awaitResponse(id: Int, onNotification: (JSONObject) -> Unit = {}): JSONObject {
+            while (true) {
+                val message = receive()
                 if (isNotification(message)) {
-                    // Notifications are bounded by the reader's byte/frame
-                    // budget. Never execute or retain their unknown payload.
+                    onNotification(message)
                     continue
                 }
                 if (!message.has("id")) throw Refused("invalid_protocol_frame")
@@ -133,15 +143,35 @@ internal class BoundedCodexAppServerProbeRunner(
                 checkOperation("shutdown_timeout")
                 val message = parseFrame(frame)
                 if (!isNotification(message)) throw Refused("response_id_mismatch")
+                turn?.accept(message)
             }
         }
 
-        fun send(running: Process, message: JSONObject) {
+        fun send(running: Process, message: JSONObject): String {
             checkOperation()
-            // Only the three small frames below can reach stdin. No caller can
-            // supply another method, configuration, account, model, or turn.
-            running.outputStream.write((message.toString() + "\n").toByteArray(Charsets.UTF_8))
-            running.outputStream.flush()
+            val body = message.toString()
+            val bytes = (body + "\n").toByteArray(Charsets.UTF_8)
+            if (bytes.size > MAX_FRAME_BYTES) throw Refused("stdin_frame_too_large")
+            if (turn == null) {
+                running.outputStream.write(bytes)
+                running.outputStream.flush()
+            } else {
+                // A stopped server can leave its stdin pipe full. Keep the
+                // protocol deadline and cancellation independent of the write.
+                val write = Thread({
+                    try {
+                        running.outputStream.write(bytes)
+                        running.outputStream.flush()
+                    } catch (_: Exception) { failure.compareAndSet(null, "stdio_io_error") }
+                }, "codex-app-server-stdin").apply { isDaemon = true; start() }
+                writer = write
+                while (write.isAlive) {
+                    checkOperation()
+                    write.join(5)
+                }
+                checkOperation()
+            }
+            return body
         }
 
         try {
@@ -152,7 +182,9 @@ internal class BoundedCodexAppServerProbeRunner(
             launched = true
             reaped = false
             readers += Thread({
-                readStdout(running, stopReaders, stdoutEnded, frames, failure)
+                readStdout(running, stopReaders, stdoutEnded, frames, failure,
+                    if (turn == null) MAX_STDOUT_BYTES else MAX_TURN_STDOUT_BYTES,
+                    if (turn == null) MAX_FRAMES else MAX_TURN_FRAMES)
             }, "codex-app-server-stdout").apply { isDaemon = true; start() }
             readers += Thread({
                 readStderr(running, stopReaders, stderrBytes, stderrTruncated, failure)
@@ -169,11 +201,29 @@ internal class BoundedCodexAppServerProbeRunner(
 
             send(running, JSONObject().put("method", "initialized").put("params", JSONObject()))
             initializedSent = true
-            send(running, JSONObject().put("id", 2).put("method", "thread/loaded/list")
-                .put("params", JSONObject()))
-            val loaded = awaitResponse(2).optJSONArray("data") ?: throw Refused("invalid_loaded_threads_response")
-            loadedThreadCount = loaded.length()
-            if (loaded.length() != 0) throw Refused("loaded_threads_not_empty")
+            if (turn == null) {
+                send(running, JSONObject().put("id", 2).put("method", "thread/loaded/list")
+                    .put("params", JSONObject()))
+                val loaded = awaitResponse(2).optJSONArray("data") ?: throw Refused("invalid_loaded_threads_response")
+                loadedThreadCount = loaded.length()
+                if (loaded.length() != 0) throw Refused("loaded_threads_not_empty")
+            } else {
+                val threadBody = send(running, JSONObject().put("id", 2).put("method", "thread/start")
+                    .put("params", turn.threadStart()))
+                val turnBody = send(running, JSONObject().put("id", 3).put("method", "turn/start")
+                    .put("params", turn.turnStart(awaitResponse(2))))
+                val early = mutableListOf<JSONObject>()
+                turn.bind(awaitResponse(3) { early += it }, "$threadBody\n$turnBody\n")
+                for (event in early) {
+                    checkOperation()
+                    turn.accept(event)
+                }
+                while (!turn.completed()) {
+                    val event = receive()
+                    if (!isNotification(event)) throw Refused("response_id_mismatch")
+                    turn.accept(event)
+                }
+            }
 
             checkOperation()
             running.outputStream.close()
@@ -192,8 +242,8 @@ internal class BoundedCodexAppServerProbeRunner(
             }
             drainTrailingNotifications()
             checkOperation("shutdown_timeout")
-            reason = "stdio_handshake_passed"
-        } catch (error: Refused) {
+            reason = if (turn == null) "stdio_handshake_passed" else "text_turn_completed"
+        } catch (error: CodexProtocolRefused) {
             reason = error.code
             if (reason == "cancelled") cancelled.set(true)
         } catch (_: InterruptedException) {
@@ -219,7 +269,7 @@ internal class BoundedCodexAppServerProbeRunner(
                 try { if (running.isAlive) running.destroyForcibly() } catch (_: Exception) { }
                 val readerDeadline = minOf(cleanupDeadline,
                     System.nanoTime() + TimeUnit.MILLISECONDS.toNanos(maxOf(1, cleanupBudgetMs / 2)))
-                readers.forEach { reader ->
+                (readers + listOfNotNull(writer)).forEach { reader ->
                     val left = readerDeadline - System.nanoTime()
                     if (left > 0) try {
                         val millis = TimeUnit.NANOSECONDS.toMillis(left)
@@ -238,7 +288,7 @@ internal class BoundedCodexAppServerProbeRunner(
                 // Readers poll only currently available pipe bytes; stopping
                 // them does not rely on a hung process closing a pipe or on a
                 // blocking stream.close() waking a read held under its lock.
-                readersStopped = readers.none { it.isAlive }
+                readersStopped = readers.none { it.isAlive } && writer?.isAlive != true
                 if (readersStopped) {
                     for (stream in listOf(running.inputStream, running.errorStream)) {
                         try { stream.close() } catch (_: IOException) { }
@@ -250,13 +300,13 @@ internal class BoundedCodexAppServerProbeRunner(
             }
             // A late malformed frame or reader failure must not be erased by
             // a previously valid response and a clean main-process exit.
-            if (reason == "stdio_handshake_passed") failure.get()?.let { reason = it }
-            if (reason == "stdio_handshake_passed" && cancelled.get()) reason = "cancelled"
+            if (reason in SUCCESS) failure.get()?.let { reason = it }
+            if (reason in SUCCESS && cancelled.get()) reason = "cancelled"
         }
 
         val stderr = synchronized(stderrBytes) { stderrBytes.toByteArray().toString(Charsets.UTF_8) }
         return JSONObject()
-            .put("state", if (reason == "stdio_handshake_passed" && reaped && readersStopped) "available" else "unavailable")
+            .put("state", if (reason in SUCCESS && reaped && readersStopped) "available" else "unavailable")
             .put("reason_code", reason)
             .put("initialize_acknowledged", initializeAcknowledged).put("initialized_sent", initializedSent)
             .put("loaded_thread_count", loadedThreadCount ?: JSONObject.NULL).put("user_agent", userAgent ?: JSONObject.NULL)
@@ -271,6 +321,7 @@ internal class BoundedCodexAppServerProbeRunner(
     private fun readStdout(
         process: Process, stop: AtomicBoolean, ended: AtomicBoolean,
         frames: ArrayBlockingQueue<String>, failure: AtomicReference<String?>,
+        maxBytes: Int, maxFrames: Int,
     ) {
         val line = ByteArrayOutputStream()
         var bytesSeen = 0
@@ -278,11 +329,11 @@ internal class BoundedCodexAppServerProbeRunner(
         try {
             readAvailable(process.inputStream, process, stop) { bytes, count ->
                 bytesSeen += count
-                if (bytesSeen > MAX_STDOUT_BYTES) throw Refused("stdout_budget_exceeded")
+                if (bytesSeen > maxBytes) throw Refused("stdout_budget_exceeded")
                 for (index in 0 until count) {
                     val byte = bytes[index]
                     if (byte == '\n'.code.toByte()) {
-                        if (++frameCount > MAX_FRAMES) throw Refused("stdout_frame_limit")
+                        if (++frameCount > maxFrames) throw Refused("stdout_frame_limit")
                         val raw = line.toByteArray()
                         val size = if (raw.lastOrNull() == '\r'.code.toByte()) raw.size - 1 else raw.size
                         val text = try {
@@ -419,13 +470,19 @@ internal class BoundedCodexAppServerProbeRunner(
     }
 
     companion object {
+        private val SUCCESS = setOf("stdio_handshake_passed", "text_turn_completed")
         const val MAX_FRAME_BYTES = 64 * 1024
         const val MAX_STDOUT_BYTES = 256 * 1024
         const val MAX_FRAMES = 64
         const val MAX_QUEUED_FRAMES = 16
+        private const val MAX_TURN_STDOUT_BYTES = 1024 * 1024
+        private const val MAX_TURN_FRAMES = 1024
+        private const val MAX_TURN_QUEUED_FRAMES = 128
         const val MAX_USER_AGENT_CHARS = 1024
         const val MAX_PROTOCOL_ERROR_CODE_POINTS = 512
         const val MAX_STDERR_CAPTURE_BYTES = 8192
         const val MAX_STDERR_BYTES_SEEN = 256 * 1024
     }
 }
+
+private typealias Refused = CodexProtocolRefused
