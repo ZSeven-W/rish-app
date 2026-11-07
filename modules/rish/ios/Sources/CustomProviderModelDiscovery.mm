@@ -115,7 +115,9 @@ static id DiscoveryPolicy(NSString *op, NSDictionary *fields, NSString **errorCo
       (!builtin && !DSHIsCustomProviderHarness(harness))) {
     [self finish:nil error:@"E_PROVIDER_MODEL_DISCOVERY_INVALID"]; return;
   }
-  if (DSHProviderRequiresCredential(configuration) && self.credential.length == 0) {
+  BOOL hasCredential;
+  @synchronized(self) { hasCredential = self.credential.length > 0; }
+  if (DSHProviderRequiresCredential(configuration) && !hasCredential) {
     [self finish:nil error:@"E_PROVIDER_MODEL_DISCOVERY_CREDENTIAL"]; return;
   }
   NSURLComponents *endpoint = [NSURLComponents componentsWithString:configuration[@"endpoint_url"]];
@@ -160,13 +162,13 @@ static id DiscoveryPolicy(NSString *op, NSDictionary *fields, NSString **errorCo
   request.HTTPMethod = @"GET"; request.HTTPShouldHandleCookies = NO;
   request.cachePolicy = NSURLRequestReloadIgnoringLocalCacheData; request.timeoutInterval = 15;
   [request setValue:@"application/json" forHTTPHeaderField:@"Accept"];
-  NSString *auth = self.configuration[@"auth_type"];
-  if ([auth isEqual:@"bearer"]) [request setValue:[@"Bearer " stringByAppendingString:self.credential ?: @""] forHTTPHeaderField:@"Authorization"];
-  else if ([@[@"x-api-key", @"api-key"] containsObject:auth]) [request setValue:self.credential forHTTPHeaderField:auth];
-  if ([self.configuration[@"protocol"] isEqual:@"messages"])
-    [request setValue:@"2023-06-01" forHTTPHeaderField:@"anthropic-version"];
   @synchronized(self) {
     if (self.finished) return;
+    NSString *auth = self.configuration[@"auth_type"];
+    if ([auth isEqual:@"bearer"]) [request setValue:[@"Bearer " stringByAppendingString:self.credential] forHTTPHeaderField:@"Authorization"];
+    else if ([@[@"x-api-key", @"api-key"] containsObject:auth]) [request setValue:self.credential forHTTPHeaderField:auth];
+    if ([self.configuration[@"protocol"] isEqual:@"messages"])
+      [request setValue:@"2023-06-01" forHTTPHeaderField:@"anthropic-version"];
     self.pages += 1; self.pageData = [NSMutableData data];
     self.task = [self.session dataTaskWithRequest:request]; [self.task resume];
   }
@@ -194,7 +196,11 @@ static id DiscoveryPolicy(NSString *op, NSDictionary *fields, NSString **errorCo
 }
 - (void)URLSession:(NSURLSession *)session task:(NSURLSessionTask *)task didCompleteWithError:(NSError *)error {
   NSData *bytes = nil;
-  @synchronized(self) { if (self.finished || task != self.task) return; bytes = [self.pageData copy]; self.task = nil; }
+  NSString *credential = nil;
+  @synchronized(self) {
+    if (self.finished || task != self.task) return;
+    bytes = [self.pageData copy]; credential = self.credential; self.task = nil;
+  }
   if (![self current]) { [self finish:nil error:@"E_PROVIDER_CONFIGURATION_CHANGED"]; return; }
   if (error) {
     [self finish:nil error:([error.domain isEqual:NSURLErrorDomain] && error.code == NSURLErrorTimedOut)
@@ -206,7 +212,6 @@ static id DiscoveryPolicy(NSString *op, NSDictionary *fields, NSString **errorCo
   NSDictionary *page = DiscoveryPolicy(@"models_parse_page", @{@"protocol":self.configuration[@"protocol"], @"response_body":body}, &failure);
   if (![page isKindOfClass:NSDictionary.class]) { [self finish:nil error:failure]; return; }
   BOOL truncated = NO;
-  NSString *credential = [self.credential copy];
   BOOL rejectCredentialEcho = ![self.configuration[@"auth_type"] isEqual:@"none"] && credential.length > 0;
   // A retired row may be filtered out of candidates while its id remains
   // the pagination cursor. Never put a reflected credential into a URL.
