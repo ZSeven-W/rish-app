@@ -137,6 +137,37 @@ class AndroidCodexOfflineProbeTest {
         }
     }
 
+    @Test
+    fun linuxNamespaceRequirementsAreMeasuredUnderTheAppUid() {
+        assertNoActiveNetwork("before_namespace_canary")
+        val home = Files.createTempDirectory(context.cacheDir.toPath(), "codex-namespace-canary-").toFile()
+        try {
+            val uid = runCanary(listOf("/system/bin/id", "-u"), home, emptyMap())
+            assertEquals(0, uid.first)
+            assertEquals(Process.myUid().toString(), uid.second.trim())
+            val control = runCanary(listOf("/system/bin/true"), home, emptyMap())
+            assertEquals(0, control.first)
+            val results = Bundle()
+            for ((kind, flag) in listOf("user" to "-U", "mount" to "-m")) {
+                val (exit, output) = runCanary(listOf("/system/bin/unshare", flag, "/system/bin/true"),
+                    home, emptyMap())
+                val reason = when {
+                    exit == 0 -> "available"
+                    "Operation not permitted" in output || "Permission denied" in output -> "denied"
+                    "Invalid argument" in output || "Function not implemented" in output -> "unsupported"
+                    else -> "unclassified"
+                }
+                results.putString("codex_namespace_${kind}", reason)
+                results.putInt("codex_namespace_${kind}_exit", exit)
+                assertTrue("Unclassified $kind namespace result ($exit): $output", reason != "unclassified")
+            }
+            InstrumentationRegistry.getInstrumentation().sendStatus(0, results)
+            assertNoActiveNetwork("after_namespace_canary")
+        } finally {
+            CodexOfflineProbe.removeTree(home)
+        }
+    }
+
     private fun runCanary(argv: List<String>, home: File, env: Map<String, String>): Pair<Int, String> {
         val child = ProcessBuilder(argv).directory(home).redirectErrorStream(true).apply {
             environment().clear()
