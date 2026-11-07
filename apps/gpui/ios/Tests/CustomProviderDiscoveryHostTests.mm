@@ -283,10 +283,16 @@ static void PaginationCases(LoopbackServer *server, NSDictionary *configuration)
     [afterRetired.queryItems[0].value isEqual:@"retired-last"],
     @"Pagination uses the last raw retired row even when the filtered page contains no candidates");
   before = server.captured.count;
+  Reply(server, Page(@[@"overlap", @"page-one"], YES));
+  Reply(server, Page(@[@"overlap", @"page-two"], NO));
+  run = NewDiscovery(configuration, @"synthetic-pagination"); [run.service start]; Complete(run, nil);
+  Check([[run.result[@"models"] valueForKey:@"wire_model"] isEqual:@[@"overlap", @"page-one", @"page-two"]] &&
+    server.captured.count == before + 2, @"Overlapping pages preserve the first occurrence and collect later candidates");
+  before = server.captured.count;
   Reply(server, Page(@[@"repeat"], YES)); Reply(server, Page(@[@"repeat"], YES));
   run = NewDiscovery(configuration, @"synthetic-pagination"); [run.service start];
   Complete(run, @"E_PROVIDER_MODEL_DISCOVERY_INVALID");
-  Check(server.captured.count == before + 2, @"A repeated cursor or duplicate across pages cannot trigger a third request");
+  Check(server.captured.count == before + 2, @"A repeated cursor cannot trigger a third request");
 
   NSMutableArray *firstBatch = [NSMutableArray array]; NSMutableArray *secondBatch = [NSMutableArray array];
   for (NSUInteger index = 0; index < 300; index++) {

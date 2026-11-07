@@ -227,7 +227,7 @@ static id DiscoveryPolicy(NSString *op, NSDictionary *fields, NSString **errorCo
         [self finish:nil error:@"E_PROVIDER_MODEL_DISCOVERY_INVALID"]; return;
       }
     }
-    if ([self.modelIds containsObject:row[@"wire_model"]]) { [self finish:nil error:@"E_PROVIDER_MODEL_DISCOVERY_INVALID"]; return; }
+    if ([self.modelIds containsObject:row[@"wire_model"]]) continue;
     if (self.models.count == DiscoveryModelLimit) { truncated = YES; break; }
     [self.models addObject:row]; [self.modelIds addObject:row[@"wire_model"]];
   }
