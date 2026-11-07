@@ -10,8 +10,10 @@ import androidx.test.core.app.ApplicationProvider
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
 import java.io.File
+import java.nio.file.Files
 import java.security.MessageDigest
 import java.util.UUID
+import java.util.concurrent.TimeUnit
 import org.json.JSONArray
 import org.json.JSONObject
 import org.junit.Assert.assertEquals
@@ -23,6 +25,8 @@ import org.junit.Assume.assumeTrue
 import org.junit.Test
 import org.junit.runner.RunWith
 import tech.zseven.rish.runtime.AndroidSubscriptionAuthProcessFactory
+import tech.zseven.rish.runtime.BoundedCodexProbeCommandRunner
+import tech.zseven.rish.runtime.CodexOfflineProbe
 import tech.zseven.rish.runtime.CodexOfflineProbeService
 
 /** Exercises offline commands and two fresh stdio handshakes under the app UID. */
@@ -85,6 +89,72 @@ class AndroidCodexOfflineProbeTest {
         }
         assertNoActiveNetwork("after_both_probes")
         assertFalse("Offline handshakes must not enable production authentication", authentication.available("codex"))
+    }
+
+    @Test
+    fun readOnlySandboxCanaryReportsEnforcementOrAnUnavailableLauncher() {
+        assumeTrue("Requires the dedicated Codex probe build", BuildConfig.RISH_CODEX_PROBE_BUNDLED)
+        assertNoActiveNetwork("before_sandbox_canary")
+        assertEquals(context.applicationInfo.uid, Process.myUid())
+        val binary = File(context.applicationInfo.nativeLibraryDir, "libcodex.so")
+        assertTrue(binary.canExecute())
+        val home = Files.createTempDirectory(context.cacheDir.toPath(), "codex-sandbox-canary-").toFile()
+        try {
+            val input = File(home, "read.txt").apply { writeText("rish-canary") }
+            val output = File(home, "write.txt")
+            val command = listOf("/system/bin/sh", "-c", """
+                value=$(/system/bin/cat "$1") || exit 40
+                [ "${'$'}value" = rish-canary ] || exit 40
+                printf 'RISH_READ_OK\n'
+                printf 'rish-written' > "$2" || exit 42
+            """.trimIndent(), "canary", input.absolutePath, output.absolutePath)
+            val environment = BoundedCodexProbeCommandRunner.environment(home)
+            val control = runCanary(command, home, environment)
+            assertEquals(control.second, 0, control.first)
+            assertTrue(control.second.contains("RISH_READ_OK"))
+            assertEquals("rish-written", output.readText())
+            assertTrue(output.delete())
+
+            val (exit, diagnostics) = runCanary(listOf(binary.absolutePath, "sandbox", "linux", "--") + command,
+                home, environment)
+            val readAllowed = diagnostics.lineSequence().any { it == "RISH_READ_OK" }
+            val reason = when {
+                exit == 42 && readAllowed -> "read_only_enforced"
+                exit == 101 && !readAllowed && diagnostics.contains("bubblewrap is unavailable") -> "bubblewrap_unavailable"
+                else -> "unexpected_sandbox_result"
+            }
+            InstrumentationRegistry.getInstrumentation().sendStatus(0, Bundle().apply {
+                putString("codex_sandbox_canary", reason)
+                putInt("codex_sandbox_exit", exit)
+                putBoolean("codex_sandbox_canary_ran", readAllowed)
+                putBoolean("codex_sandbox_write_observed", output.exists())
+            })
+            assertFalse("The sandbox canary wrote to its read-only home", output.exists())
+            assertTrue("Unclassified sandbox result ($exit): $diagnostics", reason != "unexpected_sandbox_result")
+            assertNoActiveNetwork("after_sandbox_canary")
+        } finally {
+            CodexOfflineProbe.removeTree(home)
+        }
+    }
+
+    private fun runCanary(argv: List<String>, home: File, env: Map<String, String>): Pair<Int, String> {
+        val child = ProcessBuilder(argv).directory(home).redirectErrorStream(true).apply {
+            environment().clear()
+            environment().putAll(env)
+        }.start()
+        try {
+            child.outputStream.close()
+            assertTrue("Sandbox canary exceeded its deadline", child.waitFor(8, TimeUnit.SECONDS))
+            val bytes = ByteArray(8192)
+            val read = child.inputStream.use { it.read(bytes) }
+            val diagnostics = if (read > 0) String(bytes, 0, read, Charsets.UTF_8) else ""
+            return child.exitValue() to diagnostics
+        } finally {
+            if (child.isAlive) {
+                child.destroyForcibly()
+                assertTrue("Sandbox canary did not stop", child.waitFor(2, TimeUnit.SECONDS))
+            }
+        }
     }
 
     private fun runFreshProbe(requestId: String, expectedHash: String, iteration: Int) {
