@@ -12,6 +12,7 @@ internal class CodexSingleTurn(
 ) {
     private var threadId: String? = null
     private var turnId: String? = null
+    private val itemTypes = mutableMapOf<String, String>()
     private val completedItems = mutableSetOf<String>()
     private var finalAnswer: String? = null
     private var legacyAnswer: String? = null
@@ -61,26 +62,32 @@ internal class CodexSingleTurn(
                 if (answer().isNullOrBlank()) invalid()
             }
             "item/agentMessage/delta" -> {
-                if (terminal || identifier(params.opt("itemId")) in completedItems) invalid()
+                recordItem(params.opt("itemId"), "agentMessage")
                 val delta = params.opt("delta") as? String ?: invalid()
                 if (delta.isNotEmpty()) preview(delta)
             }
             "item/started", "item/completed" -> {
-                if (terminal) invalid()
                 val item = params.optJSONObject("item") ?: invalid()
-                val type = item.opt("type")
+                val type = item.opt("type") as? String ?: invalid()
                 if (type !in setOf("agentMessage", "userMessage", "reasoning")) invalid()
-                val id = identifier(item.opt("id"))
-                if (id in completedItems) invalid()
+                val id = recordItem(item.opt("id"), type)
                 if (method == "item/completed") {
                     completedItems.add(id)
                     if (type == "agentMessage") completeMessage(item)
                 }
             }
             "item/reasoning/summaryTextDelta", "item/reasoning/summaryPartAdded",
-            "item/reasoning/textDelta" -> Unit
+            "item/reasoning/textDelta" -> recordItem(params.opt("itemId"), "reasoning")
             else -> if (method.startsWith("item/")) invalid()
         }
+    }
+
+    private fun recordItem(value: Any?, type: String): String {
+        val id = identifier(value)
+        if (terminal || id in completedItems) invalid()
+        val previousType = itemTypes.putIfAbsent(id, type)
+        if (previousType != null && previousType != type) invalid()
+        return id
     }
 
     private fun completeMessage(item: JSONObject) {

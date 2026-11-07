@@ -151,6 +151,20 @@ class AndroidCodexRoundTest {
         }
     }
 
+    @Test fun aReasoningItemCannotBeReusedAsAnAgentAnswer() {
+        val server = Server { process ->
+            process.ack()
+            process.event("item/started", JSONObject().put("turnId", "test-turn").put(
+                "item", JSONObject().put("type", "reasoning").put("id", "message"),
+            ))
+            process.answer()
+        }
+        withRound(server) { service, request, wal ->
+            assertEquals("ambiguous", service.completeRound(request).getString("status"))
+            assertTrue(row(wal).isNull("completion_receipt"))
+        }
+    }
+
     @Test fun toolItemCannotSettleAsATextAnswer() {
         val server = Server { process ->
             process.ack()
