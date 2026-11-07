@@ -72,18 +72,19 @@ static id DiscoveryPolicy(NSString *op, NSDictionary *fields, NSString **errorCo
   @try { return self.sourceIsCurrent && self.sourceIsCurrent(); }
   @catch (__unused NSException *exception) { return NO; }
 }
-- (void)finish:(NSDictionary *)result error:(NSString *)errorCode {
+- (BOOL)finish:(NSDictionary *)result error:(NSString *)errorCode {
   if (result && ![self current]) { result = nil; errorCode = @"E_PROVIDER_CONFIGURATION_CHANGED"; }
   void (^completion)(NSDictionary *, NSString *) = nil;
   NSURLSession *session = nil;
   @synchronized(self) {
-    if (self.finished) return;
+    if (self.finished) return NO;
     self.finished = YES; completion = self.completion; self.completion = nil;
     self.credential = nil; session = self.session; self.session = nil;
     self.task = nil; self.pageData = nil;
   }
   [session invalidateAndCancel];
   if (completion) completion(result, errorCode);
+  return YES;
 }
 - (void)cancel { [self finish:nil error:@"E_PROVIDER_MODEL_DISCOVERY_CANCELLED"]; }
 - (BOOL)cancelForProviderId:(NSString *)providerId operationId:(NSString *)operationId {
@@ -97,7 +98,7 @@ static id DiscoveryPolicy(NSString *op, NSDictionary *fields, NSString **errorCo
     if (!self.started || self.finished || ![self.operationId isEqual:operationId] ||
         ![self.configuration[@"harness_id"] isEqual:harnessId]) return NO;
   }
-  [self cancel]; return YES;
+  return [self finish:nil error:@"E_PROVIDER_MODEL_DISCOVERY_CANCELLED"];
 }
 - (void)start {
   @synchronized(self) { if (self.started || self.finished) return; self.started = YES; }
