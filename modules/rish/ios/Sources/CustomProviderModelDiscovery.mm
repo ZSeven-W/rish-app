@@ -131,7 +131,12 @@ static id DiscoveryPolicy(NSString *op, NSDictionary *fields, NSString **errorCo
   sessionConfiguration.requestCachePolicy = NSURLRequestReloadIgnoringLocalCacheData;
   sessionConfiguration.timeoutIntervalForRequest = 15; sessionConfiguration.timeoutIntervalForResource = DiscoveryTimeout;
   NSOperationQueue *queue = [[NSOperationQueue alloc] init]; queue.maxConcurrentOperationCount = 1;
-  self.session = [NSURLSession sessionWithConfiguration:sessionConfiguration delegate:self delegateQueue:queue];
+  @synchronized(self) {
+    // A stop during profile validation may already have finished the request.
+    // Creating a delegate session after that would leave it unowned by finish.
+    if (self.finished) return;
+    self.session = [NSURLSession sessionWithConfiguration:sessionConfiguration delegate:self delegateQueue:queue];
+  }
   __weak DSHCustomProviderModelDiscovery *weakSelf = self;
   dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(DiscoveryTimeout * NSEC_PER_SEC)),
     dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0), ^{
