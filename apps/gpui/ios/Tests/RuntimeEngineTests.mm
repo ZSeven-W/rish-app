@@ -169,6 +169,10 @@ static void LifecycleChecks(NSURL *root, NSDictionary *descriptor) {
       @"Unreadable journal defers restoration without cancelling system-owned work");
   [locked installEngine:@"codex"];
   Check(started == before, @"Unreadable journal cannot launch a conflicting attempt");
+  FixtureDownloadTask *oversizedTransfer = Task(downloads, descriptor);
+  [locked URLSession:NSURLSession.sharedSession downloadTask:oversizedTransfer didWriteData:4 totalBytesWritten:4 totalBytesExpectedToWrite:-1];
+  Check(oversizedTransfer.cancellations == 1 && current.cancellations == 0,
+      @"Pinned transfer budget still cancels an oversized task while the journal is unreadable");
   NSURL *oversizedWhileLocked = TempFile(root, [@"oversized" dataUsingEncoding:NSUTF8StringEncoding]);
   [locked URLSession:NSURLSession.sharedSession downloadTask:current didFinishDownloadingToURL:oversizedWhileLocked];
   Check(![NSFileManager.defaultManager fileExistsAtPath:oversizedWhileLocked.path] &&

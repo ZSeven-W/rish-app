@@ -509,15 +509,18 @@ static NSString *RishEngineSHA256(NSURL *url) {
     didWriteData:(int64_t)bytesWritten totalBytesWritten:(int64_t)total
     totalBytesExpectedToWrite:(int64_t)expected {
   @synchronized (self) {
-    NSArray *identity = [self callbackIdentityForTask:task bindIfRestoring:YES];
+    // The pinned transfer budget is available before the authority journal
+    // unlocks. Only a bound task may settle the journal.
+    NSArray *identity = self.stateReadBlocked ? [self identityForTask:task] : [self callbackIdentityForTask:task bindIfRestoring:YES];
     if (!identity) return;
     int64_t limit = [self.artifactDescriptors[identity[0]][@"size"] longLongValue];
     if (expected > limit || total > limit) {
-      [self setTerminal:@"failed" error:@"download_integrity_failed" engine:identity[0]];
+      if (!self.stateReadBlocked) [self setTerminal:@"failed" error:@"download_integrity_failed" engine:identity[0]];
       [task cancel];
       return;
     }
-    if (limit > 0 && total >= 0) [self recordProgress:(double)total / limit forEngine:identity[0] attempt:identity[1]];
+    if (!self.stateReadBlocked && limit > 0 && total >= 0)
+      [self recordProgress:(double)total / limit forEngine:identity[0] attempt:identity[1]];
   }
 }
 @end
