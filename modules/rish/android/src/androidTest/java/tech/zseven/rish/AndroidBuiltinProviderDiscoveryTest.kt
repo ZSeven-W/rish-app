@@ -263,6 +263,24 @@ class AndroidBuiltinProviderDiscoveryTest {
         }
     }
 
+    @Test fun oldCredentialRefusalDoesNotOverrideACredentialRotation() = Fixture().use { f ->
+        val release = CountDownLatch(1)
+        Server(listOf(Reply("{}", status = 401, release = release))).use { server ->
+            f.setup(server, "glm", "chat-completions", "bearer")
+            val executor = Executors.newSingleThreadExecutor()
+            try {
+                val pending = executor.submit<JSONObject> { f.service.discover(f.request("glm")) }
+                server.received()
+                f.keys.put(f.configs.effectiveAccount("BIGMODEL_API_KEY"), "rotated-fixture-key")
+                release.countDown()
+                val error = assertThrows(ExecutionException::class.java) { pending.get(10, TimeUnit.SECONDS) }
+                assertEquals("E_PROVIDER_CONFIGURATION_CHANGED", (error.cause as RuntimeFailure).code)
+                assertEquals(0, f.transport.activeRequestCount())
+                server.await()
+            } finally { release.countDown(); executor.shutdownNow() }
+        }
+    }
+
     @Test fun unknownFullEndpointAndUnsupportedHttpResponseKeepManualCatalog() = Fixture().use { f ->
         Server(listOf(Reply("{}", 404))).use { server ->
             f.setup(server, "glm", "chat-completions", "bearer")

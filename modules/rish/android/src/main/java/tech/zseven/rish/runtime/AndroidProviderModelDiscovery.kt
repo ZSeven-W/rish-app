@@ -207,9 +207,10 @@ internal class AndroidProviderModelDiscovery(
                 JSONObject().put("schema_version", 1).put(if (captured.builtin) "harness_id" else "id", captured.id).put("operation_id", captured.operationId)
                     .put("models", JSONArray(models.values.toList())).put("truncated", truncated)
             }
-        } catch (failure: RuntimeFailure) { throw failure }
-        catch (failure: Exception) {
+        } catch (failure: Exception) {
+            // Even an HTTP or parser refusal belongs to the captured profile.
             transport.withDiscovery(captured.reservation) { verify(captured) }
+            if (failure is RuntimeFailure) throw failure
             fail(if (failure is java.net.SocketTimeoutException || failure is java.io.InterruptedIOException)
                 "E_PROVIDER_MODEL_DISCOVERY_TIMEOUT" else "E_PROVIDER_MODEL_DISCOVERY_TRANSPORT")
         }
