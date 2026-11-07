@@ -2382,8 +2382,8 @@ static NSString *DSHCredentialPromptPlaceholder(NSString *account) {
   }
   return YES;
 }
-#include "LocalRuntimeCustomProviders.inc"
 #include "LocalRuntimeProviderModels.inc"
+#include "LocalRuntimeCustomProviders.inc"
 
 // Puts a diagnostic report on the clipboard, for a tester to paste rather
 // than screenshot. The report is assembled in the UI from value-free

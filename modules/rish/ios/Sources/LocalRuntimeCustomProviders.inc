@@ -116,8 +116,9 @@ RISH_NATIVE_METHOD(discoverCustomProviderModels, discoverCustomProviderModels:(N
     NSString *account = DSHEffectiveCredentialAccount(slot);
     if (!slot) { reject(@"E_PROVIDER_MODEL_DISCOVERY_CREDENTIAL", @"E_PROVIDER_MODEL_DISCOVERY_CREDENTIAL", nil); return; }
     NSUInteger generation = [self credentialGenerationForSlot:slot];
-    NSString *credential = DSHProviderRequiresCredential(profile) ? [self credentialForAccount:slot generation:&generation] : nil;
-    if (DSHProviderRequiresCredential(profile) && (account == nil || credential.length == 0)) {
+    BOOL requiresCredential = DSHProviderRequiresCredential(profile);
+    NSString *credential = requiresCredential ? [self apiModelDiscoveryCredentialForSlot:slot expectedAccount:account] : nil;
+    if (requiresCredential && credential.length == 0) {
       reject(@"E_PROVIDER_MODEL_DISCOVERY_CREDENTIAL", @"E_PROVIDER_MODEL_DISCOVERY_CREDENTIAL", nil); return;
     }
     __weak LocalRuntimeModule *weakSelf = self;
@@ -127,10 +128,12 @@ RISH_NATIVE_METHOD(discoverCustomProviderModels, discoverCustomProviderModels:(N
         LocalRuntimeModule *runtime = weakSelf;
         NSDictionary *now = [DSHProviderConfigurationStore.sharedStore customProviderForId:request[@"id"]];
         NSString *effective = DSHEffectiveCredentialAccount(slot);
-        current = runtime && [runtime.customProviderDiscoveryOperationId isEqual:request[@"operation_id"]] &&
+        current = runtime && [runtime.customProviderDiscoveryId isEqual:request[@"id"]] &&
+          [runtime.customProviderDiscoveryOperationId isEqual:request[@"operation_id"]] &&
           [now[@"active"] boolValue] && [now[@"configuration"] isEqual:profile] &&
           [runtime credentialGenerationForSlot:slot] == generation &&
-          (account == nil ? effective == nil : [account isEqual:effective]);
+          (account == nil ? effective == nil : [account isEqual:effective]) &&
+          (!requiresCredential || [[runtime apiModelDiscoveryCredentialForSlot:slot expectedAccount:account] isEqual:credential]);
       }];
       return current;
     };
@@ -141,7 +144,8 @@ RISH_NATIVE_METHOD(discoverCustomProviderModels, discoverCustomProviderModels:(N
           LocalRuntimeModule *runtime = weakSelf;
           BOOL current = isCurrent();
           @synchronized(runtime) {
-            if ([runtime.customProviderDiscoveryOperationId isEqual:request[@"operation_id"]]) {
+            if ([runtime.customProviderDiscoveryId isEqual:request[@"id"]] &&
+                [runtime.customProviderDiscoveryOperationId isEqual:request[@"operation_id"]]) {
               runtime.customProviderDiscovery = nil; runtime.customProviderDiscoveryId = nil;
               runtime.customProviderDiscoveryOperationId = nil;
             }
