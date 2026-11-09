@@ -29,7 +29,7 @@ import tech.zseven.rish.runtime.AndroidRuntimeState
 /**
  * Opt-in physical-input acceptance on an isolated Pixel XL (1440x2560, 560dpi).
  * No credentials, discovery, sends, direct model writes or session fixture writes.
- * Run prepareModelAndDraft, force-stop externally, then restoreAfterProcessRestart.
+ * Prepare and optionally retire the model, force-stopping before either restore.
  * The cache receipt is test evidence only; the app never reads it.
  */
 @RunWith(AndroidJUnit4::class)
@@ -43,6 +43,7 @@ class ModelDraftAcceptanceTest {
     }
     private val modelId = "rish-p0-android-$runId"
     private val modelName = "Rish Android P0 QA"
+    private val modelRow get() = "$modelId | $modelName"
     private val draft = "Rish Android unsent draft 20261106"
     private val receipt get() = File(context.cacheDir, "model-draft-qa-receipt.json")
 
@@ -91,21 +92,15 @@ class ModelDraftAcceptanceTest {
         dismissKeyboard()
         openProviderEditor()
         tapArgument("manual", 700f, 1800f)
-        val field = awaitEditor(inline = false)
-        assertTrue("Only type in the manual model list, never a credential prompt", nativeLabels().any {
-            it == "Model IDs · one per line, optional | name" || it == "模型 ID · 每行一个，可填写 | 名称"
-        })
+        val field = awaitManualModelEditor()
         val original = readText(field)
-        val row = "$modelId | $modelName"
         assertFalse(original.lineSequence().any { it.substringBefore('|').trim() == modelId })
-        typeInto(field, (if (original.isBlank()) "" else "\n") + row)
-        assertEquals("Key events must append to the real native field", original +
-            (if (original.isBlank()) "" else "\n") + row, readText(field))
+        val addition = (if (original.isBlank()) "" else "\n") + modelRow
+        typeInto(field, addition)
+        assertEquals("Key events must append to the real native field", original + addition, readText(field))
         dismissKeyboard()
         capture("model-draft-qa-manual-input.png")
-        tapNativeButton(if (nativeLabels().contains("Done")) "Done" else "完成")
-        await("The manual editor must close") { findEditor(inline = false) == null }
-        dismissKeyboard()
+        finishManualModelEdit()
         // All GPUI points below are calibrated by the probe; overrides are pixels.
         swipeArgument("saveSwipe", 1100f, 2200f, 1100f, 1350f)
         capture("model-draft-qa-before-save.png")
@@ -134,44 +129,108 @@ class ModelDraftAcceptanceTest {
         assertFalse("First chat creation must consume the new-chat draft slot",
             committed.getJSONObject("composer_drafts").has("new-draft"))
         val loaded = runtime.sessions.load()
-        val evidence = JSONObject().put("pid", Process.myPid())
-            .put("launch_id", loaded.getString("current_launch_instance_id"))
+        val evidence = JSONObject()
             .put("generation", loaded.getJSONObject("snapshot").getLong("generation"))
             .put("digest", loaded.getJSONObject("snapshot").getString("session_sha256"))
+            .put("writer_launch_id", loaded.getString("writer_launch_instance_id"))
             .put("conversation_id", committed.getString("active_conversation_id"))
             .put("model_id", modelId).put("model_name", modelName).put("draft", draft)
             .put("message_count", initialMessages)
-        receipt.writeText(evidence.toString())
-        instrumentation.sendStatus(0, Bundle().apply { putString("model_draft_receipt", evidence.toString()) })
+        writeReceipt(evidence, loaded, savedCatalog.getLong("revision"), retired = false)
         capture("model-draft-qa-committed.png")
     }
 
-    @Test fun restoreAfterProcessRestart() {
+    @Test fun retireModelWithoutChangingConversation() = launch {
+        require(arguments.getString("manual") != null && arguments.getString("save") != null) {
+            "Calibrate the populated provider form's manual/save coordinates before retirement"
+        }
+        val old = readReceipt(retired = false)
+        assertRestored(old, retired = false)
+        assertSessionUnchanged(old, runtime.sessions.load())
+        assertEquals(draft, readText(awaitEditor(inline = true)))
+        assertEquals("Retirement requires a provider with only this fixture's model",
+            1, provider(runtime.providerModels.list()).getJSONArray("models").length())
+        openProviderEditor()
+        tapArgument("manual", 700f, 1800f)
+        val field = awaitManualModelEditor()
+        assertEquals("Never delete a list containing other models", modelRow, readText(field))
+        tapView(field)
+        instrumentation.runOnMainSync {
+            assertTrue(requireNotNull(field.onCreateInputConnection(EditorInfo())).setSelection(0, field.text.length))
+        }
+        instrumentation.sendKeyDownUpSync(KeyEvent.KEYCODE_DEL)
+        assertEquals("", readText(field))
+        finishManualModelEdit()
+        swipeArgument("saveSwipe", 1100f, 2200f, 1100f, 1350f)
+        capture("model-draft-qa-before-retire.png")
+        tapArgument("save", 700f, 2210f)
+        await("Saving an empty list must retire the exact fixture model") {
+            val catalog = runtime.providerModels.list()
+            model(catalog) == null && model(catalog, retired = true)?.optString("name") == modelName
+        }
+        val catalog = runtime.providerModels.list()
+        val revision = catalog.getLong("revision")
+        assertEquals(old.getLong("catalog_revision") + 1, revision)
+        val loaded = runtime.sessions.load()
+        assertSessionUnchanged(old, loaded)
+        writeReceipt(old, loaded, revision, retired = true)
+        assertRestored(old, retired = true)
+        capture("model-draft-qa-retired.png")
+    }
+
+    @Test fun restoreAfterProcessRestart() = restore(retired = false)
+
+    @Test fun restoreRetiredModelAfterProcessRestart() = restore(retired = true)
+
+    private fun restore(retired: Boolean) {
         requireOptIn()
-        val old = JSONObject(receipt.readText())
-        assertEquals("Use the modelRun from the preparation receipt", modelId, old.getString("model_id"))
+        val old = readReceipt(retired)
         // Read persisted authority before the UI can restore or schedule any save.
         val loaded = runtime.sessions.load()
-        assertNotEquals("Requires an external force-stop, not Activity recreation",
+        assertNotEquals("The app must be running in a new process", old.getInt("pid"), Process.myPid())
+        assertNotEquals("Requires a cold start",
             old.getString("launch_id"), loaded.getString("current_launch_instance_id"))
-        assertEquals(old.getString("launch_id"), loaded.getString("writer_launch_instance_id"))
-        assertEquals(old.getLong("generation"), loaded.getJSONObject("snapshot").getLong("generation"))
-        assertEquals(old.getString("digest"), loaded.getJSONObject("snapshot").getString("session_sha256"))
-        assertRestored(old)
+        assertSessionUnchanged(old, loaded)
+        assertRestored(old, retired)
         launch {
             assertEquals(draft, readText(awaitEditor(inline = true)))
-            assertRestored(old)
-            capture("model-draft-qa-cold-restored.png")
+            assertSessionUnchanged(old, runtime.sessions.load())
+            assertRestored(old, retired)
+            capture(if (retired) "model-draft-qa-retired-cold-restored.png" else "model-draft-qa-cold-restored.png")
+            if (retired) {
+                tapArgument("picker", 750f, 2300f)
+                capture("model-draft-qa-retired-picker.png")
+                assertSessionUnchanged(old, runtime.sessions.load())
+            }
             instrumentation.sendStatus(0, Bundle().apply {
                 putString("model_draft_restart", JSONObject().put("previous_pid", old.getInt("pid"))
                     .put("pid", Process.myPid()).put("previous_launch_id", old.getString("launch_id"))
                     .put("launch_id", loaded.getString("current_launch_instance_id"))
-                    .put("model_id", modelId).put("draft", readText(awaitEditor(true))).toString())
+                    .put("model_id", modelId).put("retired", retired)
+                    .put("draft", draft).toString())
             })
         }
     }
 
-    private fun assertRestored(old: JSONObject) {
+    private fun readReceipt(retired: Boolean): JSONObject = JSONObject(receipt.readText()).also {
+        assertEquals("Use the modelRun from the preparation receipt", modelId, it.getString("model_id"))
+        assertEquals("Run the matching catalog phase first", retired, it.getBoolean("retired"))
+    }
+
+    private fun writeReceipt(value: JSONObject, loaded: JSONObject, revision: Long, retired: Boolean) {
+        value.put("pid", Process.myPid()).put("launch_id", loaded.getString("current_launch_instance_id"))
+            .put("catalog_revision", revision).put("retired", retired)
+        receipt.writeText(value.toString())
+        instrumentation.sendStatus(0, Bundle().apply { putString("model_draft_receipt", value.toString()) })
+    }
+
+    private fun assertSessionUnchanged(old: JSONObject, loaded: JSONObject) {
+        assertEquals(old.getString("writer_launch_id"), loaded.getString("writer_launch_instance_id"))
+        assertEquals(old.getLong("generation"), loaded.getJSONObject("snapshot").getLong("generation"))
+        assertEquals(old.getString("digest"), loaded.getJSONObject("snapshot").getString("session_sha256"))
+    }
+
+    private fun assertRestored(old: JSONObject, retired: Boolean) {
         val current = session()
         assertEquals(10, current.getInt("schema_version"))
         assertEquals(old.getString("conversation_id"), current.getString("active_conversation_id"))
@@ -179,9 +238,9 @@ class ModelDraftAcceptanceTest {
         assertEquals(draft, current.getJSONObject("composer_drafts").getString(draftKey(current)))
         assertEquals(old.getInt("message_count"), messageCount(current))
         val catalog = runtime.providerModels.list()
-        assertEquals(modelName, requireNotNull(model(catalog)).getString("name"))
-        val retired = provider(catalog).getJSONArray("retired_models")
-        assertFalse((0 until retired.length()).any { retired.getJSONObject(it).getString("id") == modelId })
+        assertEquals(old.getLong("catalog_revision"), catalog.getLong("revision"))
+        assertEquals(modelName, model(catalog, retired)?.getString("name"))
+        assertNull(model(catalog, retired = !retired))
     }
 
     private fun requireOptIn() {
@@ -250,8 +309,8 @@ class ModelDraftAcceptanceTest {
         val rows = value.getJSONArray("providers")
         return (0 until rows.length()).map(rows::getJSONObject).first { it.getString("harness_id") == "dsh" }
     }
-    private fun model(value: JSONObject): JSONObject? {
-        val rows = provider(value).getJSONArray("models")
+    private fun model(value: JSONObject, retired: Boolean = false): JSONObject? {
+        val rows = provider(value).getJSONArray(if (retired) "retired_models" else "models")
         return (0 until rows.length()).map(rows::getJSONObject).find { it.getString("id") == modelId }
     }
 
@@ -274,6 +333,19 @@ class ModelDraftAcceptanceTest {
     private fun awaitEditor(inline: Boolean): EditText {
         await("The ${if (inline) "inline" else "manual model"} native editor must be visible") { findEditor(inline) != null }
         return requireNotNull(findEditor(inline))
+    }
+    private fun awaitManualModelEditor(): EditText {
+        val field = awaitEditor(inline = false)
+        assertTrue("Only edit the manual model list", nativeLabels().any {
+            it == "Model IDs · one per line, optional | name" || it == "模型 ID · 每行一个，可填写 | 名称"
+        })
+        return field
+    }
+    private fun finishManualModelEdit() {
+        dismissKeyboard()
+        tapNativeButton(if (nativeLabels().contains("Done")) "Done" else "完成")
+        await("The manual editor must close") { findEditor(inline = false) == null }
+        dismissKeyboard()
     }
     private fun readText(field: EditText): String {
         var text = ""

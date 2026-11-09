@@ -468,6 +468,53 @@ fn model_setup_roundtrip_preserves_chat_and_configuration_drafts_on_phone_and_ta
 }
 
 #[test]
+fn retired_chat_model_keeps_its_own_status_line_and_is_absent_from_the_picker() {
+    let mut fixture = Fixture::new(320., 720.);
+    fixture.load_transcript();
+    assert!(
+        fixture
+            .cx
+            .debug_bounds("composer-model-unavailable")
+            .is_none()
+    );
+    let session = fixture.read(|shell, _| shell.state.raw_session().clone());
+    fixture.update(|shell, _, cx| {
+        shell
+            .state
+            .apply_catalog(json!({
+                "schema_version": 1,
+                "models": [],
+                "retired_models": [{
+                    "id": "deepseek-v4-flash",
+                    "name": "A historical model alias too long to fit in the compact composer",
+                    "supports_images": false
+                }]
+            }))
+            .unwrap();
+        cx.notify();
+    });
+    fixture.draw();
+    let status = fixture.bounds("composer-model-unavailable");
+    let model = fixture.bounds("model-picker-open");
+    assert!(model.contains(&status.origin));
+    assert!(model.contains(&status.bottom_right()));
+    assert_eq!(
+        fixture.read(|shell, _| shell.state.selected_model().to_owned()),
+        "deepseek-v4-flash"
+    );
+    fixture.click("model-picker-open");
+    fixture.click("config-model-row");
+    assert!(fixture.cx.debug_bounds("model-picker-list").is_some());
+    assert!(
+        fixture
+            .cx
+            .debug_bounds("model-picker-row-deepseek-v4-flash")
+            .is_none()
+    );
+    fixture.assert_session_unchanged(&session);
+}
+
+#[test]
 fn removed_staged_model_keeps_configuration_draft_and_shows_validation_error() {
     let mut fixture = Fixture::new(390., 844.);
     fixture.load_transcript();

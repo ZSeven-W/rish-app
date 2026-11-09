@@ -79,26 +79,34 @@ pub(super) fn thinking_label(mode: &str) -> Text {
 
 impl Shell {
     pub(super) fn model_display_label(&self, id: &str) -> String {
+        let (name, unavailable) = self.model_display_parts(id);
+        match unavailable {
+            Some(status) => format!("{name} · {status}"),
+            None => name,
+        }
+    }
+
+    pub(super) fn model_display_parts(&self, id: &str) -> (String, Option<&'static str>) {
         if id.is_empty() {
-            return assistant_copy::copy(self.locale, "Choose a model", "选择模型").into();
+            return (
+                assistant_copy::copy(self.locale, "Choose a model", "选择模型").into(),
+                None,
+            );
         }
         if let Some(model) = self.state.models().into_iter().find(|model| model.id == id) {
-            return model.name;
+            return (model.name, None);
         }
-        let name = self.state.stored_model_display_name(id).or_else(|| {
-            id.starts_with("custom:")
-                .then(|| assistant_copy::copy(self.locale, "Custom model", "自定义模型"))
+        let name = self.state.stored_model_display_name(id).unwrap_or_else(|| {
+            if id.starts_with("custom:") {
+                assistant_copy::copy(self.locale, "Custom model", "自定义模型")
+            } else {
+                id
+            }
         });
-        match name {
-            Some(name) => format!(
-                "{name} · {}",
-                assistant_copy::copy(self.locale, "Unavailable", "不可用")
-            ),
-            None => format!(
-                "{id} · {}",
-                assistant_copy::copy(self.locale, "Unavailable", "不可用")
-            ),
-        }
+        (
+            name.into(),
+            Some(assistant_copy::copy(self.locale, "Unavailable", "不可用")),
+        )
     }
     pub(super) fn open_model_picker(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if self.model_picker {

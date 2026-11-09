@@ -300,25 +300,33 @@ a message; screenshots are saved in the target app's cache.
 
 On an isolated Pixel XL fixture (1440×2560, 560 dpi), the opt-in
 `ModelDraftAcceptanceTest` uses real touches and native keyboard input to save a
-synthetic manual model, choose it and retain an unsent draft. Run the methods
-separately, with an external process stop between preparation and restoration:
+synthetic manual model, choose it and retain an unsent draft. It can also remove
+that model through the same editor. Start with fresh app data on the test fixture
+and check each instrumentation run for `OK (1 test)`:
 
 ```sh
-adb shell am instrument -w -r -e modelDraftQa true -e backend auto \
-  -e manual 700,1375 -e save 700,2006 \
-  -e class tech.zseven.rish.gpui.ModelDraftAcceptanceTest#prepareModelAndDraft \
-  tech.zseven.rish.gpui.test/androidx.test.runner.AndroidJUnitRunner
+rish_model_qa() {
+  adb shell am instrument -w -r -e modelDraftQa true -e backend auto \
+    -e modelRun local-qa -e manual 700,1375 -e save 700,2006 \
+    -e class "tech.zseven.rish.gpui.ModelDraftAcceptanceTest#$1" \
+    tech.zseven.rish.gpui.test/androidx.test.runner.AndroidJUnitRunner
+}
+rish_model_qa prepareModelAndDraft
 adb shell am force-stop tech.zseven.rish.gpui
 adb shell pidof tech.zseven.rish.gpui # Must be empty before the next invocation.
-adb shell am instrument -w -r -e modelDraftQa true -e backend auto \
-  -e class tech.zseven.rish.gpui.ModelDraftAcceptanceTest#restoreAfterProcessRestart \
-  tech.zseven.rish.gpui.test/androidx.test.runner.AndroidJUnitRunner
+rish_model_qa restoreAfterProcessRestart
+rish_model_qa retireModelWithoutChangingConversation
+adb shell am force-stop tech.zseven.rish.gpui
+adb shell pidof tech.zseven.rish.gpui # Must be empty before the next invocation.
+rish_model_qa restoreRetiredModelAfterProcessRestart
 ```
 
-The test refuses an existing draft or synthetic model. It reads the native
-catalog/session authority to verify the UI result and checks the new launch ID,
-unchanged persisted digest/generation, selected model and actual native text.
-No credentials, model discovery or sends are involved.
+Preparation refuses an existing new-chat draft or duplicate fixture ID.
+Retirement requires the exact fixture ID and label to be the editor's only row.
+The two cold launches verify new PIDs and launch IDs, unchanged session
+generation and digest, the original selected model ID and the actual native
+composer text. The last phase captures the restored composer and model picker in
+the test app cache. No credentials, model discovery or sends are involved.
 
 ## Input and persistence
 

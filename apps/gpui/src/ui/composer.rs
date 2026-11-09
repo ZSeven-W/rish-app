@@ -53,7 +53,12 @@ impl Shell {
         } else {
             self.state.selected_model()
         };
-        let name = self.model_display_label(selected);
+        let (name, unavailable) = self.model_display_parts(selected);
+        let configure = self.locale.text(Text::Configure);
+        let model_label = match unavailable {
+            Some(status) => format!("{configure}: {name} · {status}"),
+            None => format!("{configure}: {name}"),
+        };
         let busy = (self.state.is_busy() && !self.composer_drafts.saving)
             || (self.assistant_group_visible() && self.assistant_group_busy());
         let answering = self
@@ -141,7 +146,7 @@ impl Shell {
                                     .id("model")
                                     .debug_selector(|| "model-picker-open".into())
                                     .role(gpui::Role::Button)
-                                    .aria_label(self.locale.text(Text::Configure))
+                                    .aria_label(model_label)
                                     .aria_expanded(self.model_picker)
                                     .min_h(px(touch))
                                     .px(px(if compact_controls { 4. } else { 12. }))
@@ -158,9 +163,22 @@ impl Shell {
                                     .child(
                                         div()
                                             .min_w(px(0.))
-                                            .overflow_hidden()
-                                            .whitespace_nowrap()
-                                            .child(name),
+                                            .flex()
+                                            .flex_col()
+                                            .child(div().truncate().child(name))
+                                            .when_some(unavailable, |label, status| {
+                                                label.child(
+                                                    div()
+                                                        .id("composer-model-unavailable")
+                                                        .debug_selector(|| {
+                                                            "composer-model-unavailable".into()
+                                                        })
+                                                        .text_size(px(10.))
+                                                        .text_color(p.danger)
+                                                        .truncate()
+                                                        .child(status),
+                                                )
+                                            }),
                                     )
                                     .child(icon(
                                         Icon::ChevronDown,
